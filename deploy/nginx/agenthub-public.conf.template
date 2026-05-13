@@ -1,0 +1,77 @@
+server {
+    listen 443 ssl http2;
+    server_name __AGENTHUB_SERVER_NAME__;
+
+    ssl_certificate __AGENTHUB_TLS_CERT__;
+    ssl_certificate_key __AGENTHUB_TLS_KEY__;
+
+    root __AGENTHUB_WEB_ROOT__;
+    index index.html;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    client_max_body_size 1m;
+
+    location = /healthz {
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__/healthz;
+    }
+
+    location /api/auth/login {
+        limit_req zone=login burst=5 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location /api/tokens {
+        limit_req zone=mutation burst=10 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location /api/jobs {
+        limit_req zone=mutation burst=10 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location = /api/voice/transcribe {
+        client_max_body_size 20m;
+        proxy_read_timeout 240s;
+        proxy_send_timeout 240s;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location ^~ /api/internal/ {
+        return 403;
+    }
+
+    location = /api/workers/register {
+        return 403;
+    }
+
+    location ~ ^/api/workers/[^/]+/heartbeat$ {
+        return 403;
+    }
+
+    location = /api/worker/enroll {
+        limit_req zone=mutation burst=10 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location = /api/worker/heartbeat {
+        limit_req zone=mutation burst=20 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location ^~ /api/worker/ {
+        limit_req zone=mutation burst=20 nodelay;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location /api/ {
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_pass http://__AGENTHUB_API_UPSTREAM__;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "agenthub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api:test": ".\\.venv\\Scripts\\python.exe -m pytest apps/api/tests -q",
+    "api:dev": ".\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --app-dir apps/api",
+    "web:dev": "npm --workspace @agenthub/web run dev",
+    "web:test": "npm --workspace @agenthub/web run test -- --run --minWorkers=1 --maxWorkers=1",
+    "web:build": "npm --workspace @agenthub/web run build",
+    "desktop:test": "npm --workspace @agenthub/desktop run test -- --run --minWorkers=1 --maxWorkers=1",
+    "desktop:build": "npm --workspace @agenthub/desktop run build",
+    "desktop:package:win": "npm --workspace @agenthub/desktop run package:win",
+    "desktop:start": "npm --workspace @agenthub/desktop run start",
+    "mobile:test": "npm --workspace @agenthub/mobile run test -- --run --minWorkers=1 --maxWorkers=1",
+    "mobile:sync": "npm --workspace @agenthub/mobile run sync",
+    "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
+    "mobile:build:release": "npm --workspace @agenthub/mobile run build:release"
+  },
+  "workspaces": [
+    "apps/web",
+    "apps/mobile",
+    "apps/desktop",
+    "packages/protocol"
+  ]
+}

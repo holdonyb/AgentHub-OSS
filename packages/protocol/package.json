@@ -1,0 +1,8 @@
+{
+  "name": "@agenthub/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "ts/src/index.ts",
+  "types": "ts/src/index.ts"
+}

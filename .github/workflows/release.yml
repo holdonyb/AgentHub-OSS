@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-web-mobile-workers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r apps/api/requirements.txt
+          npm ci
+
+      - name: Verify public export
+        run: |
+          python scripts/audit-public-export.py
+          python -m pytest apps/api/tests -q
+          npm run web:test
+          npm run mobile:test
+
+      - name: Build web console
+        run: npm run web:build
+
+      - name: Build Android APK
+        run: npm run mobile:build:release
+
+      - name: Build worker bundles
+        run: python scripts/build-worker-bundle.py --output-root dist/release/workers
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          mkdir -p dist/release/android
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk dist/release/android/agenthub-android-release.apk
+          (cd dist/release && sha256sum android/agenthub-android-release.apk workers/* > SHA256SUMS)
+
+      - name: Upload Android and worker assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-android-apk
+          if-no-files-found: error
+          path: |
+            dist/release/android/agenthub-android-release.apk
+            dist/release/workers/*
+            dist/release/SHA256SUMS
+
+  build-windows-desktop:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build desktop package
+        run: npm run desktop:package:win
+
+      - name: Upload Windows desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-windows
+          if-no-files-found: error
+          path: apps/desktop/release/*
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-web-mobile-workers
+      - build-windows-desktop
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/upload
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/upload/**/*

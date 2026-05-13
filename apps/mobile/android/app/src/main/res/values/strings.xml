@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">AgentHub</string>
+    <string name="title_activity_main">AgentHub</string>
+    <string name="package_name">xin.ifix.agenthub</string>
+    <string name="custom_url_scheme">xin.ifix.agenthub</string>
+</resources>

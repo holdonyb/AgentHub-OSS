@@ -1,0 +1,23 @@
+{
+  "name": "@agenthub/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest",
+    "sync": "npx cap sync android",
+    "build:debug": "npm run sync && node scripts/build-apk.mjs debug",
+    "build:release": "npm run sync && node scripts/build-apk.mjs release"
+  },
+  "dependencies": {
+    "@capacitor/android": "7.6.2",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "7.6.2",
+    "@capacitor/local-notifications": "^7.0.6"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.2",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

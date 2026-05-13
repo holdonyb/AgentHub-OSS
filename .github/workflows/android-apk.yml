@@ -1,0 +1,76 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/mobile/**'
+      - 'apps/web/**'
+      - 'packages/protocol/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/android-apk.yml'
+
+jobs:
+  build-signed-apk:
+    runs-on: ubuntu-latest
+    env:
+      AGENTHUB_PUBLIC_BASE_URL: ${{ vars.AGENTHUB_PUBLIC_BASE_URL }}
+      AGENTHUB_MOBILE_SERVER_URL: ${{ vars.AGENTHUB_MOBILE_SERVER_URL }}
+      AGENTHUB_ANDROID_KEYSTORE_BASE64: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_BASE64 }}
+      AGENTHUB_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_PASSWORD }}
+      AGENTHUB_ANDROID_KEY_ALIAS: ${{ secrets.AGENTHUB_ANDROID_KEY_ALIAS }}
+      AGENTHUB_ANDROID_KEY_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test mobile config
+        run: npm run mobile:test
+
+      - name: Build web shell assets
+        run: npm run web:build
+
+      - name: Decode Android signing key
+        shell: bash
+        run: |
+          test -n "$AGENTHUB_ANDROID_KEYSTORE_BASE64" || (echo "Missing AGENTHUB_ANDROID_KEYSTORE_BASE64 secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEYSTORE_PASSWORD" || (echo "Missing AGENTHUB_ANDROID_KEYSTORE_PASSWORD secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEY_ALIAS" || (echo "Missing AGENTHUB_ANDROID_KEY_ALIAS secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEY_PASSWORD" || (echo "Missing AGENTHUB_ANDROID_KEY_PASSWORD secret" && exit 1)
+          echo "$AGENTHUB_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/agenthub-upload-key.jks"
+          echo "AGENTHUB_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/agenthub-upload-key.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed debug APK
+        run: npm run mobile:build:debug
+
+      - name: Build signed release APK
+        run: npm run mobile:build:release
+
+      - name: Upload signed APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-signed-apks
+          if-no-files-found: error
+          path: |
+            apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            apps/mobile/android/app/build/outputs/apk/release/app-release.apk

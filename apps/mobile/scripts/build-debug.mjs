@@ -1,0 +1,1 @@
+import './build-apk.mjs';

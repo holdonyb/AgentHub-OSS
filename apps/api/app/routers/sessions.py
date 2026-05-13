@@ -1,0 +1,850 @@
+from __future__ import annotations
+
+import base64
+import binascii
+import re
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import case
+
+from app.core.audit import write_event
+from app.core.deps import Actor, DbSession, require_min_role
+from app.core.config import get_settings
+from app.core.job_recovery import recover_stale_running_jobs_for_space
+from app.core.json import dumps_json, loads_json
+from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Worker, utcnow
+from app.schemas import (
+    SessionBtwIn,
+    SessionControlsIn,
+    SessionCreateIn,
+    SessionFileListIn,
+    SessionFileReadIn,
+    SessionForkIn,
+    SessionInputIn,
+    SessionRenameIn,
+    SessionStartIn,
+)
+from app.services import SESSION_STATES, job_out, session_out, strip_ansi, sync_session_from_timeline, upsert_timeline_items
+
+router = APIRouter()
+ACK_TITLES = {"ok", "okay", "好", "好的", "可以", "行", "继续", "继续吧", "收到", "回复了"}
+HANDOFF_TIMELINE_TYPES = {"user_message", "assistant_message", "compaction", "error"}
+HANDOFF_CONTEXT_LIMIT = 16
+PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
+ALLOWED_IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
+ALLOWED_ATTACHMENT_TYPES = {
+    *ALLOWED_IMAGE_TYPES.keys(),
+    "application/json",
+    "application/octet-stream",
+    "application/pdf",
+    "application/x-zip-compressed",
+    "application/xml",
+    "application/zip",
+    "text/csv",
+    "text/markdown",
+    "text/plain",
+    "text/xml",
+}
+
+
+def _is_machine_title(value: str) -> bool:
+    normalized = value.strip().lower().replace("rollout-", "")
+    if not normalized:
+        return True
+    if normalized in ACK_TITLES:
+        return True
+    machine_chars = sum(ch.isdigit() or ch in "abcdef-_" for ch in normalized)
+    return machine_chars >= max(12, int(len(normalized) * 0.65))
+
+
+def _workspace_label(workspace_root: str) -> str:
+    normalized = workspace_root.rstrip("/\\")
+    if not normalized:
+        return "workspace"
+    return normalized.replace("\\", "/").split("/")[-1] or "workspace"
+
+
+def _runtime_title(payload: SessionCreateIn) -> str | None:
+    source = f"{payload.runtime_session_ref} {payload.session_id}"
+    match = re.search(r"(?:rollout-)?(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})T(?P<hour>\d{2})-(?P<minute>\d{2})", source)
+    if not match:
+        return None
+    backend = payload.backend.strip().title() or "Agent"
+    return f"{backend} · {match.group('month')}-{match.group('day')} {match.group('hour')}:{match.group('minute')}"
+
+
+def _readable_title(payload: SessionCreateIn) -> str:
+    for value in (payload.heuristic_title, payload.display_title, payload.title, payload.last_message):
+        title = " ".join(value.strip().split())
+        if title and not _is_machine_title(title):
+            return title[:120]
+    runtime_title = _runtime_title(payload)
+    if runtime_title:
+        return runtime_title
+    project = payload.project_name.strip() or _workspace_label(payload.workspace_root)
+    backend = payload.backend.strip() or "agent"
+    return f"{project} · {backend}"
+
+
+def _session_ordering():
+    attention_rank = case(
+        (AgentSession.status == "needs_reply", 0),
+        (AgentSession.status == "running", 1),
+        (AgentSession.status == "queued", 2),
+        else_=3,
+    )
+    return (
+        attention_rank.asc(),
+        AgentSession.last_activity_at.is_(None).asc(),
+        AgentSession.last_activity_at.desc(),
+        AgentSession.updated_at.desc(),
+    )
+
+
+def _require_worker_backend_available(db: DbSession, space_id: str | None, worker_id: str, backend: str) -> Worker:
+    worker = db.query(Worker).filter(Worker.space_id == space_id, Worker.worker_id == worker_id).one_or_none()
+    if worker is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Worker is not registered", "code": "WORKER_UNAVAILABLE"},
+        )
+    if worker.status == "offline":
+        raise HTTPException(status_code=409, detail={"message": "Worker is offline", "code": "WORKER_OFFLINE"})
+    reachable_backends = {
+        str(backend).strip().lower()
+        for backend in loads_json(worker.reachable_backends_json, [])
+        if str(backend).strip()
+    }
+    if backend.strip().lower() not in reachable_backends:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"Worker {worker_id} cannot run {backend}",
+                "code": "WORKER_BACKEND_UNAVAILABLE",
+            },
+        )
+    return worker
+
+
+def _require_worker_backend(db: DbSession, session: AgentSession) -> None:
+    _require_worker_backend_available(db, session.space_id, session.worker_id, session.backend)
+
+
+def _session_has_running_input_job(db: DbSession, session_id: str, space_id: str | None) -> bool:
+    return (
+        db.query(Job.job_id)
+        .filter(Job.space_id == space_id)
+        .filter(Job.target_session_id == session_id)
+        .filter(Job.kind == "session_input")
+        .filter(Job.status == "running")
+        .first()
+        is not None
+    )
+
+
+def _session_has_pending_permission(db: DbSession, session_id: str, space_id: str | None) -> bool:
+    return (
+        db.query(AgentPermission.permission_id)
+        .filter(AgentPermission.space_id == space_id)
+        .filter(AgentPermission.session_id == session_id)
+        .filter(AgentPermission.status == "pending")
+        .first()
+        is not None
+    )
+
+
+def _merged_discovered_status(db: DbSession, session: AgentSession, discovered_status: str) -> str:
+    if _session_has_pending_permission(db, session.session_id, session.space_id):
+        return "needs_reply"
+    if _session_has_running_input_job(db, session.session_id, session.space_id):
+        return "running"
+    return discovered_status
+
+
+def _session_runtime_busy(session: AgentSession) -> bool:
+    if session.status != "running":
+        return False
+    if session.last_activity_at is None:
+        return True
+    runtime_busy_seconds = max(get_settings().claimed_job_stale_seconds * 2, 1800)
+    return session.last_activity_at + timedelta(seconds=runtime_busy_seconds) > utcnow()
+
+
+def _handoff_text(value: str, limit: int = 1200) -> str:
+    compacted = " ".join(strip_ansi(value).split())
+    return f"{compacted[: limit - 3]}..." if len(compacted) > limit else compacted
+
+
+def _session_handoff_context(db: DbSession, session: AgentSession) -> dict[str, object]:
+    rows = (
+        db.query(AgentTimeline)
+        .filter(AgentTimeline.space_id == session.space_id)
+        .filter(AgentTimeline.session_id == session.session_id)
+        .filter(AgentTimeline.item_type.in_(HANDOFF_TIMELINE_TYPES))
+        .filter(AgentTimeline.text != "")
+        .order_by(AgentTimeline.seq.desc())
+        .limit(HANDOFF_CONTEXT_LIMIT)
+        .all()
+    )
+    timeline: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in reversed(rows):
+        text = _handoff_text(row.text)
+        if not text:
+            continue
+        role = row.role or ("assistant" if row.item_type == "assistant_message" else "user" if row.item_type == "user_message" else "system")
+        key = (row.item_type, role, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        timeline.append(
+            {
+                "seq": row.seq,
+                "item_type": row.item_type,
+                "role": role,
+                "text": text,
+            }
+        )
+    return {
+        "session_id": session.session_id,
+        "backend": session.backend,
+        "worker_id": session.worker_id,
+        "workspace_root": session.workspace_root,
+        "project_name": session.project_name,
+        "title": _handoff_text(session.custom_title or session.display_title or session.heuristic_title or session.title or session.session_id, 160),
+        "activity_summary": _handoff_text(session.activity_summary or session.last_message or "", 1200),
+        "last_message": _handoff_text(session.last_message or "", 1200),
+        "timeline": timeline,
+    }
+
+
+def _plan_prompt(raw_prompt: str, backend: str) -> str:
+    backend_label = backend.strip() or "agent"
+    return (
+        f"进入 AgentHub 计划模式。你正在控制 {backend_label} session。\n"
+        "要求：不要修改文件，不要运行会写入的命令，不要直接执行方案。\n"
+        "先用简洁步骤列出计划、风险和需要用户选择的选项。\n"
+        "如果有多个可执行方向，最后必须输出下面这个标记和编号选项：\n"
+        f"{PLAN_OPTIONS_MARKER}\n"
+        "1. <选项一>\n"
+        "2. <选项二>\n"
+        "如果只有一个自然下一步，也输出：\n"
+        f"{PLAN_OPTIONS_MARKER}\n"
+        "1. 按这个计划执行\n"
+        "2. 调整计划\n\n"
+        f"用户目标：{raw_prompt}"
+    )
+
+
+def _controls_for_reply_mode(backend: str, controls: dict[str, object], reply_mode: str) -> dict[str, object]:
+    next_controls = dict(controls)
+    if reply_mode != "plan":
+        return next_controls
+    backend_name = backend.strip().lower()
+    if backend_name == "codex":
+        return next_controls
+    next_controls.pop("yolo", None)
+    if backend_name == "claude":
+        next_controls["permission_mode"] = "plan"
+    return next_controls
+
+
+def _normalize_controls(value: dict[str, object] | None) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _job_project_name(workspace_root: str, project_name: str | None) -> str:
+    return (project_name or "").strip() or _workspace_label(workspace_root)
+
+
+def _create_worker_job(
+    *,
+    db: DbSession,
+    actor: Actor,
+    kind: str,
+    worker_id: str,
+    backend: str,
+    workspace_root: str,
+    namespace: str,
+    payload: dict[str, object],
+    target_session_id: str | None = None,
+) -> Job:
+    job = Job(
+        space_id=actor.space_id,
+        kind=kind,
+        target_session_id=target_session_id,
+        worker_id=worker_id,
+        backend=backend,
+        workspace_root=workspace_root,
+        namespace=namespace,
+        payload_json=dumps_json(payload),
+        created_by=actor.actor_id,
+    )
+    db.add(job)
+    db.flush()
+    return job
+
+
+def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | None) -> AgentSession:
+    if payload.status not in SESSION_STATES:
+        raise HTTPException(status_code=400, detail={"message": "Invalid session status", "code": "SESSION_STATUS_INVALID"})
+    session = db.query(AgentSession).filter(AgentSession.space_id == space_id, AgentSession.session_id == payload.session_id).one_or_none()
+    if session is None:
+        session = AgentSession(space_id=space_id, session_id=payload.session_id)
+        db.add(session)
+    elif session.space_id is None:
+        session.space_id = space_id
+    existing_controls = loads_json(session.controls_json, {})
+    runtime_metadata = dict(payload.runtime_metadata)
+    timeline_items = runtime_metadata.pop("timeline", [])
+    session.backend = payload.backend
+    session.worker_id = payload.worker_id
+    session.workspace_root = payload.workspace_root
+    session.project_name = payload.project_name
+    session.namespace = payload.namespace
+    session.mode = payload.mode
+    session.runtime_session_ref = payload.runtime_session_ref
+    session.status = _merged_discovered_status(db, session, payload.status)
+    heuristic_title = _readable_title(payload)
+    display_title = session.custom_title or payload.custom_title or payload.llm_title or heuristic_title
+    if payload.custom_title:
+        session.custom_title = payload.custom_title
+    session.heuristic_title = heuristic_title
+    session.llm_title = payload.llm_title
+    session.display_title = display_title
+    session.title = display_title
+    session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
+    session.last_message = payload.last_message
+    session.last_activity_at = payload.last_activity_at
+    session.last_role = payload.last_role
+    session.controls_json = dumps_json(existing_controls or payload.controls)
+    session.runtime_metadata_json = dumps_json(runtime_metadata)
+    session.metadata_json = dumps_json(payload.metadata)
+    session.updated_at = utcnow()
+    if isinstance(timeline_items, list) and timeline_items:
+        upsert_timeline_items(db, session.session_id, timeline_items, replace=True, space_id=session.space_id)
+        sync_session_from_timeline(db, session)
+    return session
+
+
+@router.post("/api/sessions")
+def create_session(
+    payload: SessionCreateIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = upsert_session(db, payload, space_id=actor.space_id)
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="session",
+        source_id=session.session_id,
+        event_type="session.upsert",
+    )
+    db.commit()
+    return {"session": session_out(session)}
+
+
+@router.get("/api/sessions")
+def list_sessions(
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("viewer")),
+    backend: str | None = None,
+    project: str | None = None,
+    worker: str | None = None,
+    status: str | None = None,
+    search: str = "",
+):
+    if recover_stale_running_jobs_for_space(db, actor.space_id):
+        db.commit()
+    query = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id)
+    if backend:
+        query = query.filter(AgentSession.backend == backend)
+    if project:
+        query = query.filter(AgentSession.project_name == project)
+    if worker:
+        query = query.filter(AgentSession.worker_id == worker)
+    if status:
+        query = query.filter(AgentSession.status == status)
+    sessions = query.order_by(*_session_ordering()).all()
+    if search.strip():
+        needle = search.strip().lower()
+        sessions = [
+            session
+            for session in sessions
+            if needle
+            in " ".join(
+                [
+                    session.custom_title or "",
+                    session.display_title,
+                    session.heuristic_title,
+                    session.activity_summary,
+                    session.project_name,
+                    session.backend,
+                    session.last_message,
+                ]
+            ).lower()
+        ]
+    return {"items": [session_out(session) for session in sessions]}
+
+
+@router.post("/api/sessions/start")
+def start_session(
+    payload: SessionStartIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    backend = payload.backend.strip().lower()
+    workspace_root = payload.workspace_root.strip()
+    _require_worker_backend_available(db, actor.space_id, payload.worker_id, backend)
+    controls = _normalize_controls(payload.controls)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_start",
+        worker_id=payload.worker_id,
+        backend=backend,
+        workspace_root=workspace_root,
+        namespace=payload.namespace or "default",
+        payload={
+            "prompt": payload.prompt.strip(),
+            "title": (payload.title or "").strip(),
+            "controls": controls,
+            "project_name": _job_project_name(workspace_root, payload.project_name),
+            "namespace": payload.namespace or "default",
+            "start_mode": "new",
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.start",
+        payload={"worker_id": payload.worker_id, "backend": backend},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.get("/api/sessions/{session_id}")
+def get_session(session_id: str, db: DbSession, actor: Actor = Depends(require_min_role("viewer"))):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    return {"session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/fork")
+def fork_session(
+    session_id: str,
+    payload: SessionForkIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    worker_id = (payload.worker_id or session.worker_id).strip()
+    backend = (payload.backend or session.backend).strip().lower()
+    workspace_root = (payload.workspace_root or session.workspace_root).strip()
+    namespace = (payload.namespace or session.namespace or "default").strip() or "default"
+    _require_worker_backend_available(db, actor.space_id, worker_id, backend)
+    controls = _normalize_controls(payload.controls) if payload.controls is not None else loads_json(session.controls_json, {})
+    handoff_context = _session_handoff_context(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_fork",
+        target_session_id=session.session_id,
+        worker_id=worker_id,
+        backend=backend,
+        workspace_root=workspace_root,
+        namespace=namespace,
+        payload={
+            "prompt": payload.prompt.strip(),
+            "title": (payload.title or "").strip(),
+            "controls": controls,
+            "project_name": _job_project_name(workspace_root, payload.project_name or session.project_name),
+            "namespace": namespace,
+            "source_session_id": session.session_id,
+            "source_title": handoff_context["title"],
+            "runtime_session_ref": session.runtime_session_ref,
+            "handoff_context": handoff_context,
+            "start_mode": "fork",
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.fork",
+        payload={"source_session_id": session.session_id, "worker_id": worker_id, "backend": backend},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/btw")
+def btw_session(
+    session_id: str,
+    payload: SessionBtwIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    controls = _normalize_controls(payload.controls) if payload.controls is not None else loads_json(session.controls_json, {})
+    handoff_context = _session_handoff_context(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_btw",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "prompt": payload.prompt.strip(),
+            "title": (payload.title or "").strip(),
+            "controls": controls,
+            "source_session_id": session.session_id,
+            "source_title": handoff_context["title"],
+            "runtime_session_ref": session.runtime_session_ref,
+            "handoff_context": handoff_context,
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.btw",
+        payload={"source_session_id": session.session_id, "worker_id": session.worker_id, "backend": session.backend},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/list")
+def list_session_files(
+    session_id: str,
+    payload: SessionFileListIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_list",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={"path": payload.path.strip() or "."},
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.list",
+        payload={"session_id": session.session_id, "path": payload.path},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/read")
+def read_session_file(
+    session_id: str,
+    payload: SessionFileReadIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_read",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={"path": payload.path.strip(), "max_bytes": payload.max_bytes},
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.read",
+        payload={"session_id": session.session_id, "path": payload.path, "max_bytes": payload.max_bytes},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+def _safe_attachment_filename(value: str, content_type: str) -> str:
+    filename = value.replace("\\", "/").split("/")[-1].strip().strip(".")
+    if not filename:
+        filename = "upload"
+    suffix = ALLOWED_IMAGE_TYPES.get(content_type, "")
+    if suffix and "." not in filename:
+        filename = f"{filename}{suffix}"
+    return filename[:180]
+
+
+def _is_valid_image_data(content_type: str, data: bytes) -> bool:
+    if content_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if content_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if content_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    return False
+
+
+def _is_allowed_attachment_type(content_type: str) -> bool:
+    return content_type in ALLOWED_ATTACHMENT_TYPES or content_type.startswith("text/")
+
+
+def _attachment_summaries(attachments: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "filename": str(item["filename"]),
+            "content_type": str(item["content_type"]),
+            "size_bytes": int(item["size_bytes"]),
+        }
+        for item in attachments
+    ]
+
+
+def _normalize_session_attachments(payload: SessionInputIn) -> list[dict[str, object]]:
+    if len(payload.attachments) > 1:
+        raise HTTPException(status_code=400, detail={"message": "Only one attachment is supported", "code": "ATTACHMENT_LIMIT"})
+    settings = get_settings()
+    normalized: list[dict[str, object]] = []
+    for attachment in payload.attachments:
+        content_type = attachment.content_type.split(";", 1)[0].strip().lower()
+        if not _is_allowed_attachment_type(content_type):
+            raise HTTPException(status_code=400, detail={"message": "Unsupported attachment type", "code": "ATTACHMENT_TYPE"})
+        try:
+            data = base64.b64decode(attachment.data_base64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=400, detail={"message": "Invalid attachment data", "code": "ATTACHMENT_INVALID"}) from None
+        if not data:
+            raise HTTPException(status_code=400, detail={"message": "Attachment cannot be empty", "code": "ATTACHMENT_EMPTY"})
+        if content_type in ALLOWED_IMAGE_TYPES and not _is_valid_image_data(content_type, data):
+            raise HTTPException(status_code=400, detail={"message": "Invalid attachment data", "code": "ATTACHMENT_INVALID"})
+        if len(data) > settings.max_session_attachment_bytes:
+            raise HTTPException(status_code=413, detail={"message": "Attachment is too large", "code": "ATTACHMENT_TOO_LARGE"})
+        normalized.append(
+            {
+                "filename": _safe_attachment_filename(attachment.filename, content_type),
+                "content_type": content_type,
+                "size_bytes": len(data),
+                "data_base64": base64.b64encode(data).decode("ascii"),
+            }
+        )
+    return normalized
+
+
+@router.post("/api/sessions/{session_id}/input")
+def send_session_input(
+    session_id: str,
+    payload: SessionInputIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    attachments = _normalize_session_attachments(payload)
+    raw_prompt = payload.prompt.strip()
+    if not raw_prompt and not attachments:
+        raise HTTPException(status_code=400, detail={"message": "Prompt cannot be empty", "code": "PROMPT_EMPTY"})
+    if not raw_prompt:
+        has_image = any(str(item.get("content_type") or "").startswith("image/") for item in attachments)
+        raw_prompt = "请看这张图片。" if has_image else "请看这个附件。"
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    session_was_running = _session_runtime_busy(session)
+    reply_mode = payload.reply_mode
+    native_plan_mode = reply_mode == "plan" and session.backend.strip().lower() == "codex"
+    job_prompt = raw_prompt if native_plan_mode or reply_mode != "plan" else _plan_prompt(raw_prompt, session.backend)
+    controls = _controls_for_reply_mode(session.backend, loads_json(session.controls_json, {}), reply_mode)
+    job = Job(
+        space_id=session.space_id,
+        kind="session_input",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload_json=dumps_json(
+            {
+                "prompt": job_prompt,
+                "raw_prompt": raw_prompt,
+                "reply_mode": reply_mode,
+                "native_plan_mode": native_plan_mode,
+                "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+                "controls": controls,
+                "handoff_context": _session_handoff_context(db, session),
+                "runtime_session_ref": session.runtime_session_ref,
+                "defer_until_session_ready": session_was_running,
+                "attachments": attachments,
+            }
+        ),
+        created_by=actor.actor_id,
+    )
+    if not session_was_running:
+        session.status = "queued"
+    session.updated_at = utcnow()
+    db.add(job)
+    db.flush()
+    upsert_timeline_items(
+        db,
+        session.session_id,
+        [
+            {
+                "item_type": "user_message",
+                "role": "user",
+                "text": raw_prompt,
+                "payload": {
+                    "source": "session_input",
+                    "job_id": job.job_id,
+                    "reply_mode": reply_mode,
+                    "native_plan_mode": native_plan_mode,
+                    "attachments": _attachment_summaries(attachments),
+                },
+            }
+        ],
+        space_id=session.space_id,
+    )
+    sync_session_from_timeline(db, session)
+    write_event(
+        db,
+        space_id=session.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="job.create",
+        payload={"kind": job.kind, "session_id": session.session_id},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/rename")
+def rename_session(
+    session_id: str,
+    payload: SessionRenameIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    session.custom_title = payload.custom_title.strip()
+    session.display_title = session.custom_title
+    session.title = session.custom_title
+    session.updated_at = utcnow()
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="session",
+        source_id=session.session_id,
+        event_type="session.rename",
+    )
+    db.commit()
+    return {"session": session_out(session)}
+
+
+@router.patch("/api/sessions/{session_id}/controls")
+def update_session_controls(
+    session_id: str,
+    payload: SessionControlsIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    controls = loads_json(session.controls_json, {})
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if value is None:
+            controls.pop(key, None)
+        else:
+            controls[key] = value
+    session.controls_json = dumps_json(controls)
+    session.updated_at = utcnow()
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="session",
+        source_id=session.session_id,
+        event_type="session.controls_update",
+        payload={"keys": sorted(controls.keys())},
+    )
+    db.commit()
+    return {"session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/terminate")
+def terminate_session(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("admin")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    session.status = "terminated"
+    session.updated_at = utcnow()
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="session",
+        source_id=session.session_id,
+        event_type="session.terminate",
+    )
+    db.commit()
+    return {"session": session_out(session)}

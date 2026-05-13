@@ -1,0 +1,12 @@
+serverAddr = "__FRP_SERVER_ADDR__"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "__FRP_AUTH_TOKEN__"
+
+[[proxies]]
+name = "agenthub-https"
+type = "https"
+localIP = "127.0.0.1"
+localPort = 8019
+customDomains = ["__AGENTHUB_SERVER_NAME__"]

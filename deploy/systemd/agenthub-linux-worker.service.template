@@ -1,0 +1,15 @@
+[Unit]
+Description=AgentHub Linux Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__AGENTHUB_PROJECT_ROOT__
+EnvironmentFile=__AGENTHUB_ENV_FILE__
+ExecStart=__AGENTHUB_PYTHON__ __AGENTHUB_PROJECT_ROOT__/workers/local-linux/agenthub_linux_worker/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

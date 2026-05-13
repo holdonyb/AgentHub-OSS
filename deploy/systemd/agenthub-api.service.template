@@ -1,0 +1,15 @@
+[Unit]
+Description=AgentHub API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__AGENTHUB_PROJECT_ROOT__
+EnvironmentFile=__AGENTHUB_ENV_FILE__
+ExecStart=__AGENTHUB_PYTHON__ -m uvicorn app.main:app --host __AGENTHUB_API_HOST__ --port __AGENTHUB_API_PORT__ --app-dir __AGENTHUB_PROJECT_ROOT__/apps/api
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
