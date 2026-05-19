@@ -78,10 +78,11 @@ def create_job(payload: JobCreateIn, db: DbSession, actor: Actor = Depends(requi
 
 
 @router.get("/api/jobs")
-def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer"))):
+def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer")), limit: int = 120):
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
-    jobs = db.query(Job).filter(Job.space_id == actor.space_id).order_by(Job.created_at.desc()).all()
+    bounded_limit = max(1, min(limit, 500))
+    jobs = db.query(Job).filter(Job.space_id == actor.space_id).order_by(Job.created_at.desc()).limit(bounded_limit).all()
     return {"items": [job_out(job) for job in jobs]}
 
 

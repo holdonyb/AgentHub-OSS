@@ -26,6 +26,13 @@ npm run web:dev
 
 Open `http://localhost:5173` and create the first owner with `AGENTHUB_BOOTSTRAP_TOKEN`.
 
+## Self-Host Paths
+
+- Self-Host Public Relay: [docs/SELF_HOST_QUICKSTART.md](docs/SELF_HOST_QUICKSTART.md)
+- Tailscale Private Mode: [docs/TAILSCALE_PRIVATE_MODE.md](docs/TAILSCALE_PRIVATE_MODE.md)
+- Configuration Reference: [docs/CONFIGURATION_REFERENCE.md](docs/CONFIGURATION_REFERENCE.md)
+- OSS export flow: [docs/OSS_RELEASE.md](docs/OSS_RELEASE.md)
+
 ## Clients
 
 Desktop and Android clients ask for your AgentHub server URL on first launch. For preconfigured builds, set:
@@ -79,6 +86,9 @@ Before exporting a public release, run:
 
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security](SECURITY.md)
-- [Support matrix](docs/SUPPORT_MATRIX.md)
+- [Security model](docs/SECURITY.md)
+- [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
+- [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
+- [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
 - [Provenance](PROVENANCE.md)
 - [Contributing](CONTRIBUTING.md)

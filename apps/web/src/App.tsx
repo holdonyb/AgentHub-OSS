@@ -1,9 +1,11 @@
 import {
   Activity,
+  Archive,
   Bell,
   Bot,
   CalendarClock,
   Check,
+  ChevronDown,
   Copy,
   Cpu,
   Download,
@@ -18,9 +20,13 @@ import {
   MessageCircle,
   Mic,
   Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  Moon,
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Send,
@@ -28,12 +34,13 @@ import {
   SlidersHorizontal,
   Smartphone,
   Square,
+  Sun,
   TerminalSquare,
   X,
   UserCircle,
   Users,
 } from 'lucide-react';
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -57,10 +64,12 @@ import {
   notifyNativeStatus,
   requestNativeNotificationPermission,
 } from './nativeNotifications';
+import { startStreamingVoice, type StreamingVoiceController, type VoiceStreamAuthPayload } from './voiceStreaming';
 
 type LoadState = 'loading' | 'ready' | 'login' | 'error';
 type MobilePane = 'sessions' | 'thread' | 'controls' | 'files' | 'workers' | 'me';
 type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi';
+type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
 type ReplyMode = 'direct' | 'plan';
 type PermissionAction = 'allow' | 'deny' | 'answer';
@@ -69,6 +78,7 @@ type LaunchMode = 'none' | 'start' | 'fork';
 type NativeMicrophoneState = 'granted' | 'denied' | 'unavailable';
 type ApkUpdateStatus = 'idle' | 'checking' | 'ready' | 'failed';
 type ThemeMode = 'dark' | 'light';
+type VoiceInputMode = 'standard' | 'streaming';
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
 
 const mobilePanes = ['sessions', 'thread', 'controls', 'files', 'workers', 'me'] as const;
@@ -77,6 +87,7 @@ const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
 const APK_DOWNLOAD_PATH = '/downloads/agenthub-debug.apk';
 const APK_DOWNLOAD_FILENAME = 'agenthub-debug.apk';
 const THEME_STORAGE_KEY = 'agenthub.theme';
+const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
 const NOTIFICATION_READ_STORAGE_KEY = 'agenthub.notifications.read';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
 
@@ -87,9 +98,11 @@ declare global {
       requestMicrophonePermission?: () => boolean;
       startNotificationService?: () => boolean;
       stopNotificationService?: () => boolean;
+      setServerBaseUrl?: (url: string) => boolean;
       appVersionName?: () => string;
       appVersionCode?: () => number;
       downloadLatestApk?: (url: string, filename: string) => string;
+      copyText?: (text: string) => boolean;
     };
     AgentHubHandleAndroidBack?: () => boolean;
   }
@@ -141,6 +154,8 @@ interface ApkUpdateState {
   error?: string;
 }
 
+interface VoiceStreamAuthResponse extends VoiceStreamAuthPayload {}
+
 interface NotificationInboxItem {
   id: string;
   title: string;
@@ -172,6 +187,26 @@ interface TimelinePayload {
   has_more?: boolean;
 }
 
+interface InboxSyncPayload {
+  archived: boolean;
+  cursor: string;
+  items: AgentSession[];
+  removed_session_ids: string[];
+}
+
+interface SessionSyncPayload {
+  session: AgentSession;
+  items: AgentTimelineItem[];
+  jobs: Job[];
+  next_after_seq: number;
+  has_more: boolean;
+}
+
+interface PermissionSyncPayload {
+  cursor: string;
+  items: AgentPermission[];
+}
+
 interface ReplyAttachment {
   filename: string;
   content_type: string;
@@ -179,6 +214,78 @@ interface ReplyAttachment {
   size_bytes: number;
   preview_url?: string;
 }
+
+interface SlashCommandOption {
+  command: string;
+  title: string;
+  description: string;
+  insertText: string;
+  backends?: string[];
+  action?: 'insert' | 'open-start' | 'open-fork';
+}
+
+const slashCommandOptions: SlashCommandOption[] = [
+  {
+    command: '/goal',
+    title: '目标模式',
+    description: '让 Codex/Claude 围绕一个目标持续推进。',
+    insertText: '/goal ',
+    backends: ['codex', 'claude'],
+  },
+  {
+    command: '/btw',
+    title: '旁路提问',
+    description: '基于当前 session 提问，但不写入原后端 session。',
+    insertText: '/btw ',
+  },
+  {
+    command: '/new',
+    title: '新建会话',
+    description: '打开当前 worker/backend 的新会话面板。',
+    insertText: '/new',
+    action: 'open-start',
+  },
+  {
+    command: '/fork',
+    title: 'Fork 会话',
+    description: '从当前 session 派生一个新任务。',
+    insertText: '/fork',
+    action: 'open-fork',
+  },
+  {
+    command: '/login',
+    title: 'Provider 登录',
+    description: '给当前 session 的 worker/backend 创建登录任务。',
+    insertText: '/login',
+  },
+  {
+    command: '/logout',
+    title: 'Provider 退出',
+    description: '给当前 session 的 worker/backend 创建退出任务。',
+    insertText: '/logout',
+  },
+];
+
+const attachmentContentTypeByExtension: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  txt: 'text/plain',
+  log: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  pdf: 'application/pdf',
+};
+
+const imageExtensionByContentType: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
 
 interface WorkspaceFileEntry {
   name: string;
@@ -202,7 +309,10 @@ interface WorkspaceFileReadResult {
   size_bytes: number;
   truncated: boolean;
   modified_at?: string | null;
-  text: string;
+  preview_kind?: 'text' | 'image' | 'download';
+  downloadable?: boolean;
+  data_base64?: string;
+  text?: string;
 }
 
 interface SessionLaunchDraft {
@@ -322,6 +432,10 @@ const timelineFilterLabels: Record<TimelineFilter, string> = {
   events: '事件',
 };
 
+const OPTIMISTIC_TIMELINE_SEQ_BASE = 1_000_000_000;
+const TIMELINE_PROMPT_MATCH_WINDOW_MS = 10 * 60 * 1000;
+const TIMELINE_DISPLAY_DUPLICATE_WINDOW_MS = 2_000;
+
 const replyModeLabels: Record<ReplyMode, string> = {
   direct: '直接',
   plan: '计划',
@@ -334,6 +448,7 @@ const fullAccessControls = {
   yolo: true,
 };
 
+const maxReplyAttachments = 5;
 const maxReplyAttachmentBytes = 8 * 1024 * 1024;
 
 const defaultWorkerInstallDraft: WorkerInstallDraft = {
@@ -495,8 +610,15 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
   return btoa(binary);
 }
 
+function inferReplyAttachmentContentType(file: File) {
+  const declared = file.type.split(';', 1)[0].trim().toLowerCase();
+  if (declared && declared !== 'application/octet-stream') return declared;
+  const extension = file.name.split('.').pop()?.trim().toLowerCase() ?? '';
+  return attachmentContentTypeByExtension[extension] ?? (declared || 'application/octet-stream');
+}
+
 async function fileToReplyAttachment(file: File): Promise<ReplyAttachment> {
-  const contentType = file.type.split(';', 1)[0].toLowerCase();
+  const contentType = inferReplyAttachmentContentType(file);
   if (file.size > maxReplyAttachmentBytes) {
     throw new Error('附件不能超过 8MB');
   }
@@ -510,6 +632,33 @@ async function fileToReplyAttachment(file: File): Promise<ReplyAttachment> {
   };
 }
 
+function fileWithFallbackName(file: File, fallbackName: string, contentType: string) {
+  if (file.name.trim()) return file;
+  return new File([file], fallbackName, { type: contentType || file.type || 'application/octet-stream', lastModified: file.lastModified });
+}
+
+function pastedImageFiles(clipboardData: DataTransfer | null) {
+  if (!clipboardData) return [];
+  const itemFiles = Array.from(clipboardData.items ?? [])
+    .filter((item) => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  const seen = new Set<string>();
+  return [...Array.from(clipboardData.files ?? []), ...itemFiles]
+    .filter((file) => inferReplyAttachmentContentType(file).startsWith('image/'))
+    .filter((file) => {
+      const key = [file.name, file.type, file.size, file.lastModified].join(':');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((image, index) => {
+      const contentType = inferReplyAttachmentContentType(image);
+      const extension = imageExtensionByContentType[contentType] ?? 'png';
+      return fileWithFallbackName(image, `pasted-image-${index + 1}.${extension}`, contentType);
+    });
+}
+
 function replyAttachmentPayload(attachment: ReplyAttachment) {
   return {
     filename: attachment.filename,
@@ -519,9 +668,13 @@ function replyAttachmentPayload(attachment: ReplyAttachment) {
 }
 
 function statusClass(status: string) {
-  if (['online', 'ready', 'succeeded', 'needs_reply'].includes(status)) return 'status-good';
-  if (['degraded', 'queued', 'running'].includes(status)) return 'status-warn';
-  return 'status-bad';
+  if (['needs_reply'].includes(status)) return 'status-approval';
+  if (['running', 'queued'].includes(status)) return 'status-running';
+  if (['degraded'].includes(status)) return 'status-warning';
+  if (['online', 'succeeded'].includes(status)) return 'status-success';
+  if (['ready', 'terminated', 'archived'].includes(status)) return 'status-idle';
+  if (['offline', 'failed'].includes(status)) return 'status-failed';
+  return 'status-idle';
 }
 
 function canAdmin(user: User | null) {
@@ -572,6 +725,10 @@ function controlsFromSession(session?: AgentSession): ControlsDraft {
   };
 }
 
+function sameControlsDraft(left: ControlsDraft, right: ControlsDraft) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function latestMessages(session: AgentSession) {
   const messages = session.runtime_metadata?.messages;
   return Array.isArray(messages) ? messages.slice(-8) : [];
@@ -603,6 +760,32 @@ function modeOptions(provider: ProviderSnapshot | undefined, kind: string, fallb
     .filter((mode) => mode.kind === kind)
     .map((mode) => String(mode.id));
   return fromProvider.length > 0 ? fromProvider : fallback;
+}
+
+function slashQuery(value: string) {
+  const trimmed = value.trimStart();
+  if (!/^\/[a-zA-Z]*$/.test(trimmed)) return null;
+  return trimmed.slice(1).toLowerCase();
+}
+
+function parsedSlashCommand(value: string) {
+  const match = value.trim().match(/^\/([a-zA-Z]+)(?:\s+([\s\S]*))?$/);
+  if (!match) return null;
+  return {
+    command: `/${match[1].toLowerCase()}`,
+    argument: (match[2] ?? '').trim(),
+  };
+}
+
+function availableSlashCommands(value: string, session: AgentSession | null) {
+  const query = slashQuery(value);
+  if (query === null) return [];
+  const backend = session?.backend.toLowerCase();
+  return slashCommandOptions.filter((option) => {
+    if (option.backends && backend && !option.backends.includes(backend)) return false;
+    const normalized = option.command.slice(1).toLowerCase();
+    return normalized.startsWith(query);
+  });
 }
 
 function providerFeatureText(provider: ProviderSnapshot | undefined, key: string) {
@@ -728,7 +911,7 @@ function interactionKind(permission: AgentPermission) {
 
 function permissionPlanText(permission: AgentPermission) {
   const value = permission.detail?.plan_text;
-  return typeof value === 'string' ? value.trim() : '';
+  return typeof value === 'string' ? value.replace(/<\/?proposed_plan>/gi, '').trim() : '';
 }
 
 function parseRequestUserInputPayload(text?: string | null): Record<string, unknown> | null {
@@ -886,6 +1069,15 @@ function stopNativeNotificationService() {
   }
 }
 
+function syncNativeServerBaseUrl() {
+  try {
+    if (typeof window === 'undefined') return false;
+    return window.AgentHubAndroid?.setServerBaseUrl?.(window.location.origin) === true;
+  } catch {
+    return false;
+  }
+}
+
 function nativeAppVersion(): NativeAppVersion | null {
   try {
     const name = window.AgentHubAndroid?.appVersionName?.()?.trim();
@@ -918,11 +1110,46 @@ function nativeDownloadLatestApk(url: string, filename: string) {
   }
 }
 
+async function writeTextToClipboard(value: string) {
+  const text = String(value ?? '');
+  try {
+    if (window.AgentHubAndroid?.copyText?.(text) === true) return true;
+  } catch {
+    // Fall through to the browser clipboard path.
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+}
+
 function initialThemeMode(): ThemeMode {
   try {
-    return localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+    return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
   } catch {
-    return 'dark';
+    return 'light';
+  }
+}
+
+function initialVoiceInputMode(): VoiceInputMode {
+  try {
+    return localStorage.getItem(VOICE_INPUT_MODE_STORAGE_KEY) === 'streaming' ? 'streaming' : 'standard';
+  } catch {
+    return 'standard';
   }
 }
 
@@ -1081,7 +1308,7 @@ function statusLabel(status: string) {
     needs_reply: '等待审批',
     failed: '失败',
     terminated: '已结束',
-    online: '健康',
+    online: '在线',
     degraded: '降级',
     offline: '离线',
     succeeded: '成功',
@@ -1093,6 +1320,45 @@ function compactText(value?: string | null, limit = 180) {
   const compacted = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (!compacted) return '';
   return compacted.length > limit ? `${compacted.slice(0, limit - 1)}…` : compacted;
+}
+
+function commandExitCode(value?: string | null) {
+  const match = String(value ?? '').match(/Exit code:\s*(-?\d+)/i);
+  return match ? Number(match[1]) : null;
+}
+
+function hasRawCommandTelemetry(value?: string | null) {
+  const text = String(value ?? '');
+  return /Exit code:\s*-?\d+/i.test(text) || /Wall time:/i.test(text);
+}
+
+function agentOpsActivitySummary(value?: string | null, status = 'ready', limit = 128) {
+  const text = compactText(value, limit);
+  const exitCode = commandExitCode(value);
+  if (exitCode !== null) {
+    return exitCode === 0 ? '执行完成 · 查看执行详情' : '执行失败 · 查看执行详情';
+  }
+  if (hasRawCommandTelemetry(value)) return '工具执行已同步 · 查看执行详情';
+  if (text) return text;
+  if (status === 'needs_reply') return '等待你处理审批或回复';
+  if (status === 'queued') return '已进入队列，等待 worker 领取';
+  if (status === 'running') return '正在执行，等待 worker 同步最新结果';
+  if (status === 'failed') return '执行失败，查看作业与事件详情';
+  return '暂无 transcript 摘要';
+}
+
+function agentOpsTaskHeadline(session: AgentSession) {
+  const exitCode = commandExitCode(session.activity_summary || session.last_message);
+  if (exitCode !== null) return exitCode === 0 ? '执行完成' : '执行失败';
+  if (session.status === 'needs_reply') return '等待你处理审批';
+  if (session.status === 'running') return '任务正在运行';
+  if (session.status === 'queued') return '任务已排队';
+  if (session.status === 'failed') return '任务失败';
+  return '任务状态';
+}
+
+function agentOpsTaskSummary(session: AgentSession) {
+  return agentOpsActivitySummary(session.activity_summary || session.last_message, session.status, 160);
 }
 
 function notificationState(): NotificationState {
@@ -1145,12 +1411,41 @@ function fileListResult(jobs: Job[]) {
 
 function fileReadResult(jobs: Job[]) {
   const result = parseJobResult<WorkspaceFileReadResult>(latestCompletedJob(jobs, 'file_read'));
-  if (!result || typeof result.text !== 'string') return null;
-  return result;
+  if (!result || typeof result.path !== 'string' || typeof result.filename !== 'string') return null;
+  return {
+    ...result,
+    preview_kind: result.preview_kind ?? 'text',
+    downloadable: Boolean(result.downloadable),
+    text: typeof result.text === 'string' ? result.text : '',
+  };
 }
 
 function fileJobBusy(jobs: Job[]) {
   return jobs.some((job) => ['file_list', 'file_read'].includes(job.kind) && ['queued', 'running'].includes(job.status));
+}
+
+function decodeBase64Bytes(dataBase64: string) {
+  const binary = globalThis.atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function workspaceFileBlob(file: WorkspaceFileReadResult) {
+  if (typeof file.data_base64 === 'string' && file.data_base64) {
+    return new Blob([decodeBase64Bytes(file.data_base64)], { type: file.content_type || 'application/octet-stream' });
+  }
+  if (typeof file.text === 'string') {
+    return new Blob([file.text], { type: file.content_type || 'text/plain;charset=utf-8' });
+  }
+  return null;
+}
+
+function workspaceFileDataUrl(file: WorkspaceFileReadResult) {
+  if (typeof file.data_base64 === 'string' && file.data_base64) {
+    return `data:${file.content_type || 'application/octet-stream'};base64,${file.data_base64}`;
+  }
+  return null;
 }
 
 function sessionInputJobText(job: Job) {
@@ -1180,10 +1475,40 @@ function timelineItemPayload(item: AgentTimelineItem) {
   return item.payload && typeof item.payload === 'object' ? (item.payload as Record<string, unknown>) : {};
 }
 
+function timelineItemAttachments(item: AgentTimelineItem) {
+  const payload = timelineItemPayload(item);
+  const attachments = payload.attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments
+    .map((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return null;
+      const record = attachment as Record<string, unknown>;
+      const filename = typeof record.filename === 'string' ? record.filename.trim() : '';
+      if (!filename) return null;
+      return {
+        filename,
+        content_type: typeof record.content_type === 'string' ? record.content_type : 'application/octet-stream',
+        size_bytes: typeof record.size_bytes === 'number' ? record.size_bytes : null,
+      };
+    })
+    .filter((attachment): attachment is { filename: string; content_type: string; size_bytes: number | null } => attachment !== null);
+}
+
 function timelineItemJobId(item: AgentTimelineItem) {
   const payload = timelineItemPayload(item);
   const jobId = payload.job_id ?? payload.agenthub_job_id;
   return typeof jobId === 'string' ? jobId : '';
+}
+
+function timelineCreatedAtMs(value?: string | null) {
+  return parseApiDate(value)?.getTime() ?? null;
+}
+
+function timelineTimesClose(left?: string | null, right?: string | null) {
+  const leftMs = timelineCreatedAtMs(left);
+  const rightMs = timelineCreatedAtMs(right);
+  if (leftMs === null || rightMs === null) return false;
+  return Math.abs(leftMs - rightMs) <= TIMELINE_PROMPT_MATCH_WINDOW_MS;
 }
 
 function stripImageAttachmentMarker(value: string) {
@@ -1198,12 +1523,12 @@ function timelineAlreadyContainsJob(items: AgentTimelineItem[], job: Job) {
   const prompt = sessionInputJobText(job);
   const rawPrompt = typeof job.payload?.prompt === 'string' ? job.payload.prompt.trim() : '';
   return items.some(
-    (item) =>
-      item.item_type === 'user_message' &&
-      item.role === 'user' &&
-      ((job.job_id && timelineItemJobId(item) === job.job_id) ||
-        sameTimelinePrompt(item.text, prompt) ||
-        (rawPrompt ? sameTimelinePrompt(item.text, rawPrompt) : false)),
+    (item) => {
+      if (item.item_type !== 'user_message' || item.role !== 'user') return false;
+      if (job.job_id && timelineItemJobId(item) === job.job_id) return true;
+      if (!timelineTimesClose(item.created_at, job.created_at ?? job.updated_at)) return false;
+      return sameTimelinePrompt(item.text, prompt) || (rawPrompt ? sameTimelinePrompt(item.text, rawPrompt) : false);
+    },
   );
 }
 
@@ -1237,12 +1562,56 @@ function usefulTimelineItems(items: AgentTimelineItem[]) {
   return items.filter((item) => compactText(item.text) || item.item_type === 'tool_call' || item.item_type === 'error');
 }
 
+function timelineSeq(item: AgentTimelineItem) {
+  return Number(item.seq) || 0;
+}
+
+function compareTimelineItemsByCreatedAt(left: AgentTimelineItem, right: AgentTimelineItem) {
+  const leftMs = timelineCreatedAtMs(left.created_at);
+  const rightMs = timelineCreatedAtMs(right.created_at);
+  if (leftMs !== null && rightMs !== null && leftMs !== rightMs) return leftMs - rightMs;
+  return timelineSeq(left) - timelineSeq(right);
+}
+
+function sortTimelineItemsByCreatedAt(items: AgentTimelineItem[]) {
+  return items.slice().sort(compareTimelineItemsByCreatedAt);
+}
+
+function sameTimelineDisplayEcho(left: AgentTimelineItem, right: AgentTimelineItem) {
+  if (left.item_type !== 'assistant_message' || right.item_type !== 'assistant_message') return false;
+  if (left.role !== right.role) return false;
+  if (compactText(left.text, 4_000) !== compactText(right.text, 4_000)) return false;
+  const leftMs = timelineCreatedAtMs(left.created_at);
+  const rightMs = timelineCreatedAtMs(right.created_at);
+  if (leftMs === null || rightMs === null) return false;
+  return Math.abs(leftMs - rightMs) <= TIMELINE_DISPLAY_DUPLICATE_WINDOW_MS;
+}
+
+function dedupeTimelineItemsForDisplay(items: AgentTimelineItem[]) {
+  const deduped: AgentTimelineItem[] = [];
+  items.forEach((item) => {
+    const previous = deduped[deduped.length - 1];
+    if (previous && sameTimelineDisplayEcho(previous, item)) return;
+    deduped.push(item);
+  });
+  return deduped;
+}
+
+function timelineBeforeCursor(item: AgentTimelineItem) {
+  const seq = timelineSeq(item);
+  if (item.created_at) {
+    return `before_created_at=${encodeURIComponent(item.created_at)}&before_seq=${seq}`;
+  }
+  if (Number.isFinite(seq)) return `before=${seq}`;
+  return '';
+}
+
 function mergeTimelineItems(existing: AgentTimelineItem[], incoming: AgentTimelineItem[]) {
   const bySeq = new Map<number, AgentTimelineItem>();
   [...existing, ...incoming].forEach((item) => {
-    bySeq.set(Number(item.seq) || 0, item);
+    bySeq.set(timelineSeq(item), item);
   });
-  return Array.from(bySeq.values()).sort((left, right) => (Number(left.seq) || 0) - (Number(right.seq) || 0));
+  return sortTimelineItemsByCreatedAt(Array.from(bySeq.values()));
 }
 
 function optimisticMessageKey(item: AgentTimelineItem) {
@@ -1257,8 +1626,17 @@ function optimisticMatchesServerItem(pending: AgentTimelineItem, incoming: Agent
     incoming.item_type === 'user_message' &&
     incoming.role === 'user' &&
     ((pendingJobId && incomingJobId && pendingJobId === incomingJobId) ||
-      sameTimelinePrompt(incoming.text, pending.text))
+      (sameTimelinePrompt(incoming.text, pending.text) && timelineTimesClose(incoming.created_at, pending.created_at)))
   );
+}
+
+function isSameOptimisticTimelineItem(left: AgentTimelineItem, right: AgentTimelineItem) {
+  return optimisticMessageKey(left) === optimisticMessageKey(right);
+}
+
+function resequencePendingTimelineItems(existing: AgentTimelineItem[], pending: AgentTimelineItem[]) {
+  const baseSeq = Math.max(0, ...existing.map((item) => Number(item.seq) || 0), OPTIMISTIC_TIMELINE_SEQ_BASE);
+  return pending.map((item, index) => ({ ...item, seq: baseSeq + index + 1 }));
 }
 
 function timelineFilterFor(item: AgentTimelineItem): TimelineFilter {
@@ -1271,7 +1649,7 @@ function timelineFilterFor(item: AgentTimelineItem): TimelineFilter {
 
 function isFocusTimelineItem(item: AgentTimelineItem) {
   if (item.item_type === 'tool_call' && requestUserInputTimelineQuestions(item).length > 0) return true;
-  return ['user_message', 'assistant_message', 'error', 'compaction'].includes(item.item_type);
+  return ['user_message', 'assistant_message', 'goal', 'error', 'compaction'].includes(item.item_type);
 }
 
 function timelineMatchesFilter(item: AgentTimelineItem, filter: TimelineFilter) {
@@ -1281,7 +1659,7 @@ function timelineMatchesFilter(item: AgentTimelineItem, filter: TimelineFilter) 
 }
 
 function timelineTextState(text?: string | null) {
-  const raw = String(text ?? '');
+  const raw = String(text ?? '').replace(/<\/?proposed_plan>/gi, '').trim();
   const wasTruncated = raw.includes(AGENTHUB_TRUNCATION_MARKER);
   return {
     value: raw.replace(/\n{0,2}\[AgentHub truncated this item\]\s*$/, '').trimEnd(),
@@ -1298,10 +1676,11 @@ function TimelineText({ text }: { text?: string | null }) {
   const displayText = shouldCollapse && !expanded ? compactText(value, 640) : value;
   const hasText = Boolean(value.trim());
   const copyText = async () => {
-    if (!hasText || !navigator.clipboard?.writeText) return;
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    if (!hasText) return;
+    if (await writeTextToClipboard(value)) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }
   };
   const viewer = (
     <div className="fulltext-backdrop" role="presentation">
@@ -1585,6 +1964,7 @@ function timelineLabel(item: AgentTimelineItem) {
   if (item.item_type === 'user_message') return '你';
   if (item.item_type === 'assistant_message') return backendLabel(String(item.role ?? 'Agent'));
   if (item.item_type === 'tool_call') return '工具调用';
+  if (item.item_type === 'goal') return '目标';
   if (item.item_type === 'error') return '错误';
   if (item.item_type === 'reasoning') return '推理';
   return '系统事件';
@@ -1608,7 +1988,7 @@ function App() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
-  const [replyAttachment, setReplyAttachment] = useState<ReplyAttachment | null>(null);
+  const [replyAttachments, setReplyAttachments] = useState<ReplyAttachment[]>([]);
   const [isPreparingAttachment, setIsPreparingAttachment] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -1616,10 +1996,15 @@ function App() {
   const [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('focus');
   const [replyMode, setReplyMode] = useState<ReplyMode>('direct');
   const [mobilePane, setMobilePane] = useState<MobilePane>('sessions');
+  const [mobileSessionActionsOpen, setMobileSessionActionsOpen] = useState(false);
+  const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => initialThemeMode());
+  const [voiceInputMode, setVoiceInputMode] = useState<VoiceInputMode>(() => initialVoiceInputMode());
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const [notificationPermission, setNotificationPermission] = useState<NotificationState>(() => notificationState());
   const [nativeVersion] = useState<NativeAppVersion | null>(() => nativeAppVersion());
@@ -1629,7 +2014,10 @@ function App() {
   const [dismissedPermissionToastIds, setDismissedPermissionToastIds] = useState<Set<string>>(() => new Set());
   const [focusedPermissionId, setFocusedPermissionId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
+  const [isTitleDirty, setIsTitleDirty] = useState(false);
   const [controlsDraft, setControlsDraft] = useState<ControlsDraft>(emptyControls);
+  const [isControlsDirty, setIsControlsDirty] = useState(false);
+  const controlsDirtyRef = useRef(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>('none');
   const [launchDraft, setLaunchDraft] = useState<SessionLaunchDraft>(() => emptyLaunchDraft());
   const [workerInstallOpen, setWorkerInstallOpen] = useState(false);
@@ -1638,6 +2026,7 @@ function App() {
   );
   const [workerEnrollment, setWorkerEnrollment] = useState<WorkerEnrollmentCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
   const notificationInboxOpenRef = useRef(false);
   const launchModeRef = useRef<LaunchMode>('none');
@@ -1648,11 +2037,32 @@ function App() {
   const notifiedPermissionIds = useRef<Set<string>>(new Set());
   const notifiedNeedsReplySessionKeys = useRef<Map<string, string>>(new Map());
   const needsReplyNotificationsPrimed = useRef(false);
-  const replyAttachmentRef = useRef<ReplyAttachment | null>(null);
+  const replyAttachmentsRef = useRef<ReplyAttachment[]>([]);
+  const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inboxCursorRef = useRef<Record<SessionArchiveView, string>>({ active: '', archived: '' });
+  const permissionCursorRef = useRef('');
+  const sessionAfterSeqRef = useRef<Record<string, number>>({});
+  const transcriptRef = useRef<HTMLElement | null>(null);
+  const transcriptSessionRef = useRef<string | null>(null);
+  const shouldScrollTranscriptToBottomRef = useRef(false);
+  const preserveTranscriptScrollRef = useRef<{
+    sessionId: string;
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const pendingOptimisticTimelineRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const streamingVoiceControllerRef = useRef<StreamingVoiceController | null>(null);
+  const streamingVoiceLastTextRef = useRef('');
+  const streamingVoiceShouldCommitRef = useRef(false);
+  const streamingVoiceStopHandledRef = useRef(false);
+  const streamingVoiceManualEditRef = useRef(false);
+  const streamingVoiceBaseReplyRef = useRef('');
+  const streamingVoiceAppliedTextRef = useRef('');
+  const streamingVoiceStopWaitersRef = useRef<Array<() => void>>([]);
   const [scheduleDraft, setScheduleDraft] = useState({
     name: 'Health check',
     job_kind: 'health_check',
@@ -1689,6 +2099,12 @@ function App() {
       sessions[0],
     [filteredSessions, selectedId, sessions],
   );
+
+  function updateControlsDraft(updater: ControlsDraft | ((current: ControlsDraft) => ControlsDraft)) {
+    controlsDirtyRef.current = true;
+    setIsControlsDirty(true);
+    setControlsDraft((current) => (typeof updater === 'function' ? updater(current) : updater));
+  }
   const selectedProvider = useMemo(
     () =>
       selectedSession
@@ -1725,7 +2141,13 @@ function App() {
       : '';
   const canReply = Boolean(selectedSession && canOperate(user) && !replyBlockedReason);
   const canSendReply = canReply && !isTranscribing && !isPreparingAttachment;
+  const visibleSlashCommands = useMemo(
+    () => (canReply && replyAttachments.length === 0 ? availableSlashCommands(reply, selectedSession) : []),
+    [canReply, reply, replyAttachments.length, selectedSession],
+  );
   const isRefreshNotice = notice.includes('后台刷新') || notice.startsWith('刷新失败');
+  const visibleReplyStatus =
+    replyBlockedReason || (notice && !isRefreshNotice && !notice.includes('会话等待回复') ? notice : '');
   const selectedJobs = selectedSession
     ? jobs
         .filter((job) => job.target_session_id === selectedSession.session_id)
@@ -1737,37 +2159,71 @@ function App() {
   );
   const notificationItems = useMemo(() => notificationItemsFromState(permissions, jobs), [permissions, jobs]);
   const unreadNotificationCount = notificationItems.filter((item) => !readNotificationIds.has(item.id)).length;
-  const compactTimeline = useMemo(() => usefulTimelineItems(selectedTimelineWithJobs), [selectedTimelineWithJobs]);
+  const compactTimeline = useMemo(
+    () => usefulTimelineItems(sortTimelineItemsByCreatedAt(selectedTimelineWithJobs)),
+    [selectedTimelineWithJobs],
+  );
+  const displayTimeline = useMemo(() => dedupeTimelineItemsForDisplay(compactTimeline), [compactTimeline]);
   const timelineFilters = useMemo(() => {
     const counts: Record<TimelineFilter, number> = {
       focus: 0,
-      all: compactTimeline.length,
+      all: displayTimeline.length,
       messages: 0,
       tools: 0,
       events: 0,
     };
-    compactTimeline.forEach((item) => {
+    displayTimeline.forEach((item) => {
       if (isFocusTimelineItem(item)) counts.focus += 1;
       counts[timelineFilterFor(item)] += 1;
     });
     return (Object.keys(timelineFilterLabels) as TimelineFilter[])
       .map((id) => ({ id, label: timelineFilterLabels[id], count: counts[id] }))
       .filter((filter) => filter.id === 'all' || filter.id === 'focus' || filter.count > 0);
-  }, [compactTimeline]);
+  }, [displayTimeline]);
   const visibleTimeline = useMemo(
-    () =>
-      compactTimeline
-        .filter((item) => timelineMatchesFilter(item, timelineFilter))
-        .slice()
-        .reverse(),
-    [compactTimeline, timelineFilter],
+    () => displayTimeline.filter((item) => timelineMatchesFilter(item, timelineFilter)),
+    [displayTimeline, timelineFilter],
   );
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
 
+  useLayoutEffect(() => {
+    const sessionId = selectedSession?.session_id ?? null;
+    const transcript = transcriptRef.current;
+    if (!sessionId || !transcript) return;
+
+    if (transcriptSessionRef.current !== sessionId) {
+      transcriptSessionRef.current = sessionId;
+      shouldScrollTranscriptToBottomRef.current = true;
+      preserveTranscriptScrollRef.current = null;
+    }
+
+    const preserved = preserveTranscriptScrollRef.current;
+    if (preserved && preserved.sessionId === sessionId) {
+      const delta = transcript.scrollHeight - preserved.scrollHeight;
+      transcript.scrollTop = Math.max(0, preserved.scrollTop + delta);
+      preserveTranscriptScrollRef.current = null;
+      return;
+    }
+
+    if (shouldScrollTranscriptToBottomRef.current) {
+      transcript.scrollTop = transcript.scrollHeight;
+      if (visibleTimeline.length > 0 || selectedPermissions.length > 0) {
+        shouldScrollTranscriptToBottomRef.current = false;
+      }
+    }
+  }, [selectedSession?.session_id, selectedPermissions.length, timelineFilter, visibleTimeline.length]);
+
+  useEffect(() => {
+    if (selectedIdRef.current && sessions.some((session) => session.session_id === selectedIdRef.current)) return;
+    const nextSelectedId = filteredSessions[0]?.session_id ?? sessions[0]?.session_id ?? null;
+    if (nextSelectedId === selectedIdRef.current) return;
+    selectedIdRef.current = nextSelectedId;
+    setSelectedId(nextSelectedId);
+  }, [filteredSessions, sessions]);
+
   async function copyTextToClipboard(value: string, successMessage: string) {
     if (!value.trim()) return;
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
+    if (await writeTextToClipboard(value)) {
       setNotice(successMessage);
       return;
     }
@@ -1976,8 +2432,13 @@ function App() {
     timelineLoadingRef.current.add(sessionId);
     try {
       const payload = await apiGet<TimelinePayload>(`/api/sessions/${sessionId}/timeline`);
-      setTimelineBySession((current) => ({ ...current, [sessionId]: mergeServerTimeline(sessionId, payload.items) }));
-      setTimelineHasOlder((current) => ({ ...current, [sessionId]: Boolean(payload.has_more) }));
+      const merged = mergeServerTimeline(sessionId, timelineBySession[sessionId] ?? [], payload.items);
+      setTimelineBySession((current) => ({
+        ...current,
+        [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
+      }));
+      setTimelineHasOlder((current) => (sessionId in current ? current : { ...current, [sessionId]: Boolean(payload.has_more) }));
+      sessionAfterSeqRef.current[sessionId] = Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
     } finally {
       timelineLoadingRef.current.delete(sessionId);
     }
@@ -1993,17 +2454,119 @@ function App() {
     }
   }
 
-  async function loadData(nextCsrf?: string, nextUser: User | null = user) {
+  function mergeSessionList(current: AgentSession[], incoming: AgentSession[], removedSessionIds: string[]) {
+    const next = new Map(current.map((session) => [session.session_id, session]));
+    removedSessionIds.forEach((sessionId) => next.delete(sessionId));
+    incoming.forEach((session) => next.set(session.session_id, session));
+    return Array.from(next.values());
+  }
+
+  function mergePermissions(current: AgentPermission[], incoming: AgentPermission[]) {
+    const next = new Map(current.map((permission) => [permission.permission_id, permission]));
+    incoming.forEach((permission) => next.set(permission.permission_id, permission));
+    return Array.from(next.values());
+  }
+
+  function replaceSessionJobs(current: Job[], sessionId: string, incoming: Job[]) {
+    const next = new Map(
+      current.filter((job) => job.target_session_id !== sessionId).map((job) => [job.job_id, job]),
+    );
+    incoming.forEach((job) => next.set(job.job_id, job));
+    return Array.from(next.values());
+  }
+
+  function inboxCursorForSessions(items: AgentSession[]) {
+    if (items.length === 0) return '';
+    const ordered = items
+      .slice()
+      .sort((left, right) =>
+        left.updated_at === right.updated_at
+          ? left.session_id.localeCompare(right.session_id)
+          : new Date(left.updated_at ?? 0).getTime() - new Date(right.updated_at ?? 0).getTime(),
+      );
+    const tail = ordered[ordered.length - 1];
+    return `${tail.updated_at ?? ''}|${tail.session_id}`;
+  }
+
+  function permissionCursorForItems(items: AgentPermission[]) {
+    if (items.length === 0) return '';
+    const ordered = items
+      .slice()
+      .sort((left, right) => {
+        const leftTime = new Date(left.resolved_at ?? left.created_at).getTime();
+        const rightTime = new Date(right.resolved_at ?? right.created_at).getTime();
+        return leftTime === rightTime
+          ? left.permission_id.localeCompare(right.permission_id)
+          : leftTime - rightTime;
+      });
+    const tail = ordered[ordered.length - 1];
+    return `${tail.resolved_at ?? tail.created_at}|${tail.permission_id}`;
+  }
+
+  async function loadInboxDelta(archiveView: SessionArchiveView = sessionArchiveView) {
+    const params = new URLSearchParams();
+    if (archiveView === 'archived') params.set('archived', 'true');
+    const cursor = inboxCursorRef.current[archiveView];
+    if (cursor) params.set('cursor', cursor);
+    const path = params.toString() ? `/api/sync/inbox?${params.toString()}` : '/api/sync/inbox';
+    const payload = await apiGet<InboxSyncPayload>(path);
+    inboxCursorRef.current[archiveView] = payload.cursor;
+    if (payload.items.length === 0 && payload.removed_session_ids.length === 0) return;
+    const merged = mergeSessionList(sessions, payload.items, payload.removed_session_ids);
+    if (archiveView === 'active') {
+      alertNewNeedsReplySessions(merged, permissions);
+    }
+    setSessions((current) => mergeSessionList(current, payload.items, payload.removed_session_ids));
+  }
+
+  async function loadPermissionDelta() {
+    const params = new URLSearchParams();
+    if (permissionCursorRef.current) params.set('cursor', permissionCursorRef.current);
+    const path = params.toString() ? `/api/sync/permissions?${params.toString()}` : '/api/sync/permissions';
+    const payload = await apiGet<PermissionSyncPayload>(path);
+    permissionCursorRef.current = payload.cursor;
+    if (payload.items.length === 0) return;
+    setPermissions((current) => {
+      const next = mergePermissions(current, payload.items);
+      alertNewPendingPermissions(next);
+      return next;
+    });
+  }
+
+  async function loadSessionDelta(sessionId: string) {
+    const afterSeq = sessionAfterSeqRef.current[sessionId] ?? 0;
+    const params = new URLSearchParams();
+    if (afterSeq > 0) params.set('after_seq', String(afterSeq));
+    const payload = await apiGet<SessionSyncPayload>(`/api/sync/session/${sessionId}?${params.toString()}`);
+    setSessions((current) => mergeSessionList(current, [payload.session], []));
+    setJobs((current) => replaceSessionJobs(current, sessionId, payload.jobs));
+    if (payload.items.length > 0) {
+      setTimelineBySession((current) => ({
+        ...current,
+        [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
+      }));
+    }
+    sessionAfterSeqRef.current[sessionId] = payload.next_after_seq;
+    return payload;
+  }
+
+  async function loadData(
+    nextCsrf?: string,
+    nextUser: User | null = user,
+    archiveView: SessionArchiveView = sessionArchiveView,
+    options: { background?: boolean } = {},
+  ) {
+    const sessionsPath = archiveView === 'archived' ? '/api/sessions?archived=true' : '/api/sessions';
     const [sessionPayload, workerPayload, jobPayload, eventPayload, schedulePayload, providerPayload, permissionPayload] = await Promise.all([
-      apiGet<{ items: AgentSession[] }>('/api/sessions'),
+      apiGet<{ items: AgentSession[] }>(sessionsPath),
       apiGet<{ items: Worker[] }>('/api/workers'),
       apiGet<{ items: Job[] }>('/api/jobs'),
-      apiGet<{ items: Event[] }>('/api/events'),
+      options.background ? Promise.resolve({ items: events }) : apiGet<{ items: Event[] }>('/api/events'),
       apiGet<{ items: Schedule[] }>('/api/schedules'),
       apiGet<{ items: ProviderSnapshot[] }>('/api/providers'),
       apiGet<{ items: AgentPermission[] }>('/api/permissions'),
     ]);
-    const secretItems = await loadSecretItems(nextUser);
+    const secretItems = options.background ? secrets : await loadSecretItems(nextUser);
     const activeSelectedId = selectedIdRef.current;
     const activeSelectedExists = activeSelectedId
       ? sessionPayload.items.some((session) => session.session_id === activeSelectedId)
@@ -2021,7 +2584,11 @@ function App() {
     setPermissions(permissionPayload.items);
     setSecrets(secretItems);
     alertNewPendingPermissions(permissionPayload.items);
-    alertNewNeedsReplySessions(sessionPayload.items, permissionPayload.items);
+    if (archiveView === 'active') {
+      alertNewNeedsReplySessions(sessionPayload.items, permissionPayload.items);
+    }
+    inboxCursorRef.current[archiveView] = inboxCursorForSessions(sessionPayload.items);
+    permissionCursorRef.current = permissionCursorForItems(permissionPayload.items);
     setSelectedId((current) => {
       const currentExists = current
         ? sessionPayload.items.some((session) => session.session_id === current)
@@ -2032,14 +2599,23 @@ function App() {
     });
     setLastSyncedAt(new Date().toISOString());
     if (nextSelectedId) {
-      setTimelineBySession((current) => ({ ...current, [nextSelectedId]: mergeServerTimeline(nextSelectedId, timelinePayload.items) }));
-      setTimelineHasOlder((current) => ({ ...current, [nextSelectedId]: Boolean(timelinePayload.has_more) }));
+      sessionAfterSeqRef.current[nextSelectedId] = Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
+      setTimelineBySession((current) => ({
+        ...current,
+        [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),
+      }));
+      setTimelineHasOlder((current) => (
+        nextSelectedId in current ? current : { ...current, [nextSelectedId]: Boolean(timelinePayload.has_more) }
+      ));
     }
     if (nextCsrf) setCsrfToken(nextCsrf);
   }
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    setMobileSessionActionsOpen(false);
+    setStatusDetailsOpen(false);
+    setComposerExpanded(false);
   }, [selectedId]);
 
   useEffect(() => {
@@ -2114,6 +2690,14 @@ function App() {
   }, [themeMode]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(VOICE_INPUT_MODE_STORAGE_KEY, voiceInputMode);
+    } catch {
+      // Ignore storage failures in embedded WebViews.
+    }
+  }, [voiceInputMode]);
+
+  useEffect(() => {
     let active = true;
     apiGet<AuthPayload>('/api/auth/me')
       .then(async (payload) => {
@@ -2132,9 +2716,33 @@ function App() {
   }, []);
 
   useEffect(() => {
-    setTitleDraft(selectedSession ? sessionTitle(selectedSession) : '');
-    setControlsDraft(controlsFromSession(selectedSession));
-  }, [selectedSession?.session_id, selectedSession?.display_title, selectedSession?.controls]);
+    const nextSessionId = selectedSession?.session_id ?? null;
+    const nextTitle = selectedSession ? sessionTitle(selectedSession) : '';
+    const nextControls = controlsFromSession(selectedSession);
+    if (hydratedDraftSessionIdRef.current !== nextSessionId) {
+      hydratedDraftSessionIdRef.current = nextSessionId;
+      setTitleDraft(nextTitle);
+      setControlsDraft(nextControls);
+      setIsTitleDirty(false);
+      controlsDirtyRef.current = false;
+      setIsControlsDirty(false);
+      return;
+    }
+    if (!isTitleDirty && titleDraft !== nextTitle) {
+      setTitleDraft(nextTitle);
+    }
+    if (!controlsDirtyRef.current && !isControlsDirty && !sameControlsDraft(controlsDraft, nextControls)) {
+      setControlsDraft(nextControls);
+    }
+  }, [
+    controlsDraft,
+    isControlsDirty,
+    isTitleDirty,
+    selectedSession?.controls,
+    selectedSession?.display_title,
+    selectedSession?.session_id,
+    titleDraft,
+  ]);
 
   useEffect(() => {
     if (launchMode !== 'none') return;
@@ -2195,6 +2803,10 @@ function App() {
   }, [focusedPermissionId, mobilePane, selectedSession?.session_id, selectedPermissions.length, visibleTimeline.length]);
 
   useEffect(() => {
+    syncNativeServerBaseUrl();
+  }, []);
+
+  useEffect(() => {
     if (loadState === 'ready') startNativeNotificationService();
   }, [loadState]);
 
@@ -2207,7 +2819,12 @@ function App() {
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        await loadData();
+        await loadInboxDelta(sessionArchiveView);
+        await loadPermissionDelta();
+        if (selectedIdRef.current) {
+          await loadSessionDelta(selectedIdRef.current);
+        }
+        setLastSyncedAt(new Date().toISOString());
       } catch {
         if (!stopped) setNotice('同步失败，稍后重试');
       } finally {
@@ -2215,7 +2832,7 @@ function App() {
       }
     };
 
-    const intervalId = window.setInterval(() => void syncNow(), 5000);
+    const intervalId = window.setInterval(() => void syncNow(), 15000);
     const handleFocus = () => void syncNow();
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') void syncNow();
@@ -2228,16 +2845,16 @@ function App() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [loadState, selectedId]);
+  }, [loadState, selectedId, sessionArchiveView, user]);
 
   useEffect(
     () => () => {
-      const currentAttachment = replyAttachmentRef.current;
-      if (currentAttachment?.preview_url) {
-        URL.revokeObjectURL(currentAttachment.preview_url);
-      }
-      replyAttachmentRef.current = null;
+      replyAttachmentsRef.current.forEach((attachment) => {
+        if (attachment.preview_url) URL.revokeObjectURL(attachment.preview_url);
+      });
+      replyAttachmentsRef.current = [];
       mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = null;
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
     },
@@ -2268,6 +2885,18 @@ function App() {
       setNotice(`刷新失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setIsRefreshing(false);
+    }
+  }
+
+  async function switchSessionArchiveView(view: SessionArchiveView) {
+    if (view === sessionArchiveView) return;
+    setSessionArchiveView(view);
+    selectedIdRef.current = null;
+    setSelectedId(null);
+    try {
+      await loadData(undefined, user, view);
+    } catch (error) {
+      setNotice(`切换会话视图失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
 
@@ -2367,6 +2996,76 @@ function App() {
     await apiPost<{ job: Job }>(`/api/providers/${workerId}/${backend}/${action}`, {}, csrfToken);
     setNotice(action === 'login' ? `${backendLabel(backend)} 登录任务已创建` : `${backendLabel(backend)} 退出任务已创建`);
     await loadData();
+  }
+
+  async function handleArchiveSession(archive: boolean) {
+    if (!selectedSession || !canOperate(user)) return;
+    const action = archive ? 'archive' : 'unarchive';
+    try {
+      await apiPost<{ session: AgentSession }>(
+        `/api/sessions/${selectedSession.session_id}/${action}`,
+        {},
+        csrfToken,
+      );
+      selectedIdRef.current = null;
+      setSelectedId(null);
+      setNotice(archive ? '会话已归档' : '会话已恢复');
+      await loadData(undefined, user, sessionArchiveView);
+    } catch (error) {
+      setNotice(`${archive ? '归档' : '恢复'}失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  function launchPayloadFromSession(session: AgentSession, prompt: string) {
+    return {
+      worker_id: session.worker_id,
+      backend: session.backend,
+      workspace_root: session.workspace_root,
+      namespace: session.namespace || 'default',
+      prompt,
+      title: '',
+      controls: controlsFromSession(session),
+    };
+  }
+
+  async function runLaunchSlashCommand(mode: 'start' | 'fork', prompt: string) {
+    if (!selectedSession) return;
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt) {
+      if (mode === 'fork') openForkSession();
+      else openStartSession();
+      return;
+    }
+    const payload = launchPayloadFromSession(selectedSession, normalizedPrompt);
+    if (mode === 'fork') {
+      await apiPost<{ job: Job }>(`/api/sessions/${selectedSession.session_id}/fork`, payload, csrfToken);
+      setNotice('Fork 已入队');
+    } else {
+      await apiPost<{ job: Job }>('/api/sessions/start', payload, csrfToken);
+      setNotice('新建会话已入队');
+    }
+    setReply('');
+    await loadData();
+  }
+
+  function providerBackendFromSlashArgument(argument: string) {
+    const backend = argument.trim().toLowerCase();
+    if (!backend) return selectedSession?.backend ?? '';
+    if (['codex', 'claude', 'kimi'].includes(backend)) return backend;
+    setNotice('用法：/login、/logout，或指定 /login codex、/logout claude、/login kimi');
+    return '';
+  }
+
+  async function runProviderAuthSlashCommand(action: 'login' | 'logout', argument: string) {
+    if (!selectedSession) return;
+    if (!canAdmin(user)) {
+      setNotice('Provider 登录/退出需要 admin 权限');
+      return;
+    }
+    const backend = providerBackendFromSlashArgument(argument);
+    if (!backend) return;
+    setReply('');
+    await handleProviderAuth(selectedSession.worker_id, backend, action);
   }
 
   async function handleCreateWorkerEnrollment(event: FormEvent<HTMLFormElement>) {
@@ -2509,12 +3208,37 @@ function App() {
     }
   }
 
+  function showSessionList() {
+    const state = readMobileHistoryState(window.history.state);
+    if (mobileHistoryEnabled() && state && state.depth > 0) {
+      window.history.go(-state.depth);
+      return;
+    }
+    mobilePaneRef.current = 'sessions';
+    notificationInboxOpenRef.current = false;
+    launchModeRef.current = 'none';
+    workerInstallOpenRef.current = false;
+    setMobilePane('sessions');
+    setNotificationInboxOpen(false);
+    setLaunchMode('none');
+    setWorkerInstallOpen(false);
+    replaceMobileHistoryState({
+      mobilePane: 'sessions',
+      notificationInboxOpen: false,
+      launchMode: 'none',
+      workerInstallOpen: false,
+      depth: 0,
+    });
+  }
+
   function handleOpenSessionList() {
-    navigateMobilePane('sessions');
+    showSessionList();
     setNotice('');
   }
 
   function openSession(sessionId: string, pane: MobilePane = 'thread') {
+    shouldScrollTranscriptToBottomRef.current = true;
+    preserveTranscriptScrollRef.current = null;
     navigateMobilePane(pane, sessionId);
     void loadTimelineForSession(sessionId, { force: true }).catch(() => setNotice('会话详情同步失败，稍后会自动重试'));
   }
@@ -2543,13 +3267,23 @@ function App() {
   async function handleLoadOlderTimeline() {
     if (!selectedSession || loadingOlder) return;
     const currentTimeline = timelineBySession[selectedSession.session_id] ?? [];
-    const oldestSeq = Math.min(...currentTimeline.map((item) => Number(item.seq)).filter(Number.isFinite));
-    if (!Number.isFinite(oldestSeq)) return;
+    const oldestItem = sortTimelineItemsByCreatedAt(currentTimeline)[0];
+    if (!oldestItem) return;
+    const cursor = timelineBeforeCursor(oldestItem);
+    if (!cursor) return;
+    const transcript = transcriptRef.current;
+    preserveTranscriptScrollRef.current = transcript
+      ? {
+          sessionId: selectedSession.session_id,
+          scrollHeight: transcript.scrollHeight,
+          scrollTop: transcript.scrollTop,
+        }
+      : null;
     setLoadingOlder(true);
     setNotice('');
     try {
       const payload = await apiGet<TimelinePayload>(
-        `/api/sessions/${selectedSession.session_id}/timeline?before=${oldestSeq}&limit=100`,
+        `/api/sessions/${selectedSession.session_id}/timeline?${cursor}&limit=100`,
       );
       setTimelineBySession((current) => ({
         ...current,
@@ -2558,32 +3292,44 @@ function App() {
       setTimelineHasOlder((current) => ({ ...current, [selectedSession.session_id]: Boolean(payload.has_more) }));
       if (!payload.has_more && payload.items.length === 0) setNotice('已加载全部可用历史');
     } catch (error) {
+      preserveTranscriptScrollRef.current = null;
       setNotice(`加载历史失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setLoadingOlder(false);
     }
   }
 
-  function mergeServerTimeline(sessionId: string, incoming: AgentTimelineItem[]) {
+  function mergeServerTimeline(sessionId: string, existing: AgentTimelineItem[], incoming: AgentTimelineItem[]) {
     const pending = pendingOptimisticTimelineRef.current[sessionId] ?? [];
-    if (pending.length === 0) return incoming;
+    const matchedPending = pending.filter((pendingItem) =>
+      incoming.some((incomingItem) => optimisticMatchesServerItem(pendingItem, incomingItem)),
+    );
+    const existingWithoutPendingOptimistic =
+      pending.length > 0
+        ? existing.filter((existingItem) => !pending.some((pendingItem) => isSameOptimisticTimelineItem(existingItem, pendingItem)))
+        : existing;
+    const existingWithoutConfirmedOptimistic =
+      matchedPending.length > 0
+        ? existingWithoutPendingOptimistic.filter(
+            (existingItem) => !matchedPending.some((pendingItem) => isSameOptimisticTimelineItem(existingItem, pendingItem)),
+          )
+        : existingWithoutPendingOptimistic;
+    const mergedIncoming = mergeTimelineItems(existingWithoutConfirmedOptimistic, incoming);
+    if (pending.length === 0) return mergedIncoming;
     const remaining = pending.filter(
-      (pendingItem) => !incoming.some((incomingItem) => optimisticMatchesServerItem(pendingItem, incomingItem)),
+      (pendingItem) => !matchedPending.some((matchedItem) => isSameOptimisticTimelineItem(pendingItem, matchedItem)),
     );
     if (remaining.length === 0) {
       delete pendingOptimisticTimelineRef.current[sessionId];
-      return incoming;
+      return mergedIncoming;
     }
     pendingOptimisticTimelineRef.current[sessionId] = remaining;
-    const maxSeq = Math.max(0, ...incoming.map((item) => Number(item.seq) || 0));
-    const synthetic = remaining.map((item, index) => ({
-      ...item,
-      seq: maxSeq + index + 1,
-    }));
-    return mergeTimelineItems(incoming, synthetic);
+    const synthetic = resequencePendingTimelineItems(mergedIncoming, remaining);
+    return mergeTimelineItems(mergedIncoming, synthetic);
   }
 
   function appendOptimisticUserMessage(item: AgentTimelineItem) {
+    shouldScrollTranscriptToBottomRef.current = true;
     setTimelineBySession((current) => ({
       ...current,
       [item.session_id]: mergeTimelineItems(current[item.session_id] ?? [], [item]),
@@ -2622,25 +3368,37 @@ function App() {
     }));
   }
 
-  function replaceReplyAttachment(nextAttachment: ReplyAttachment | null) {
-    if (replyAttachmentRef.current?.preview_url) {
-      URL.revokeObjectURL(replyAttachmentRef.current.preview_url);
-    }
-    replyAttachmentRef.current = nextAttachment;
-    setReplyAttachment(nextAttachment);
+  function setReplyAttachmentsSafely(nextAttachments: ReplyAttachment[]) {
+    const nextSet = new Set(nextAttachments);
+    replyAttachmentsRef.current.forEach((attachment) => {
+      if (!nextSet.has(attachment) && attachment.preview_url) URL.revokeObjectURL(attachment.preview_url);
+    });
+    replyAttachmentsRef.current = nextAttachments;
+    setReplyAttachments(nextAttachments);
   }
 
-  async function handleReplyAttachment(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = '';
-    if (!file) return;
-    const isImage = file.type.split(';', 1)[0].toLowerCase().startsWith('image/');
+  function removeReplyAttachment(index: number) {
+    setReplyAttachmentsSafely(replyAttachmentsRef.current.filter((_, attachmentIndex) => attachmentIndex !== index));
+  }
+
+  async function prepareReplyAttachments(files: File[], options?: { pasted?: boolean }) {
+    const current = replyAttachmentsRef.current;
+    const availableSlots = maxReplyAttachments - current.length;
+    if (availableSlots <= 0) {
+      setNotice(`最多同时发送 ${maxReplyAttachments} 个附件`);
+      return;
+    }
+    const selectedFiles = files.slice(0, availableSlots);
+    if (files.length > selectedFiles.length) {
+      setNotice(`最多同时发送 ${maxReplyAttachments} 个附件，已保留前 ${maxReplyAttachments} 个`);
+    }
+    const hasOnlyImages = selectedFiles.every((file) => inferReplyAttachmentContentType(file).startsWith('image/'));
     setIsPreparingAttachment(true);
-    setNotice(isImage ? '正在处理图片…' : '正在处理附件…');
+    setNotice(options?.pasted ? '正在处理粘贴图片…' : hasOnlyImages ? '正在处理图片…' : '正在处理附件…');
     try {
-      const attachment = await fileToReplyAttachment(file);
-      replaceReplyAttachment(attachment);
-      setNotice('已附加 1 个文件');
+      const nextAttachments = await Promise.all(selectedFiles.map((file) => fileToReplyAttachment(file)));
+      setReplyAttachmentsSafely([...current, ...nextAttachments]);
+      setNotice(options?.pasted ? `已粘贴 ${nextAttachments.length} 张图片` : `已附加 ${nextAttachments.length} 个文件`);
     } catch (error) {
       setNotice(`附件上传失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
@@ -2648,9 +3406,91 @@ function App() {
     }
   }
 
+  async function handleReplyAttachment(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const files = Array.from(input.files ?? []);
+    if (files.length === 0) return;
+    try {
+      await prepareReplyAttachments(files);
+    } finally {
+      input.value = '';
+    }
+  }
+
+  async function handleReplyPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const images = pastedImageFiles(event.clipboardData);
+    if (images.length === 0) return;
+    if (!event.clipboardData.getData('text')) {
+      event.preventDefault();
+    }
+    await prepareReplyAttachments(images, { pasted: true });
+  }
+
+  function appendVoiceTranscript(text: string) {
+    const normalized = text.trim();
+    if (!normalized) return false;
+    setReply((current) => (current.trim() ? `${current.trimEnd()}\n${normalized}` : normalized));
+    return true;
+  }
+
+  function applyStreamingVoicePartial(text: string) {
+    const normalized = text.trim();
+    const previous = streamingVoiceLastTextRef.current;
+    streamingVoiceLastTextRef.current = normalized;
+    if (streamingVoiceManualEditRef.current) {
+      if (!normalized) return;
+      const suffix = normalized.startsWith(previous) ? normalized.slice(previous.length) : '';
+      if (!suffix) return;
+      setReply((current) => `${current}${suffix}`);
+      return;
+    }
+    streamingVoiceAppliedTextRef.current = normalized;
+    setReply(normalized ? `${streamingVoiceBaseReplyRef.current}${normalized}` : streamingVoiceBaseReplyRef.current);
+  }
+
+  function resetStreamingVoiceComposerState() {
+    streamingVoiceLastTextRef.current = '';
+    streamingVoiceBaseReplyRef.current = '';
+    streamingVoiceAppliedTextRef.current = '';
+    streamingVoiceManualEditRef.current = false;
+  }
+
+  function resolveStreamingVoiceStopWaiters() {
+    const waiters = streamingVoiceStopWaitersRef.current.splice(0);
+    waiters.forEach((resolve) => resolve());
+  }
+
+  async function stopStreamingVoiceRecording(options?: { commit?: boolean; notice?: string }) {
+    if (!isRecording || voiceInputMode !== 'streaming') return;
+    const controller = streamingVoiceControllerRef.current;
+    streamingVoiceShouldCommitRef.current = options?.commit ?? true;
+    if (!controller) {
+      finalizeStreamingVoice();
+      return;
+    }
+    if (options?.notice) setNotice(options.notice);
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      streamingVoiceStopWaitersRef.current.push(finish);
+      controller.stop();
+      window.setTimeout(() => {
+        const index = streamingVoiceStopWaitersRef.current.indexOf(finish);
+        if (index >= 0) streamingVoiceStopWaitersRef.current.splice(index, 1);
+        finish();
+      }, 2500);
+    });
+  }
+
   async function transcribeRecordedAudio(contentType: string) {
     const chunks = audioChunksRef.current;
     audioChunksRef.current = [];
+    const startedAt = recordingStartedAtRef.current;
+    recordingStartedAtRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
     mediaRecorderRef.current = null;
@@ -2660,6 +3500,7 @@ function App() {
       return;
     }
     const audioBlob = new Blob(chunks, { type: contentType || 'audio/webm' });
+    const durationMs = startedAt === null ? null : Math.max(0, Math.round(Date.now() - startedAt));
     if (audioBlob.size > MAX_VOICE_AUDIO_BYTES) {
       setNotice('录音太长：当前语音超过 12MB，请分段录音后再识别。');
       return;
@@ -2674,6 +3515,8 @@ function App() {
           content_type: audioBlob.type || 'audio/webm',
           data_base64: arrayBufferToBase64(await audioBlob.arrayBuffer()),
           language: 'zh-CN',
+          duration_ms: durationMs,
+          chunk_count: chunks.length,
         },
         csrfToken,
       );
@@ -2682,7 +3525,7 @@ function App() {
         setNotice('没有识别到文字');
         return;
       }
-      setReply((current) => (current.trim() ? `${current.trimEnd()}\n${text}` : text));
+      appendVoiceTranscript(text);
       setNotice('语音已转文字');
     } catch (error) {
       setNotice(voiceTranscribeFailureNotice(error));
@@ -2691,19 +3534,29 @@ function App() {
     }
   }
 
-  async function handleVoiceToggle() {
-    if (isRecording) {
-      const recorder = mediaRecorderRef.current;
-      if (recorder && typeof recorder.requestData === 'function') {
-        try {
-          recorder.requestData();
-        } catch {
-          // Some WebViews throw when requestData races with stop; the final stop still happens below.
-        }
-      }
-      recorder?.stop();
+  async function fetchVoiceStreamAuth() {
+    return apiPost<VoiceStreamAuthResponse>('/api/voice/stream-auth', {}, csrfToken);
+  }
+
+  function finalizeStreamingVoice() {
+    if (streamingVoiceStopHandledRef.current) return;
+    streamingVoiceStopHandledRef.current = true;
+    setIsRecording(false);
+    streamingVoiceControllerRef.current = null;
+    const text = streamingVoiceLastTextRef.current.trim();
+    const shouldCommit = streamingVoiceShouldCommitRef.current;
+    streamingVoiceShouldCommitRef.current = false;
+    resetStreamingVoiceComposerState();
+    resolveStreamingVoiceStopWaiters();
+    if (!shouldCommit) return;
+    if (!text) {
+      setNotice('没有识别到文字');
       return;
     }
+    setNotice('流式语音已转文字');
+  }
+
+  async function startStandardVoiceRecording() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setNotice('当前环境不支持录音');
       return;
@@ -2734,6 +3587,7 @@ function App() {
       };
       recorder.onstop = () => void transcribeRecordedAudio(recorder.mimeType || 'audio/webm');
       mediaRecorderRef.current = recorder;
+      recordingStartedAtRef.current = Date.now();
       recorder.start(250);
       setIsRecording(true);
       setNotice('正在录音');
@@ -2741,13 +3595,143 @@ function App() {
       stream.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
       mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = null;
       setIsRecording(false);
       setNotice(recorderSetupFailureNotice(error));
     }
   }
 
+  async function startStreamingVoiceRecording() {
+    const nativeStateBeforeRequest = nativeMicrophonePermissionState();
+    if (nativeStateBeforeRequest === 'denied') {
+      const alreadyGranted = requestNativeMicrophonePermission();
+      if (!alreadyGranted) {
+        setNotice('已向安卓请求麦克风权限。允许后再点一次语音。');
+        return;
+      }
+    }
+    setIsTranscribing(true);
+    resetStreamingVoiceComposerState();
+    streamingVoiceBaseReplyRef.current = reply.trim() ? `${reply.trimEnd()}\n` : '';
+    streamingVoiceShouldCommitRef.current = false;
+    streamingVoiceStopHandledRef.current = false;
+    try {
+      const auth = await fetchVoiceStreamAuth();
+      const controller = await startStreamingVoice({
+        auth,
+        onStart: () => {
+          setIsRecording(true);
+          setNotice('正在流式识别语音');
+        },
+        onPartialText: (text) => {
+          const normalized = String(text || '').trim();
+          applyStreamingVoicePartial(normalized);
+          if (normalized) setNotice('正在流式识别语音');
+        },
+        onClose: () => {
+          finalizeStreamingVoice();
+        },
+        onError: () => {
+          setIsRecording(false);
+          streamingVoiceControllerRef.current = null;
+          streamingVoiceShouldCommitRef.current = false;
+          resetStreamingVoiceComposerState();
+          resolveStreamingVoiceStopWaiters();
+          setNotice('流式语音连接中断，请重试；如仍失败可切到标准模式。');
+        },
+      });
+      streamingVoiceControllerRef.current = controller;
+      setNotice('正在流式识别语音');
+    } catch (error) {
+      streamingVoiceControllerRef.current = null;
+      resetStreamingVoiceComposerState();
+      resolveStreamingVoiceStopWaiters();
+      const message = errorMessage(error);
+      if (message.includes('not configured')) {
+        setNotice('流式语音未配置完成，请先切到标准模式，或补齐服务端 Doubao streaming 凭据。');
+      } else {
+        setNotice(`流式语音启动失败：${message}`);
+      }
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  async function handleVoiceToggle() {
+    if (isRecording) {
+      if (voiceInputMode === 'streaming') {
+        await stopStreamingVoiceRecording({ commit: true, notice: '正在结束流式录音' });
+        return;
+      }
+      const recorder = mediaRecorderRef.current;
+      if (recorder && typeof recorder.requestData === 'function') {
+        try {
+          recorder.requestData();
+        } catch {
+          // Some WebViews throw when requestData races with stop; the final stop still happens below.
+        }
+      }
+      recorder?.stop();
+      return;
+    }
+    if (voiceInputMode === 'streaming') {
+      await startStreamingVoiceRecording();
+      return;
+    }
+    await startStandardVoiceRecording();
+  }
+
+  function handleReplyChange(nextValue: string) {
+    if (isRecording && voiceInputMode === 'streaming') {
+      const applied = streamingVoiceAppliedTextRef.current;
+      const expected = `${streamingVoiceBaseReplyRef.current}${applied}`;
+      if (!streamingVoiceManualEditRef.current && nextValue === expected) {
+        setReply(nextValue);
+        return;
+      }
+      if (!streamingVoiceManualEditRef.current && applied && nextValue.endsWith(applied)) {
+        streamingVoiceBaseReplyRef.current = nextValue.slice(0, nextValue.length - applied.length);
+      } else {
+        streamingVoiceManualEditRef.current = true;
+        streamingVoiceBaseReplyRef.current = nextValue;
+        streamingVoiceAppliedTextRef.current = '';
+      }
+    }
+    setReply(nextValue);
+  }
+
+  async function waitForSessionJobCompletion(sessionId: string, jobId: string, options?: { attempts?: number; delayMs?: number }) {
+    const attempts = options?.attempts ?? 15;
+    const delayMs = options?.delayMs ?? 250;
+    let latestPayload: SessionSyncPayload | null = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      latestPayload = await loadSessionDelta(sessionId);
+      const matched = latestPayload.jobs.find((job) => job.job_id === jobId);
+      if (matched && !['queued', 'running'].includes(matched.status)) return matched;
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+    return latestPayload?.jobs.find((job) => job.job_id === jobId) ?? null;
+  }
+
+  function insertSlashCommand(option: SlashCommandOption) {
+    if (option.action === 'open-start') {
+      setReply('');
+      openStartSession();
+      return;
+    }
+    if (option.action === 'open-fork') {
+      setReply('');
+      openForkSession();
+      return;
+    }
+    setReply(option.insertText);
+    setNotice(`${option.command} 已插入`);
+    window.setTimeout(() => replyTextareaRef.current?.focus(), 0);
+  }
+
   async function submitReply() {
-    if (!selectedSession || (!reply.trim() && !replyAttachment) || !canOperate(user)) return;
+    const currentAttachments = replyAttachmentsRef.current;
+    if (!selectedSession || !canOperate(user)) return;
     if (isPreparingAttachment) {
       setNotice('附件还在处理，完成后再发送');
       return;
@@ -2756,19 +3740,23 @@ function App() {
       setNotice('语音识别还在进行，完成后会追加到输入框再发送');
       return;
     }
-    const slashCommand = reply.trim().toLowerCase();
-    if (!replyAttachment && slashCommand === '/new') {
-      setReply('');
-      openStartSession();
+    if (isRecording && voiceInputMode === 'streaming') {
+      await stopStreamingVoiceRecording({ commit: true, notice: '正在结束流式录音并发送' });
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+    const currentReplyValue = replyTextareaRef.current?.value ?? reply;
+    if (!currentReplyValue.trim() && currentAttachments.length === 0) return;
+    const slashCommand = currentAttachments.length > 0 ? null : parsedSlashCommand(currentReplyValue);
+    if (slashCommand?.command === '/new') {
+      await runLaunchSlashCommand('start', slashCommand.argument);
       return;
     }
-    if (!replyAttachment && slashCommand === '/fork') {
-      setReply('');
-      openForkSession();
+    if (slashCommand?.command === '/fork') {
+      await runLaunchSlashCommand('fork', slashCommand.argument);
       return;
     }
-    if (!replyAttachment && slashCommand.startsWith('/btw')) {
-      const prompt = reply.trim().slice(4).trim();
+    if (slashCommand?.command === '/btw') {
+      const prompt = slashCommand.argument;
       if (!prompt) {
         setNotice('用法：/btw 这里写旁路问题');
         return;
@@ -2779,31 +3767,40 @@ function App() {
       await loadData();
       return;
     }
-    if (!replyAttachment && slashCommand === '/login') {
-      setReply('');
-      navigateMobilePane('controls');
-      setNotice('Provider 登录在右侧 Provider 面板处理');
+    if (slashCommand?.command === '/login') {
+      await runProviderAuthSlashCommand('login', slashCommand.argument);
       return;
     }
-    if (!replyAttachment && slashCommand === '/logout') {
-      setReply('');
-      await handleLogout();
+    if (slashCommand?.command === '/logout') {
+      await runProviderAuthSlashCommand('logout', slashCommand.argument);
       return;
     }
     if (replyBlockedReason) {
       setNotice(replyBlockedReason);
       return;
     }
-    const rawPrompt = reply.trim();
+    const rawPrompt = currentReplyValue.trim();
     const inputPayload: Record<string, unknown> =
       replyMode === 'plan' ? { prompt: rawPrompt, reply_mode: 'plan' } : { prompt: rawPrompt };
-    if (replyAttachment) inputPayload.attachments = [replyAttachmentPayload(replyAttachment)];
-    const attachmentLabel = replyAttachment?.content_type.startsWith('image/') ? '图片' : '附件';
-    const optimisticText = replyAttachment
-      ? `${rawPrompt || '请看这个附件。'}\n[${attachmentLabel}：${replyAttachment.filename}]`
+    if (currentAttachments.length > 0) inputPayload.attachments = currentAttachments.map(replyAttachmentPayload);
+    const imageCount = currentAttachments.filter((attachment) => attachment.content_type.startsWith('image/')).length;
+    const attachmentSummary =
+      currentAttachments.length > 0
+        ? currentAttachments
+            .map((attachment) => `${attachment.content_type.startsWith('image/') ? '图片' : '附件'}：${attachment.filename}`)
+            .join('，')
+        : '';
+    const fallbackPrompt =
+      imageCount === currentAttachments.length && imageCount > 1
+        ? '请看这些图片。'
+        : imageCount === 1 && currentAttachments.length === 1
+          ? '请看这张图片。'
+          : '请看这些附件。';
+    const optimisticText = currentAttachments.length > 0
+      ? `${rawPrompt || fallbackPrompt}\n[${attachmentSummary}]`
       : rawPrompt;
     const currentTimeline = timelineBySession[selectedSession.session_id] ?? [];
-    const nextSeq = Math.max(0, ...currentTimeline.map((item) => Number(item.seq) || 0)) + 1;
+    const nextSeq = Math.max(0, ...currentTimeline.map((item) => Number(item.seq) || 0), OPTIMISTIC_TIMELINE_SEQ_BASE) + 1;
     const optimisticItem: AgentTimelineItem = {
       session_id: selectedSession.session_id,
       seq: nextSeq,
@@ -2839,12 +3836,14 @@ function App() {
       payload: {
         ...timelineItemPayload(optimisticItem),
         job_id: response.job.job_id,
+        agenthub_job_status: response.job.status,
+        agenthub_job_error: response.job.error_text ?? '',
       },
     };
     replaceOptimisticUserMessage(optimisticItem, confirmedOptimisticItem);
     rememberOptimisticUserMessage(confirmedOptimisticItem);
     setReply('');
-    replaceReplyAttachment(null);
+    setReplyAttachmentsSafely([]);
     const queuedNotice =
       selectedSession.status === 'running' || selectedSession.status === 'queued'
         ? '已排队，当前作业结束后自动执行'
@@ -2864,6 +3863,11 @@ function App() {
 
   function handleReplyKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+    if (visibleSlashCommands.length > 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+      event.preventDefault();
+      insertSlashCommand(visibleSlashCommands[0]);
+      return;
+    }
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
     void submitReply();
@@ -2872,13 +3876,22 @@ function App() {
   async function handleFileList(path = '.') {
     if (!selectedSession || !canOperate(user)) return;
     try {
-      await apiPost<{ job: Job }>(
+      const response = await apiPost<{ job: Job }>(
         `/api/sessions/${selectedSession.session_id}/files/list`,
         { path },
         csrfToken,
       );
-      setNotice(path === '.' ? '文件列表已入队' : `正在读取 ${path}`);
-      await loadData();
+      setNotice(path === '.' ? '正在同步 workspace 文件列表' : `正在打开 ${path}`);
+      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id);
+      if (finished?.status === 'failed') {
+        setNotice(`文件列表失败：${finished.error_text || '未知错误'}`);
+        return;
+      }
+      if (!finished || ['queued', 'running'].includes(finished.status)) {
+        setNotice('文件列表已入队，稍后自动同步');
+        return;
+      }
+      setNotice(path === '.' ? 'workspace 文件列表已更新' : `${path} 已展开`);
     } catch (error) {
       setNotice(`文件列表失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
@@ -2887,16 +3900,43 @@ function App() {
   async function handleFileRead(path: string) {
     if (!selectedSession || !canOperate(user)) return;
     try {
-      await apiPost<{ job: Job }>(
+      const response = await apiPost<{ job: Job }>(
         `/api/sessions/${selectedSession.session_id}/files/read`,
-        { path, max_bytes: 200000 },
+        { path, max_bytes: 5_000_000 },
         csrfToken,
       );
-      setNotice(`文件预览已入队：${path}`);
-      await loadData();
+      setNotice(`正在读取 ${path}`);
+      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 20, delayMs: 300 });
+      if (finished?.status === 'failed') {
+        setNotice(`文件预览失败：${finished.error_text || '未知错误'}`);
+        return;
+      }
+      if (!finished || ['queued', 'running'].includes(finished.status)) {
+        setNotice(`文件读取已入队：${path}`);
+        return;
+      }
+      setNotice(`文件已就绪：${path}`);
     } catch (error) {
       setNotice(`文件预览失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
+  }
+
+  function handleDownloadWorkspaceFile(file: WorkspaceFileReadResult) {
+    const blob = workspaceFileBlob(file);
+    if (!blob) {
+      setNotice('这个文件当前还不能直接下载');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = file.filename || file.path.split('/').pop() || 'agenthub-file';
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setNotice(`已开始下载 ${file.filename || file.path}`);
   }
 
   async function handleRename(event: FormEvent<HTMLFormElement>) {
@@ -2910,6 +3950,9 @@ function App() {
       csrfToken,
     );
     patchSession(payload.session);
+    hydratedDraftSessionIdRef.current = payload.session.session_id;
+    setTitleDraft(sessionTitle(payload.session));
+    setIsTitleDirty(false);
     setNotice('标题已保存');
   }
 
@@ -2943,6 +3986,10 @@ function App() {
       csrfToken,
     );
     patchSession(response.session);
+    hydratedDraftSessionIdRef.current = response.session.session_id;
+    setControlsDraft(controlsFromSession(response.session));
+    controlsDirtyRef.current = false;
+    setIsControlsDirty(false);
     setNotice('控制已保存');
   }
 
@@ -2977,7 +4024,10 @@ function App() {
       csrfToken,
     );
     patchSession(response.session);
-    setControlsDraft((current) => ({ ...current, ...fullAccessControls }));
+    hydratedDraftSessionIdRef.current = response.session.session_id;
+    setControlsDraft(controlsFromSession(response.session));
+    controlsDirtyRef.current = false;
+    setIsControlsDirty(false);
     setNotice('已切换为全权限');
   }
 
@@ -3071,13 +4121,17 @@ function App() {
         setReply={setReply}
         notice={notice}
         titleDraft={titleDraft}
-        setTitleDraft={setTitleDraft}
+        setTitleDraft={(value) => {
+          setTitleDraft(value);
+          setIsTitleDirty(true);
+        }}
         controlsDraft={controlsDraft}
-        setControlsDraft={setControlsDraft}
+        setControlsDraft={updateControlsDraft}
         replyBlockedReason={replyBlockedReason}
         canReply={canReply}
         onRefresh={handleRefresh}
         onReply={handleReply}
+        onReplyChange={handleReplyChange}
         onReplyKeyDown={handleReplyKeyDown}
         onRename={handleRename}
         onControls={handleControls}
@@ -3106,17 +4160,27 @@ function App() {
         </div>
         <div className="mobile-worker-signal">
           <span className="status-dot status-good" />
-          工人 {onlineWorkers}/{workers.length} · 自动同步
+          节点 {onlineWorkers}/{workers.length} · 自动同步
         </div>
         <div className="topbar-actions">
           <button className="icon-button primary-top-action" type="button" onClick={openStartSession} disabled={!canOperate(user)}>
             <Plus size={17} />
-            新建会话
+            <span>新建会话</span>
           </button>
           <span className="sync-chip">
             {isRefreshing ? '同步中' : `自动同步 ${lastSyncedAt ? formatRelative(lastSyncedAt) : '准备中'}`}
           </span>
           {user && <span className="role-chip">{user.role}</span>}
+          <button
+            className="icon-button theme-switch-button"
+            type="button"
+            title={themeMode === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
+            aria-label={themeMode === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
+            onClick={() => setThemeMode((current) => (current === 'dark' ? 'light' : 'dark'))}
+          >
+            {themeMode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+            <span>{themeMode === 'dark' ? '浅色' : '深色'}</span>
+          </button>
           <button
             className={`icon-button refresh-button ${isRefreshing ? 'refreshing' : ''}`}
             type="button"
@@ -3198,8 +4262,26 @@ function App() {
       <section className={`workspace mobile-pane-${mobilePane}`}>
         <aside className="session-list" aria-label="Sessions">
           <div className="section-heading">
-            <h1>会话收件箱</h1>
-            <span>{filteredSessions.length}</span>
+            <h1>
+              {sessionArchiveView === 'archived' ? '会话归档' : '会话收件箱'}
+              <span className="session-count-inline">{filteredSessions.length} 个</span>
+            </h1>
+          </div>
+          <div className="session-view-tabs" role="group" aria-label="会话视图">
+            <button
+              type="button"
+              className={sessionArchiveView === 'active' ? 'selected' : ''}
+              onClick={() => void switchSessionArchiveView('active')}
+            >
+              收件箱
+            </button>
+            <button
+              type="button"
+              className={sessionArchiveView === 'archived' ? 'selected' : ''}
+              onClick={() => void switchSessionArchiveView('archived')}
+            >
+              归档
+            </button>
           </div>
           <label className="search-box">
             <Search size={15} />
@@ -3209,6 +4291,16 @@ function App() {
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索会话、项目或内容"
             />
+            {query && (
+              <button
+                type="button"
+                className="search-clear-button"
+                aria-label="清空搜索"
+                onClick={() => setQuery('')}
+              >
+                <X size={14} />
+              </button>
+            )}
           </label>
           <div className="provider-filter" aria-label="Provider filters">
             {providerFilters.map((filter) => (
@@ -3226,7 +4318,9 @@ function App() {
             <span>排序：最近活动</span>
             <SlidersHorizontal size={15} />
           </div>
-          {filteredSessions.length === 0 && <p className="empty">暂无会话。</p>}
+          {filteredSessions.length === 0 && (
+            <p className="empty">{sessionArchiveView === 'archived' ? '暂无归档会话。' : '暂无会话。'}</p>
+          )}
           {filteredSessions.map((session) => (
             <button
               key={session.session_id}
@@ -3236,17 +4330,19 @@ function App() {
               <span className={`status-dot ${statusClass(session.status)}`} />
               <span className="session-row-body">
                 <span className="session-row-top">
+                  <strong>{sessionTitle(session)}</strong>
+                  <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status)}</span>
+                </span>
+                <span className="session-row-meta">
                   <span className="backend-mark">
-                    <TerminalSquare size={15} />
+                    <TerminalSquare size={14} />
                     {backendLabel(session.backend)}
                   </span>
+                  <span>{session.project_name} / {session.namespace}</span>
                   <small>{formatRelative(session.last_activity_at) || formatWhen(session.last_activity_at)}</small>
                 </span>
-                <strong>{sessionTitle(session)}</strong>
-                <small>{session.project_name} / {session.namespace}</small>
                 <span className="session-row-bottom">
-                  <small>{session.activity_summary || session.last_message || '暂无 transcript 摘要'}</small>
-                  <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status)}</span>
+                  <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
                 </span>
               </span>
             </button>
@@ -3260,9 +4356,25 @@ function App() {
                 <div>
                   <p>{backendLabel(selectedSession.backend)} · {selectedSession.namespace}</p>
                   <h2>{sessionTitle(selectedSession)}</h2>
-                  <small>{selectedSession.activity_summary || '当前空闲'}</small>
+                  <small>{agentOpsTaskSummary(selectedSession)}</small>
+                  <button
+                    type="button"
+                    className={`thread-status-strip ${statusDetailsOpen ? 'expanded' : ''}`}
+                    aria-label={statusDetailsOpen ? '收起会话状态' : '展开会话状态'}
+                    aria-expanded={statusDetailsOpen}
+                    onClick={() => setStatusDetailsOpen((open) => !open)}
+                  >
+                    <span className={`state-pill ${statusClass(selectedSession.status)}`}>
+                      {statusLabel(selectedSession.status)}
+                    </span>
+                    <span>{backendLabel(selectedSession.backend)}</span>
+                    <span>{selectedSession.worker_id}</span>
+                    <span>{sandboxSummary(selectedSession)}</span>
+                    <span>{formatWhen(selectedSession.last_activity_at) || selectedSession.project_name}</span>
+                    <ChevronDown className="thread-status-expander" size={14} />
+                  </button>
                 </div>
-                <div className="thread-head-actions">
+                <div className={`thread-head-actions ${mobileSessionActionsOpen ? 'menu-open' : ''}`}>
                   <button
                     type="button"
                     className="icon-button mobile-control-shortcut"
@@ -3271,24 +4383,69 @@ function App() {
                     <SlidersHorizontal size={16} />
                     控制
                   </button>
-                  <button type="button" className="icon-button" onClick={openForkSession} disabled={!canOperate(user)}>
+                  <button
+                    type="button"
+                    className="icon-button desktop-session-action"
+                    onClick={openForkSession}
+                    disabled={!canOperate(user)}
+                  >
                     <GitFork size={16} />
                     Fork
                   </button>
-                  <span className={`state-pill ${statusClass(selectedSession.status)}`}>
-                    {statusLabel(selectedSession.status)}
-                  </span>
+                  <button
+                    type="button"
+                    className="icon-button desktop-session-action"
+                    aria-label={sessionArchiveView === 'archived' ? '恢复会话' : '归档会话'}
+                    title={sessionArchiveView === 'archived' ? '恢复会话' : '归档会话'}
+                    onClick={() => void handleArchiveSession(sessionArchiveView !== 'archived')}
+                    disabled={!canOperate(user)}
+                  >
+                    {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
+                    {sessionArchiveView === 'archived' ? '恢复' : '归档'}
+                  </button>
+                  <div className="mobile-session-menu">
+                    <button
+                      type="button"
+                      className="icon-button mobile-session-menu-button"
+                      aria-label="更多会话操作"
+                      aria-expanded={mobileSessionActionsOpen}
+                      onClick={() => setMobileSessionActionsOpen((open) => !open)}
+                    >
+                      <MoreHorizontal size={17} />
+                    </button>
+                    {mobileSessionActionsOpen && (
+                      <div className="mobile-session-menu-popover" role="menu" aria-label="更多会话操作">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMobileSessionActionsOpen(false);
+                            openForkSession();
+                          }}
+                          disabled={!canOperate(user)}
+                        >
+                          <GitFork size={16} />
+                          Fork
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMobileSessionActionsOpen(false);
+                            void handleArchiveSession(sessionArchiveView !== 'archived');
+                          }}
+                          disabled={!canOperate(user)}
+                        >
+                          {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
+                          {sessionArchiveView === 'archived' ? '恢复' : '归档'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="thread-context-strip" aria-label="Session context">
-                <span>{backendLabel(selectedSession.backend)}</span>
-                <span>{selectedSession.worker_id}</span>
-                <span>{sandboxSummary(selectedSession)}</span>
-                <span>{formatWhen(selectedSession.last_activity_at) || selectedSession.project_name}</span>
-              </div>
-
-              <section className="message-block" aria-label="Transcript">
+              <section className="message-block" aria-label="Transcript" ref={transcriptRef}>
                 {selectedPermissions.length > 0 && (
                   <section className="permission-stack thread-interactions" aria-label="当前待处理交互">
                     {selectedPermissions.map((permission) => (
@@ -3302,7 +4459,7 @@ function App() {
                 )}
 
                 <div className="timeline-tabs" aria-label="Timeline filters">
-                  <span className="timeline-order">最近在上</span>
+                  <span className="timeline-order">最新在下</span>
                   {timelineFilters.map((filter) => (
                     <button
                       key={filter.id}
@@ -3316,10 +4473,22 @@ function App() {
                   ))}
                 </div>
 
+                {timelineHasOlder[selectedSession.session_id] && (
+                  <button
+                    type="button"
+                    className="load-older-button"
+                    onClick={handleLoadOlderTimeline}
+                    disabled={loadingOlder}
+                  >
+                    {loadingOlder ? '加载中…' : '加载更早历史'}
+                  </button>
+                )}
+
                 {visibleTimeline.length > 0 ? (
                   visibleTimeline.map((message) => {
                     const requestQuestions = requestUserInputTimelineQuestions(message);
                     const requestPermission = matchingRequestUserInputPermission(selectedPermissions, requestQuestions);
+                    const attachments = timelineItemAttachments(message);
                     return (
                       <article className={`message-line item-${message.item_type}`} key={`${message.seq}-${message.item_type}`}>
                         <div className="message-avatar">
@@ -3349,7 +4518,23 @@ function App() {
                               <TimelineText text={message.text} />
                             </details>
                           ) : (
-                            <TimelineText text={message.text} />
+                            <>
+                              <TimelineText text={message.text} />
+                              {attachments.length > 0 && (
+                                <div className="timeline-attachments" aria-label="消息附件">
+                                  {attachments.map((attachment, index) => (
+                                    <span className="timeline-attachment-chip" key={`${attachment.filename}-${index}`}>
+                                      {attachment.content_type.startsWith('image/') ? (
+                                        <ImageIcon size={13} />
+                                      ) : (
+                                        <FileText size={13} />
+                                      )}
+                                      <span>{attachment.filename}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </article>
@@ -3359,19 +4544,12 @@ function App() {
                   <p className="empty">{selectedSession.last_message || selectedSession.activity_summary || '当前空闲'}</p>
                 )}
 
-                {timelineHasOlder[selectedSession.session_id] && (
-                  <button
-                    type="button"
-                    className="load-older-button"
-                    onClick={handleLoadOlderTimeline}
-                    disabled={loadingOlder}
-                  >
-                    {loadingOlder ? '加载中…' : '加载更早历史'}
-                  </button>
-                )}
               </section>
 
-              <form className={`reply-box ${isTranscribing ? 'is-transcribing' : ''}`} onSubmit={handleReply}>
+              <form
+                className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''}`}
+                onSubmit={handleReply}
+              >
                 <label className="reply-title" htmlFor="reply">回复当前会话</label>
                 <div className="reply-mode-tabs" role="group" aria-label="回复模式">
                   {(Object.keys(replyModeLabels) as ReplyMode[]).map((mode) => (
@@ -3389,42 +4567,87 @@ function App() {
                 </div>
                 <textarea
                   id="reply"
-                  aria-label="回复当前会话"
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  onKeyDown={handleReplyKeyDown}
+              ref={replyTextareaRef}
+              aria-label="回复当前会话"
+              value={reply}
+              onChange={(event) => handleReplyChange(event.target.value)}
+              onKeyDown={handleReplyKeyDown}
+              onPaste={handleReplyPaste}
                   rows={2}
                   placeholder="输入你的消息..."
                   enterKeyHint="enter"
                   disabled={!canReply}
                 />
-                {replyAttachment && (
-                  <div className="reply-attachment">
-                    {replyAttachment.preview_url ? (
-                      <img src={replyAttachment.preview_url} alt="" />
-                    ) : (
-                      <span className="reply-attachment-file" aria-hidden="true">
-                        <FileText size={18} />
-                      </span>
-                    )}
-                    <span>
-                      <strong>{replyAttachment.filename}</strong>
-                      <small>{Math.max(1, Math.round(replyAttachment.size_bytes / 1024))} KB</small>
-                    </span>
-                    <button type="button" aria-label="移除附件" onClick={() => replaceReplyAttachment(null)}>
-                      <X size={15} />
-                    </button>
+                {visibleSlashCommands.length > 0 && (
+                  <div className="slash-command-palette" role="listbox" aria-label="Slash commands">
+                    {visibleSlashCommands.map((option) => (
+                      <button
+                        key={option.command}
+                        type="button"
+                        role="option"
+                        aria-selected="false"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => insertSlashCommand(option)}
+                      >
+                        <code>{option.command}</code>
+                        <span>
+                          <strong>{option.title}</strong>
+                          <small>{option.description}</small>
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 )}
-                {(replyBlockedReason || (notice && !isRefreshNotice)) && (
-                  <div className="reply-status">{replyBlockedReason || notice}</div>
+                {replyAttachments.length > 0 && (
+                  <div className="reply-attachments" aria-label="待发送附件">
+                    {replyAttachments.map((attachment, index) => (
+                      <div className="reply-attachment" key={`${attachment.filename}-${index}`}>
+                        {attachment.preview_url ? (
+                          <img src={attachment.preview_url} alt="" />
+                        ) : (
+                          <span className="reply-attachment-file" aria-hidden="true">
+                            <FileText size={18} />
+                          </span>
+                        )}
+                        <span>
+                          <strong>{attachment.filename}</strong>
+                          <small>{Math.max(1, Math.round(attachment.size_bytes / 1024))} KB</small>
+                        </span>
+                        <button type="button" aria-label={`移除附件 ${attachment.filename}`} onClick={() => removeReplyAttachment(index)}>
+                          <X size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
+            {visibleReplyStatus && <div className="reply-status">{visibleReplyStatus}</div>}
+                <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
+                  <button
+                    type="button"
+                    className={voiceInputMode === 'streaming' ? 'selected' : ''}
+                    aria-pressed={voiceInputMode === 'streaming'}
+                    onClick={() => setVoiceInputMode('streaming')}
+                    disabled={isRecording}
+                  >
+                    流式
+                  </button>
+                  <button
+                    type="button"
+                    className={voiceInputMode === 'standard' ? 'selected' : ''}
+                    aria-pressed={voiceInputMode === 'standard'}
+                    onClick={() => setVoiceInputMode('standard')}
+                    disabled={isRecording}
+                  >
+                    标准
+                  </button>
+                </div>
                 <div className="reply-actions">
                   <input
                     id="reply-attachment"
                     className="reply-file-input"
                     type="file"
                     aria-label="上传附件"
+                    multiple
                     onChange={handleReplyAttachment}
                     disabled={!canReply}
                   />
@@ -3440,7 +4663,7 @@ function App() {
                     type="button"
                     className={`reply-icon-button voice-action ${isRecording ? 'recording' : ''} ${isTranscribing ? 'transcribing' : ''}`}
                     aria-label={isRecording ? '停止' : '语音'}
-                    title={isRecording ? '停止录音' : isTranscribing ? '正在识别语音' : '语音输入'}
+                    title={isRecording ? '停止录音' : isTranscribing ? '正在识别语音' : voiceInputMode === 'streaming' ? '流式语音输入' : '标准语音输入'}
                     aria-busy={isTranscribing}
                     onClick={handleVoiceToggle}
                     disabled={!canReply || isTranscribing}
@@ -3453,6 +4676,15 @@ function App() {
                       <Mic size={16} />
                     )}
                     {isRecording && <span className="recording-pulse" aria-hidden="true" />}
+                  </button>
+                  <button
+                    type="button"
+                    className="reply-icon-button composer-expand-button"
+                    aria-label={composerExpanded ? '收起输入框' : '展开输入框'}
+                    title={composerExpanded ? '收起输入框' : '展开输入框'}
+                    onClick={() => setComposerExpanded((expanded) => !expanded)}
+                  >
+                    {composerExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
                   </button>
                   <button className="reply-send-button" type="submit" aria-label="发送" title="发送" disabled={!canSendReply}>
                     <Send size={17} />
@@ -3469,7 +4701,17 @@ function App() {
           <h2 className="rail-title">会话控制</h2>
           {selectedSession && (
             <>
-              <Panel title="本机恢复" icon={<TerminalSquare size={16} />}>
+              <section className="inspector-overview" aria-label="当前会话概览">
+                <span className={`state-pill ${statusClass(selectedSession.status)}`}>
+                  {statusLabel(selectedSession.status)}
+                </span>
+                <div>
+                  <strong>{agentOpsTaskHeadline(selectedSession)}</strong>
+                  <p>{agentOpsTaskSummary(selectedSession)}</p>
+                </div>
+              </section>
+
+              <Panel title="本机恢复" icon={<TerminalSquare size={16} />} defaultOpen={false}>
                 <div className="local-resume-panel">
                   <p>{localResumeHint(selectedSession)}</p>
                   <code>{localResumeCommand(selectedSession)}</code>
@@ -3479,7 +4721,7 @@ function App() {
                 </div>
               </Panel>
 
-              <Panel title="模型与工具" icon={<Bot size={16} />}>
+              <Panel title="模型与工具" icon={<Bot size={16} />} defaultOpen={false}>
                 <form className="editor-panel" onSubmit={handleControls}>
                   <div className="control-summary">
                     <span>
@@ -3501,7 +4743,7 @@ function App() {
                       <select
                         aria-label="模型"
                         value={controlsDraft.model}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, model: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, model: event.target.value }))}
                         disabled={!canOperate(user)}
                       >
                         <option value="">default</option>
@@ -3521,7 +4763,7 @@ function App() {
                       <select
                         aria-label="沙箱"
                         value={controlsDraft.sandbox_mode}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, sandbox_mode: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, sandbox_mode: event.target.value }))}
                         disabled={!canOperate(user)}
                       >
                         <option value="">default</option>
@@ -3541,7 +4783,7 @@ function App() {
                       <select
                         aria-label="审批"
                         value={controlsDraft.approval_mode}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
                         disabled={!canOperate(user)}
                       >
                         <option value="">default</option>
@@ -3559,7 +4801,7 @@ function App() {
                       <select
                         aria-label="权限策略"
                         value={controlsDraft.permission_mode}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, permission_mode: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, permission_mode: event.target.value }))}
                         disabled={!canOperate(user)}
                       >
                         <option value="">default</option>
@@ -3581,7 +4823,7 @@ function App() {
                       <input
                         aria-label="执行器"
                         value={controlsDraft.agent}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, agent: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, agent: event.target.value }))}
                         placeholder="codex exec / kimi -p"
                         disabled={!canOperate(user)}
                       />
@@ -3591,7 +4833,7 @@ function App() {
                       <select
                         aria-label="思考"
                         value={controlsDraft.thinking}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, thinking: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, thinking: event.target.value }))}
                         disabled={!canOperate(user)}
                       >
                         <option value="">default</option>
@@ -3604,7 +4846,7 @@ function App() {
                       <input
                         aria-label="Secret 环境"
                         value={controlsDraft.secret_environment}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, secret_environment: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_environment: event.target.value }))}
                         placeholder="default / test / prod"
                         disabled={!canOperate(user)}
                       />
@@ -3614,7 +4856,7 @@ function App() {
                       <input
                         aria-label="Secret 命名空间"
                         value={controlsDraft.secret_namespace}
-                        onChange={(event) => setControlsDraft((current) => ({ ...current, secret_namespace: event.target.value }))}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_namespace: event.target.value }))}
                         placeholder="default"
                         disabled={!canOperate(user)}
                       />
@@ -3625,7 +4867,7 @@ function App() {
                     <textarea
                       aria-label="Secret 引用"
                       value={controlsDraft.secret_refs}
-                      onChange={(event) => setControlsDraft((current) => ({ ...current, secret_refs: event.target.value }))}
+                      onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_refs: event.target.value }))}
                       placeholder="OPENAI_API_KEY&#10;KIMI_API_KEY"
                       rows={3}
                       disabled={!canOperate(user)}
@@ -3636,10 +4878,10 @@ function App() {
                       aria-label="Yolo"
                       type="checkbox"
                       checked={controlsDraft.yolo}
-                      onChange={(event) => setControlsDraft((current) => ({ ...current, yolo: event.target.checked }))}
+                      onChange={(event) => updateControlsDraft((current) => ({ ...current, yolo: event.target.checked }))}
                       disabled={!canOperate(user)}
                     />
-                    Yolo
+                    自动确认 <small>YOLO</small>
                   </label>
                   <button type="submit" disabled={!canOperate(user)}>
                     <Check size={16} />
@@ -3648,7 +4890,7 @@ function App() {
                 </form>
               </Panel>
 
-              <Panel title="重命名" icon={<Save size={16} />}>
+              <Panel title="重命名" icon={<Save size={16} />} defaultOpen={false}>
                 <form className="editor-panel" onSubmit={handleRename}>
                   <label>
                     会话标题
@@ -3656,7 +4898,10 @@ function App() {
                       aria-label="会话标题"
                       name="custom_title"
                       value={titleDraft}
-                      onChange={(event) => setTitleDraft(event.target.value)}
+                      onChange={(event) => {
+                        setTitleDraft(event.target.value);
+                        setIsTitleDirty(true);
+                      }}
                       disabled={!canOperate(user)}
                     />
                   </label>
@@ -3669,7 +4914,7 @@ function App() {
             </>
           )}
 
-          <Panel title="Provider 状态" icon={<TerminalSquare size={16} />}>
+          <Panel title="Provider 状态" icon={<TerminalSquare size={16} />} defaultOpen={false}>
             {providers.length > 0 ? (
               providers.map((provider) => (
                 <div className="provider-row" key={`${provider.worker_id}-${provider.backend}`}>
@@ -3698,7 +4943,7 @@ function App() {
           </Panel>
 
           {canAdmin(user) && (
-            <Panel title="Secrets" icon={<Lock size={16} />}>
+            <Panel title="Secrets" icon={<Lock size={16} />} defaultOpen={false}>
               <form className="secret-form" onSubmit={handleSecretSubmit}>
                 <div className="control-fields">
                   <label>
@@ -3763,7 +5008,7 @@ function App() {
             </Panel>
           )}
 
-          <Panel title="工人健康" icon={<Activity size={16} />}>
+          <Panel title="节点健康" icon={<Activity size={16} />} defaultOpen={false}>
             {(selectedWorker ? [selectedWorker] : workers).map((worker) => (
               <div className="rail-row" key={worker.worker_id}>
                 <span className={`status-dot ${statusClass(worker.status)}`} />
@@ -3771,7 +5016,7 @@ function App() {
                 <small>{statusLabel(worker.status)}</small>
               </div>
             ))}
-            {workers.length === 0 && <p className="empty">暂无在线工人。</p>}
+            {workers.length === 0 && <p className="empty">暂无在线节点。</p>}
             {canAdmin(user) && (
               <button type="button" onClick={openWorkerInstall}>
                 添加 Worker
@@ -3809,7 +5054,7 @@ function App() {
             </Panel>
           )}
           {schedules.length > 0 || canAdmin(user) ? (
-          <Panel title="计划任务" icon={<CalendarClock size={16} />}>
+          <Panel title="计划任务" icon={<CalendarClock size={16} />} defaultOpen={false}>
             {schedules.slice(0, 6).map((schedule) => (
               <div className="event-row" key={schedule.schedule_id}>
                 <span>{schedule.name}</span>
@@ -3862,7 +5107,7 @@ function App() {
           </Panel>
           ) : null}
           {events.length > 0 && (
-          <Panel title="审计事件" icon={<Lock size={16} />}>
+          <Panel title="审计事件" icon={<Lock size={16} />} defaultOpen={false}>
             {events.slice(0, 6).map((event) => (
               <div className="event-row" key={event.event_id}>
                 <span>{event.event_type}</span>
@@ -3878,9 +5123,10 @@ function App() {
           <MobileFilesPane
             session={selectedSession}
             jobs={selectedJobs}
-            attachment={replyAttachment}
+            attachments={replyAttachments}
             onCopyPath={(value) => void copyTextToClipboard(value, 'file path 已复制')}
             onCopyText={(value) => void copyTextToClipboard(value, '文件内容已复制')}
+            onDownload={handleDownloadWorkspaceFile}
             onList={(path) => void handleFileList(path)}
             onRead={(path) => void handleFileRead(path)}
           />
@@ -3943,21 +5189,21 @@ function App() {
       )}
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
-        <button type="button" className={mobilePane === 'sessions' ? 'selected' : ''} onClick={() => navigateMobilePane('sessions')}>
+        <button type="button" className={mobilePane === 'sessions' ? 'selected' : ''} onClick={showSessionList}>
           <MessageCircle size={18} />
-          Sessions
+          会话
         </button>
         <button type="button" className={mobilePane === 'thread' ? 'selected' : ''} onClick={() => navigateMobilePane('thread')}>
           <Play size={18} />
-          Chat
+          对话
         </button>
         <button type="button" className={mobilePane === 'files' ? 'selected' : ''} onClick={() => navigateMobilePane('files')}>
           <Folder size={18} />
-          Files
+          文件
         </button>
         <button type="button" className={mobilePane === 'workers' ? 'selected' : ''} onClick={() => navigateMobilePane('workers')}>
           <Cpu size={18} />
-          Workers
+          节点
         </button>
         <button
           type="button"
@@ -3965,7 +5211,7 @@ function App() {
           onClick={() => navigateMobilePane('me')}
         >
           <UserCircle size={18} />
-          Me
+          我的
         </button>
       </nav>
     </main>
@@ -4031,17 +5277,19 @@ function NotificationInbox({
 function MobileFilesPane({
   session,
   jobs,
-  attachment,
+  attachments,
   onCopyPath,
   onCopyText,
+  onDownload,
   onList,
   onRead,
 }: {
   session?: AgentSession | null;
   jobs: Job[];
-  attachment?: ReplyAttachment | null;
+  attachments?: ReplyAttachment[];
   onCopyPath: (value: string) => void;
   onCopyText: (value: string) => void;
+  onDownload: (file: WorkspaceFileReadResult) => void;
   onList: (path: string) => void;
   onRead: (path: string) => void;
 }) {
@@ -4050,11 +5298,18 @@ function MobileFilesPane({
   const readResult = fileReadResult(jobs);
   const busy = fileJobBusy(jobs);
   const currentPath = listResult?.path || '.';
-  const previewLines = readResult?.text.split(/\r?\n/).filter((line) => line.trim()) ?? [];
+  const parentPath =
+    currentPath === '.'
+      ? null
+      : currentPath.includes('/')
+        ? currentPath.slice(0, currentPath.lastIndexOf('/')) || '.'
+        : '.';
+  const previewLines = readResult?.text?.split(/\r?\n/).filter((line) => line.trim()) ?? [];
   const previewHeadline = previewLines[0] ?? '';
   const previewSummary = previewLines.find((line) => line !== previewHeadline) ?? '';
+  const imagePreviewUrl = readResult?.preview_kind === 'image' ? workspaceFileDataUrl(readResult) : null;
   return (
-    <section className="mobile-panel files-pane" aria-label="Files">
+    <section className="mobile-panel files-pane" aria-label="文件">
       <div className="mobile-panel-head">
         <div>
           <p>{session ? sessionTitle(session) : '当前没有会话'}</p>
@@ -4089,6 +5344,12 @@ function MobileFilesPane({
           <span>{currentPath === '.' ? 'Workspace root' : currentPath}</span>
           {busy && <small>同步中</small>}
         </div>
+        {parentPath && (
+          <button type="button" className="message-action-button" onClick={() => onList(parentPath)}>
+            <RotateCcw size={13} />
+            返回上一级
+          </button>
+        )}
         {!listResult && <p className="empty">点“浏览 workspace”后，worker 会返回只读文件列表。</p>}
         {listResult && listResult.entries.length === 0 && <p className="empty">这个目录是空的。</p>}
         {listResult?.entries.map((entry) => (
@@ -4119,20 +5380,40 @@ function MobileFilesPane({
               <strong>{readResult.filename || readResult.path}</strong>
               <small>{formatFileSize(readResult.size_bytes)}{readResult.truncated ? ' · 已截断' : ''}</small>
             </span>
-            <button type="button" className="native-icon-button small" aria-label="复制文件内容" onClick={() => onCopyText(readResult.text)}>
-              <Copy size={14} />
-            </button>
+            <div className="file-toolbar">
+              {readResult.preview_kind === 'text' && (
+                <button type="button" className="native-icon-button small" aria-label="复制文件内容" onClick={() => onCopyText(readResult.text || '')}>
+                  <Copy size={14} />
+                </button>
+              )}
+              {readResult.downloadable && (
+                <button type="button" className="message-action-button" onClick={() => onDownload(readResult)}>
+                  <Download size={13} />
+                  下载文件
+                </button>
+              )}
+            </div>
           </div>
-          {previewHeadline && <strong className="file-preview-title">{previewHeadline}</strong>}
-          {previewSummary && <small className="file-preview-summary">{previewSummary}</small>}
-          <pre>{readResult.text}</pre>
+          {readResult.preview_kind === 'image' && imagePreviewUrl && <img className="file-preview-image" src={imagePreviewUrl} alt={readResult.filename} />}
+          {readResult.preview_kind === 'text' && (
+            <>
+              {previewHeadline && <strong className="file-preview-title">{previewHeadline}</strong>}
+              {previewSummary && <small className="file-preview-summary">{previewSummary}</small>}
+              <pre>{readResult.text}</pre>
+            </>
+          )}
+          {readResult.preview_kind === 'download' && <p className="empty">这个文件不是纯文本，先下载到本地查看更稳。</p>}
         </div>
       )}
-      {attachment && (
+      {attachments && attachments.length > 0 && (
         <div className="mobile-panel-card attached-file-card">
           <strong>待发送附件</strong>
-          <span>{attachment.filename}</span>
-          <small>{attachment.content_type} · {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB</small>
+          {attachments.map((attachment, index) => (
+            <span key={`${attachment.filename}-${index}`}>
+              {attachment.filename}
+              <small>{attachment.content_type} · {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB</small>
+            </span>
+          ))}
         </div>
       )}
     </section>
@@ -4155,15 +5436,15 @@ function MobileWorkersPane({
   const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
   const runningJobs = jobs.filter((job) => job.status === 'running').length;
   return (
-    <section className="mobile-panel workers-pane" aria-label="Workers">
+    <section className="mobile-panel workers-pane" aria-label="节点">
       <div className="mobile-panel-head">
         <div>
           <p>在线 {workers.filter((worker) => worker.status === 'online').length}/{workers.length} · 排队 {queuedJobs} · 运行 {runningJobs}</p>
-          <h2>Worker 诊断</h2>
+          <h2>节点诊断</h2>
         </div>
         <Cpu size={22} />
       </div>
-      {workers.length === 0 && <p className="empty">暂无 worker。先添加本机或远端 worker。</p>}
+      {workers.length === 0 && <p className="empty">暂无节点。先添加本机或远端 worker。</p>}
       {workers.map((worker) => {
         const workerProviders = providers.filter((provider) => provider.worker_id === worker.worker_id);
         return (
@@ -4235,7 +5516,7 @@ function MobileMePane({
   onLogout: () => void;
 }) {
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
-  const workerSummary = workers.length > 0 ? `${onlineWorkers}/${workers.length} 在线` : '暂无 worker';
+  const workerSummary = workers.length > 0 ? `${onlineWorkers}/${workers.length} 在线` : '暂无节点';
   const notificationLabel = notificationPermission === 'granted' ? '已开启' : notificationPermission === 'denied' ? '已拒绝' : '未开启';
   const nativeVersionLabel = nativeVersion
     ? `当前 APK：${nativeVersion.name}${nativeVersion.code ? ` (${nativeVersion.code})` : ''}`
@@ -4249,7 +5530,7 @@ function MobileMePane({
           ? `线上 APK：检查失败 ${apkUpdate.error ?? ''}`.trim()
           : '线上 APK：尚未检查';
   return (
-    <section className="mobile-panel me-pane" aria-label="Me">
+    <section className="mobile-panel me-pane" aria-label="我的">
       <div className="mobile-panel-head">
         <div>
           <p>{user?.role ?? 'anonymous'} · AgentHub</p>
@@ -4320,8 +5601,8 @@ function MobileMePane({
 
       <div className="me-status-grid">
         <div className="mobile-panel-card me-metric-card">
-          <small>Worker</small>
-          <strong>Worker：{workerSummary}</strong>
+          <small>节点</small>
+          <strong>节点：{workerSummary}</strong>
           <p>{workers.length > 0 ? workers.map((worker) => worker.machine_name || worker.worker_id).slice(0, 2).join(' / ') : '先在电脑安装本地 worker'}</p>
         </div>
         <div className="mobile-panel-card me-metric-card">
@@ -4582,6 +5863,7 @@ function IslandConsole({
   canReply,
   onRefresh,
   onReply,
+  onReplyChange,
   onReplyKeyDown,
   onRename,
   onControls,
@@ -4605,6 +5887,7 @@ function IslandConsole({
   canReply: boolean;
   onRefresh: () => Promise<void>;
   onReply: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  onReplyChange: (nextValue: string) => void;
   onReplyKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onRename: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onControls: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -4620,7 +5903,7 @@ function IslandConsole({
     .filter((session) => ['needs_reply', 'running', 'queued', 'ready'].includes(session.status))
     .slice(0, 5);
   const compactSessions = actionableSessions.length > 0 ? actionableSessions : sessions.slice(0, 5);
-  const messages = selectedSession ? latestMessages(selectedSession).slice(-3).reverse() : [];
+  const messages = selectedSession ? latestMessages(selectedSession).slice(-3) : [];
 
   return (
     <main className="island-shell text-ink bg-paper">
@@ -4679,7 +5962,7 @@ function IslandConsole({
               id="island-reply"
               aria-label="Quick reply"
               value={reply}
-              onChange={(event) => setReply(event.target.value)}
+              onChange={(event) => onReplyChange(event.target.value)}
               onKeyDown={onReplyKeyDown}
               rows={3}
               enterKeyHint="enter"
@@ -4695,7 +5978,7 @@ function IslandConsole({
           </form>
 
           <section className="island-transcript" aria-label="Recent transcript">
-            <span className="timeline-order">最近在上</span>
+            <span className="timeline-order">最新在下</span>
             {messages.length > 0 ? (
               messages.map((message, index) => (
                 <article className="message-line" key={`${String(message.role)}-${index}`}>
@@ -4864,15 +6147,30 @@ function PermissionActions({
   );
 }
 
-function Panel({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function Panel({
+  title,
+  icon,
+  children,
+  defaultOpen = true,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
   return (
-    <section className="rail-panel">
-      <h3>
-        {icon}
-        {title}
-      </h3>
-      {children}
-    </section>
+    <details className="rail-panel" open={isOpen} onToggle={(event) => setIsOpen(event.currentTarget.open)}>
+      <summary aria-expanded={isOpen}>
+        <span>
+          {icon}
+          {title}
+        </span>
+        <ChevronDown size={15} />
+      </summary>
+      <div className="rail-panel-body">{children}</div>
+    </details>
   );
 }
 

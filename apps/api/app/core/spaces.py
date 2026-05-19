@@ -144,3 +144,4 @@ def actor_space_payload(actor: "Actor") -> dict[str, str] | None:
         "mode": actor.space.mode,
         "role": actor.space_role or "",
     }
+

@@ -2,22 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   buildConsoleUrl,
   createWindowOptions,
-  resolveDefaultConsoleUrl,
+  DEFAULT_CONSOLE_URL,
   resolveConsoleUrl,
 } from './windowConfig';
 
 describe('AgentHub desktop window config', () => {
-  it('requires setup when no public or stored console URL is configured', () => {
-    expect(resolveDefaultConsoleUrl({})).toBeNull();
-    expect(resolveConsoleUrl({ env: {}, argv: ['node', 'agenthub'] })).toBeNull();
+  it('defaults to the public HTTPS console', () => {
+    expect(DEFAULT_CONSOLE_URL).toBe('https://agenthub.example.com');
+    expect(resolveConsoleUrl({ env: {}, argv: ['node', 'agenthub'] })).toBe(DEFAULT_CONSOLE_URL);
   });
 
-  it('allows shared public or desktop-specific console override without query loss', () => {
-    expect(
-      resolveDefaultConsoleUrl({
-        AGENTHUB_PUBLIC_BASE_URL: 'https://agenthub.example.com/base/',
-      }),
-    ).toBe('https://agenthub.example.com/base');
+  it('allows local or Tailscale console override without query loss', () => {
     expect(
       resolveConsoleUrl({
         env: { AGENTHUB_DESKTOP_URL: 'http://100.99.254.119:8019/base?token=kept' },
@@ -46,13 +41,5 @@ describe('AgentHub desktop window config', () => {
     expect(options.alwaysOnTop).toBe(true);
     expect(options.skipTaskbar).toBe(true);
     expect(options.width).toBeLessThan(520);
-  });
-
-  it('creates a setup window for first-launch server configuration', () => {
-    const options = createWindowOptions({ kind: 'setup', preloadPath: 'preload.cjs' });
-
-    expect(options.title).toBe('AgentHub Server');
-    expect(options.width).toBeGreaterThan(500);
-    expect(options.webPreferences?.contextIsolation).toBe(true);
   });
 });

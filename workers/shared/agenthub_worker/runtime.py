@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import hashlib
 import json
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -78,6 +79,7 @@ class WorkerRuntime:
         self._job_poller_thread: threading.Thread | None = None
         self._heartbeat_poller_stop: threading.Event | None = None
         self._heartbeat_poller_thread: threading.Thread | None = None
+        self._published_timeline_digests: dict[str, str] = {}
 
     def _drain_jobs(self) -> None:
         if self.background_jobs:
@@ -222,12 +224,23 @@ class WorkerRuntime:
         for batch in session_batches(sessions, self.worker_id):
             self.client.publish_sessions(batch)
         if hasattr(self.client, "publish_timeline"):
+            batches_by_session: dict[str, list[TimelineBatch]] = {}
             for batch in timeline_batches(sessions, self.worker_id):
-                try:
-                    self.client.publish_timeline(batch.session_id, batch.items, replace=batch.replace)
-                except Exception as exc:  # noqa: BLE001 - keep core session discovery alive
-                    print(f"AgentHub worker timeline publish failed for {batch.session_id}: {exc}", file=sys.stderr)
-                    break
+                batches_by_session.setdefault(batch.session_id, []).append(batch)
+            for session_id, batches in batches_by_session.items():
+                digest = timeline_batches_digest(batches)
+                if self._published_timeline_digests.get(session_id) == digest:
+                    continue
+                published_all = True
+                for batch in batches:
+                    try:
+                        self.client.publish_timeline(batch.session_id, batch.items, replace=batch.replace)
+                    except Exception as exc:  # noqa: BLE001 - keep core session discovery alive
+                        print(f"AgentHub worker timeline publish failed for {batch.session_id}: {exc}", file=sys.stderr)
+                        published_all = False
+                        break
+                if published_all:
+                    self._published_timeline_digests[session_id] = digest
 
         self._drain_jobs()
 
@@ -377,6 +390,19 @@ class TimelineBatch:
     session_id: str
     items: list[dict[str, Any]]
     replace: bool
+
+
+def timeline_batches_digest(batches: list[TimelineBatch]) -> str:
+    payload = [
+        {
+            "session_id": batch.session_id,
+            "replace": batch.replace,
+            "items": batch.items,
+        }
+        for batch in batches
+    ]
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _timeline_items_for_publish(session: dict[str, Any]) -> list[dict[str, Any]]:

@@ -23,8 +23,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,15 +33,14 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AgentHubNotificationService extends Service {
+    private static final String DEFAULT_BASE_URL = "https://agenthub.example.com";
     private static final String ALERT_CHANNEL_ID = "agenthub-approvals-v2";
     private static final String SERVICE_CHANNEL_ID = "agenthub-background-v1";
     private static final String PREFS_NAME = "agenthub-notifications";
-    private static final String CLIENT_PREFS_NAME = "agenthub-client";
-    private static final String PREF_SERVER_URL = "server_url";
+    private static final String APP_CONFIG_PREFS_NAME = "agenthub-app-config";
+    private static final String PREF_SERVER_BASE_URL = "server_base_url";
     private static final String PREF_NOTIFIED_PERMISSIONS = "notified_permissions";
     private static final String PREF_NOTIFIED_SESSIONS = "notified_sessions";
-    private static final String PREF_NOTIFIED_JOBS = "notified_jobs";
-    private static final String PREF_JOB_FAILURES_PRIMED = "job_failures_primed";
     private static final int FOREGROUND_NOTIFICATION_ID = 4401;
     private static final int MAX_REMEMBERED_KEYS = 400;
     private static final long POLL_INTERVAL_MS = 30_000L;
@@ -48,8 +48,11 @@ public class AgentHubNotificationService extends Service {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final Map<String, String> pendingPermissionSessionsById = new HashMap<>();
     private boolean stopped = false;
     private boolean pollInFlight = false;
+    private String lastPermissionCursor = "";
+    private String lastInboxCursor = "";
 
     private final Runnable pollRunnable = new Runnable() {
         @Override
@@ -102,16 +105,30 @@ public class AgentHubNotificationService extends Service {
     }
 
     private void pollAgentHub() throws Exception {
-        String baseUrl = currentServerUrl();
-        if (baseUrl.isEmpty()) return;
+        String baseUrl = serverBaseUrl();
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie == null || cookie.trim().isEmpty()) return;
-        JSONObject permissions = getJson(baseUrl, "/api/permissions", cookie);
-        Set<String> pendingPermissionSessions = notifyPendingPermissions(permissions);
-        JSONObject sessions = getJson(baseUrl, "/api/sessions", cookie);
-        notifyNeedsReplySessions(sessions, pendingPermissionSessions);
-        JSONObject jobs = getJson(baseUrl, "/api/jobs", cookie);
-        notifyFailedJobs(jobs);
+
+        JSONObject permissions = getJson(baseUrl, withCursor("/api/sync/permissions", lastPermissionCursor), cookie);
+        if (permissions.length() > 0) {
+            notifyPendingPermissions(permissions);
+            lastPermissionCursor = permissions.optString("cursor", lastPermissionCursor);
+        }
+
+        JSONObject inbox = getJson(baseUrl, withCursor("/api/sync/inbox", lastInboxCursor), cookie);
+        if (inbox.length() > 0) {
+            notifyNeedsReplySessions(inbox, currentPendingPermissionSessions());
+            lastInboxCursor = inbox.optString("cursor", lastInboxCursor);
+        }
+    }
+
+    private String serverBaseUrl() {
+        SharedPreferences prefs = getSharedPreferences(APP_CONFIG_PREFS_NAME, MODE_PRIVATE);
+        String stored = prefs.getString(PREF_SERVER_BASE_URL, "");
+        if (stored == null) return DEFAULT_BASE_URL;
+        String normalized = stored.trim();
+        while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
+        return normalized.isEmpty() ? DEFAULT_BASE_URL : normalized;
     }
 
     private JSONObject getJson(String baseUrl, String path, String cookie) throws Exception {
@@ -134,34 +151,22 @@ public class AgentHubNotificationService extends Service {
         }
     }
 
-    private String currentServerUrl() {
-        String saved = normalizeServerUrl(getSharedPreferences(CLIENT_PREFS_NAME, MODE_PRIVATE).getString(PREF_SERVER_URL, ""));
-        if (!saved.isEmpty()) return saved;
-        return normalizeServerUrl(BuildConfig.AGENTHUB_SERVER_URL);
-    }
-
-    private String normalizeServerUrl(String value) {
-        String raw = value == null ? "" : value.trim();
-        if (raw.isEmpty()) return "";
-        Uri uri = Uri.parse(raw);
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return "";
-        if (host == null || host.trim().isEmpty() || "agenthub.invalid".equalsIgnoreCase(host)) return "";
-        return raw.replaceAll("/+$", "");
-    }
-
-    private Set<String> notifyPendingPermissions(JSONObject payload) {
-        Set<String> pendingSessionIds = new HashSet<>();
+    private void notifyPendingPermissions(JSONObject payload) {
         JSONArray items = payload.optJSONArray("items");
-        if (items == null) return pendingSessionIds;
+        if (items == null) return;
         for (int index = 0; index < items.length(); index += 1) {
             JSONObject permission = items.optJSONObject(index);
-            if (permission == null || !"pending".equals(permission.optString("status"))) continue;
+            if (permission == null) continue;
             String permissionId = permission.optString("permission_id");
             String sessionId = permission.optString("session_id");
-            if (!sessionId.isEmpty()) pendingSessionIds.add(sessionId);
-            if (permissionId.isEmpty() || !rememberOnce(PREF_NOTIFIED_PERMISSIONS, permissionId)) continue;
+            String status = permission.optString("status");
+            if (!permissionId.isEmpty()) {
+                if ("pending".equals(status) && !sessionId.isEmpty()) pendingPermissionSessionsById.put(permissionId, sessionId);
+                else pendingPermissionSessionsById.remove(permissionId);
+            }
+            if (permissionId.isEmpty() || !"pending".equals(status) || !rememberOnce(PREF_NOTIFIED_PERMISSIONS, permissionId)) {
+                continue;
+            }
             String body = firstNonEmpty(
                 permission.optString("title"),
                 permission.optString("description"),
@@ -174,7 +179,6 @@ public class AgentHubNotificationService extends Service {
                 sessionId
             );
         }
-        return pendingSessionIds;
     }
 
     private void notifyNeedsReplySessions(JSONObject payload, Set<String> pendingPermissionSessions) {
@@ -199,51 +203,6 @@ public class AgentHubNotificationService extends Service {
         }
     }
 
-    private void notifyFailedJobs(JSONObject payload) {
-        JSONArray items = payload.optJSONArray("items");
-        if (items == null) return;
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        boolean primed = prefs.getBoolean(PREF_JOB_FAILURES_PRIMED, false);
-        for (int index = 0; index < items.length(); index += 1) {
-            JSONObject job = items.optJSONObject(index);
-            if (job == null || !"failed".equals(job.optString("status"))) continue;
-            String jobId = job.optString("job_id");
-            if (jobId.isEmpty()) continue;
-            String key = jobId + ":" + firstNonEmpty(job.optString("updated_at"), "");
-            if (!rememberOnce(PREF_NOTIFIED_JOBS, key)) continue;
-            if (!primed) continue;
-            String subject = firstNonEmpty(job.optString("backend"), job.optString("kind"), "作业");
-            String body = subject + "：" + failureSummary(job.optString("error_text"));
-            showAlertNotification("AgentHub 作业失败", body, "job:" + key, job.optString("target_session_id"));
-        }
-        if (!primed) prefs.edit().putBoolean(PREF_JOB_FAILURES_PRIMED, true).apply();
-    }
-
-    private String failureSummary(String text) {
-        String raw = text == null ? "" : text;
-        String lower = raw.toLowerCase(Locale.ROOT);
-        if (raw.contains("INSUFFICIENT_BALANCE") || raw.contains("账户余额不足")) {
-            return "Codex API 余额不足，请充值或切换 key 后重试";
-        }
-        if (lower.contains("invalid_api_key") || lower.contains("incorrect api key")) {
-            return "Codex API Key 无效，请重新登录或更新 key 后重试";
-        }
-        if (raw.contains("released to unblock queued input")) {
-            return "Worker 超时或失联，系统已释放后续排队输入";
-        }
-        if (lower.contains("timed out after") || lower.contains("exited 4294967295") || lower.contains("exited -1")) {
-            return "任务超时或被中断";
-        }
-        String compacted = compactText(raw, 180);
-        return compacted.isEmpty() ? "执行失败，打开 AgentHub 查看细节" : compacted;
-    }
-
-    private String compactText(String value, int limit) {
-        String compacted = value == null ? "" : value.trim().replaceAll("\\s+", " ");
-        if (compacted.length() <= limit) return compacted;
-        return compacted.substring(0, Math.max(0, limit - 1)) + "…";
-    }
-
     private boolean rememberOnce(String name, String key) {
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         Set<String> current = new HashSet<>(prefs.getStringSet(name, Collections.emptySet()));
@@ -255,6 +214,15 @@ public class AgentHubNotificationService extends Service {
         }
         prefs.edit().putStringSet(name, current).apply();
         return true;
+    }
+
+    private Set<String> currentPendingPermissionSessions() {
+        return new HashSet<>(pendingPermissionSessionsById.values());
+    }
+
+    private String withCursor(String path, String cursor) {
+        if (cursor == null || cursor.trim().isEmpty()) return path;
+        return path + "?cursor=" + Uri.encode(cursor.trim());
     }
 
     private void createNotificationChannels() {

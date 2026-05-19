@@ -8,3 +8,4 @@ dependencies = ["pydantic>=2.7,<3.0"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+

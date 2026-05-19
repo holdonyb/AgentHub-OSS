@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -10,10 +10,10 @@ from app.core.config import get_settings
 from app.core.deps import Actor, DbSession, require_worker
 from app.core.job_recovery import recover_orphaned_running_jobs, recover_stale_running_jobs
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, Job, Schedule, Worker, utcnow
+from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Schedule, Worker, utcnow
 from app.routers.sessions import upsert_session
 from app.schemas import ClaimJobIn, CompleteJobIn, DiscoveredSessionsIn, FailJobIn
-from app.services import ALLOWED_JOB_KINDS, job_out, sync_session_from_timeline, upsert_timeline_items
+from app.services import ALLOWED_JOB_KINDS, ensure_codex_plan_exit_permission, job_out, sync_session_from_timeline, upsert_timeline_items
 
 router = APIRouter()
 PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
@@ -125,6 +125,26 @@ def _job_updates_target_session(job: Job) -> bool:
     return job.kind == "session_input"
 
 
+def _touch_session_activity(
+    session: AgentSession,
+    *,
+    at: datetime | None = None,
+    message: str | None = None,
+    role: str | None = None,
+    summary: str | None = None,
+) -> datetime:
+    touched_at = at or utcnow()
+    session.last_activity_at = touched_at
+    session.updated_at = touched_at
+    if message is not None:
+        session.last_message = message
+    if role is not None:
+        session.last_role = role
+    if summary is not None:
+        session.activity_summary = summary
+    return touched_at
+
+
 def _attach_btw_result(db: DbSession, job: Job, session: AgentSession, result_text: str) -> None:
     payload = loads_json(job.payload_json, {})
     if not isinstance(payload, dict):
@@ -186,59 +206,58 @@ def _extract_plan_choices(result_text: str) -> list[dict[str, str]]:
     ]
 
 
+def _ensure_plan_result_timeline_item(db: DbSession, job: Job, session: AgentSession, result_text: str) -> None:
+    if not result_text.strip():
+        return
+    payload = loads_json(job.payload_json, {})
+    if not isinstance(payload, dict) or payload.get("reply_mode") != "plan":
+        return
+    existing = (
+        db.query(AgentTimeline)
+        .filter(AgentTimeline.space_id == session.space_id)
+        .filter(AgentTimeline.session_id == session.session_id)
+        .filter(AgentTimeline.item_type == "assistant_message")
+        .filter(AgentTimeline.role == "assistant")
+        .filter(AgentTimeline.text == result_text)
+        .first()
+    )
+    if existing is not None:
+        return
+    upsert_timeline_items(
+        db,
+        session.session_id,
+        [
+            {
+                "item_type": "assistant_message",
+                "role": "assistant",
+                "text": result_text,
+                "payload": {
+                    "source": "job_complete_plan_result",
+                    "job_id": job.job_id,
+                    "reply_mode": "plan",
+                    "native_plan_mode": payload.get("native_plan_mode") is True,
+                },
+            }
+        ],
+        space_id=session.space_id,
+    )
+    sync_session_from_timeline(db, session)
+
+
 def _create_plan_choice_permission(db: DbSession, job: Job, session: AgentSession, result_text: str) -> bool:
     payload = loads_json(job.payload_json, {})
     if not isinstance(payload, dict) or payload.get("reply_mode") != "plan":
         return False
     if payload.get("native_plan_mode") is True:
-        permission = AgentPermission(
-            space_id=session.space_id,
-            session_id=session.session_id,
-            worker_id=session.worker_id,
-            backend=session.backend,
-            kind="plan_exit",
-            title="计划已生成",
-            description="选择下一步，AgentHub 会投递到当前 Codex session。",
-            detail_json=dumps_json(
-                {
-                    "source": "codex_plan_exit",
-                    "job_id": job.job_id,
-                    "raw_prompt": payload.get("raw_prompt") if isinstance(payload.get("raw_prompt"), str) else "",
-                    "plan_text": result_text,
-                }
-            ),
-            actions_json=dumps_json(
-                {
-                    "choices": [
-                        {"id": "implement", "label": "执行计划", "description": "退出计划模式，并按当前计划继续执行。"},
-                        {
-                            "id": "clear_context_implement",
-                            "label": "清空上下文并执行",
-                            "description": "要求后端尽量清理上下文后再按当前计划执行。",
-                        },
-                        {"id": "keep_planning", "label": "继续规划", "description": "继续留在计划模式，补充或调整计划。"},
-                        {"id": "cancel", "label": "暂不处理", "description": "保留计划，不继续投递。"},
-                    ]
-                }
-            ),
-            status="pending",
-            response_json=dumps_json({}),
-        )
-        db.add(permission)
-        db.flush()
-        session.status = "needs_reply"
-        session.updated_at = utcnow()
-        write_event(
+        permission = ensure_codex_plan_exit_permission(
             db,
-            space_id=session.space_id,
-            actor_type="system",
-            actor_id="codex-plan-mode",
-            source_type="permission",
-            source_id=permission.permission_id,
-            event_type="permission.request",
-            payload={"session_id": session.session_id, "kind": permission.kind, "job_id": job.job_id},
+            session,
+            plan_text=result_text,
+            source_type="job",
+            job_id=job.job_id,
+            raw_prompt=payload.get("raw_prompt") if isinstance(payload.get("raw_prompt"), str) else "",
         )
-        return True
+        return permission is not None and permission.status == "pending"
     permission = AgentPermission(
         space_id=session.space_id,
         session_id=session.session_id,
@@ -261,7 +280,12 @@ def _create_plan_choice_permission(db: DbSession, job: Job, session: AgentSessio
     db.add(permission)
     db.flush()
     session.status = "needs_reply"
-    session.updated_at = utcnow()
+    _touch_session_activity(
+        session,
+        message=result_text or session.last_message,
+        role="assistant",
+        summary="等待你选择下一步执行方式",
+    )
     write_event(
         db,
         space_id=session.space_id,
@@ -306,13 +330,14 @@ def claim_job(
         return None
     job.worker_id = payload.worker_id
     job.status = "running"
-    job.claimed_at = utcnow()
-    job.updated_at = utcnow()
+    now = utcnow()
+    job.claimed_at = now
+    job.updated_at = now
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
             session.status = "running"
-            session.updated_at = utcnow()
+            _touch_session_activity(session, at=now, summary=session.activity_summary or "worker 已领取，正在运行")
     write_event(
         db,
         space_id=worker.space_id,
@@ -324,7 +349,7 @@ def claim_job(
         payload={"kind": job.kind},
     )
     db.commit()
-    return {"job": job_out(job)}
+    return {"job": job_out(job, include_private_payload=True)}
 
 
 @router.post("/api/internal/jobs/{job_id}/complete")
@@ -344,20 +369,27 @@ def complete_job(
         raise HTTPException(status_code=409, detail={"message": "Job is not running", "code": "JOB_STATE_INVALID"})
     job.status = "succeeded"
     job.result_text = payload.result_text
-    job.completed_at = utcnow()
-    job.updated_at = utcnow()
+    now = utcnow()
+    job.completed_at = now
+    job.updated_at = now
     if job.target_session_id and job.kind == "session_btw":
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
             preserved_status = session.status
             _attach_btw_result(db, job, session, payload.result_text or "")
             session.status = preserved_status
-            session.updated_at = utcnow()
+            _touch_session_activity(session, at=now)
     elif job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
-            session.last_message = payload.result_text or session.last_message
-            session.updated_at = utcnow()
+            _ensure_plan_result_timeline_item(db, job, session, payload.result_text or "")
+            _touch_session_activity(
+                session,
+                at=now,
+                message=payload.result_text or session.last_message,
+                role="assistant",
+                summary=payload.result_text or session.activity_summary,
+            )
             if not _create_plan_choice_permission(db, job, session, payload.result_text or ""):
                 session.status = "ready"
     write_event(
@@ -390,13 +422,20 @@ def fail_job(
         raise HTTPException(status_code=409, detail={"message": "Job is not running", "code": "JOB_STATE_INVALID"})
     job.status = "failed"
     job.error_text = payload.error_text
-    job.completed_at = utcnow()
-    job.updated_at = utcnow()
+    now = utcnow()
+    job.completed_at = now
+    job.updated_at = now
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
             session.status = "failed"
-            session.updated_at = utcnow()
+            _touch_session_activity(
+                session,
+                at=now,
+                message=payload.error_text or session.last_message,
+                role="system",
+                summary=payload.error_text or session.activity_summary,
+            )
     write_event(
         db,
         space_id=worker.space_id,

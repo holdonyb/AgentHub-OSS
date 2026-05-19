@@ -32,3 +32,4 @@ def write_event(
     )
     db.add(event)
     return event
+

@@ -44,3 +44,4 @@ def test_worker_client_omits_authorization_header_when_bootstrap_token_is_empty(
 
     assert calls[0]["kwargs"]["trust_env"] is False
     assert calls[0]["kwargs"]["headers"] == {}
+

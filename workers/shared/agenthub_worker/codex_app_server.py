@@ -119,10 +119,10 @@ def _sandbox_policy(sandbox: str | None) -> dict[str, Any] | None:
     return None
 
 
-def build_collaboration_mode(job: dict[str, Any]) -> dict[str, Any]:
+def build_collaboration_mode(job: dict[str, Any], *, collaboration_mode: str = "plan") -> dict[str, Any]:
     controls = _controls(job)
     return {
-        "mode": "plan",
+        "mode": collaboration_mode,
         "settings": {
             "model": _model(controls),
             "reasoning_effort": _reasoning_effort(controls),
@@ -150,13 +150,13 @@ def build_thread_resume_params(job: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def build_turn_start_params(job: dict[str, Any]) -> dict[str, Any]:
+def build_turn_start_params(job: dict[str, Any], *, collaboration_mode: str = "plan") -> dict[str, Any]:
     controls = _controls(job)
     params: dict[str, Any] = {
         "threadId": _session_id(job),
         "input": [{"type": "text", "text": _prompt(job), "text_elements": []}],
         "cwd": _workspace_root(job),
-        "collaborationMode": build_collaboration_mode(job),
+        "collaborationMode": build_collaboration_mode(job, collaboration_mode=collaboration_mode),
     }
     approval = _approval_policy(controls)
     if approval:
@@ -369,7 +369,7 @@ class CodexAppServerClient:
         if self._process is not None:
             return
         self._process = subprocess.Popen(
-            [self.executable, "app-server", "--listen", "stdio://"],
+            [self.executable, "app-server", "--listen", "stdio://", "--enable", "goals"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -424,6 +424,20 @@ class CodexAppServerClient:
                 return result if isinstance(result, dict) else {}
         raise TimeoutError(f"codex app-server {method} timed out")
 
+    def run_turn(
+        self,
+        job: dict[str, Any],
+        *,
+        collaboration_mode: str,
+        client: PermissionClient | None,
+        worker_id: str,
+        timeout_seconds: int,
+    ) -> CodexTurnResult:
+        self.initialize()
+        self.request("thread/resume", build_thread_resume_params(job), timeout_seconds=timeout_seconds)
+        self.request("turn/start", build_turn_start_params(job, collaboration_mode=collaboration_mode), timeout_seconds=timeout_seconds)
+        return self._wait_for_turn(job, collaboration_mode=collaboration_mode, client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
+
     def run_plan_turn(
         self,
         job: dict[str, Any],
@@ -432,15 +446,13 @@ class CodexAppServerClient:
         worker_id: str,
         timeout_seconds: int,
     ) -> CodexTurnResult:
-        self.initialize()
-        self.request("thread/resume", build_thread_resume_params(job), timeout_seconds=timeout_seconds)
-        self.request("turn/start", build_turn_start_params(job), timeout_seconds=timeout_seconds)
-        return self._wait_for_turn(job, client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
+        return self.run_turn(job, collaboration_mode="plan", client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
 
     def _wait_for_turn(
         self,
         job: dict[str, Any],
         *,
+        collaboration_mode: str,
         client: PermissionClient | None,
         worker_id: str,
         timeout_seconds: int,
@@ -448,6 +460,7 @@ class CodexAppServerClient:
         deadline = time.monotonic() + timeout_seconds
         plan_chunks: list[str] = []
         assistant_chunks: list[str] = []
+        event_items: list[dict[str, Any]] = []
         latest_plan = ""
         while time.monotonic() < deadline:
             message = self._read_message(deadline)
@@ -470,6 +483,9 @@ class CodexAppServerClient:
             if method == "turn/plan/updated":
                 latest_plan = _format_plan_update(params)
                 continue
+            if method in {"thread/goal/updated", "thread/goal/cleared"}:
+                event_items.append(_format_goal_event(method, params))
+                continue
             if method == "error":
                 if _is_retryable_app_server_error(params):
                     continue
@@ -479,18 +495,28 @@ class CodexAppServerClient:
         else:
             raise TimeoutError("codex app-server plan turn timed out")
 
-        text = (latest_plan or "".join(plan_chunks) or "".join(assistant_chunks)).strip()
+        if collaboration_mode == "plan":
+            text = (latest_plan or "".join(plan_chunks) or "".join(assistant_chunks)).strip()
+        else:
+            text = ("".join(assistant_chunks) or latest_plan or "".join(plan_chunks)).strip()
         if not text:
-            text = "Codex Plan turn completed."
+            goal_text = str(event_items[-1].get("text") or "").strip() if event_items else ""
+            text = goal_text or ("Codex Plan turn completed." if collaboration_mode == "plan" else "Codex turn completed.")
+        reply_mode = "plan" if collaboration_mode == "plan" else "direct"
         return CodexTurnResult(
             text=text,
             timeline_items=[
+                *event_items,
                 {
                     "item_type": "assistant_message",
                     "role": "assistant",
                     "text": text,
                     "status": "completed",
-                    "payload": {"source": "codex_app_server", "reply_mode": "plan"},
+                    "payload": {
+                        "source": "codex_app_server",
+                        "reply_mode": reply_mode,
+                        "native_turn_mode": collaboration_mode,
+                    },
                 }
             ],
         )
@@ -651,6 +677,40 @@ def _format_plan_update(params: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _format_goal_event(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    goal = params.get("goal") if isinstance(params.get("goal"), dict) else {}
+    objective = str(goal.get("objective") or "").strip()
+    status = str(goal.get("status") or ("cleared" if method == "thread/goal/cleared" else "active")).strip()
+    if method == "thread/goal/cleared":
+        text = "目标已清除。"
+    else:
+        text = f"目标：{objective or '未命名目标'}"
+        if status:
+            text = f"{text}\n状态：{status}"
+        token_budget = goal.get("tokenBudget")
+        tokens_used = goal.get("tokensUsed")
+        if token_budget is not None:
+            text = f"{text}\nToken：{tokens_used or 0}/{token_budget}"
+        elif tokens_used is not None:
+            text = f"{text}\nToken：{tokens_used}"
+        time_used = goal.get("timeUsedSeconds")
+        if time_used is not None:
+            text = f"{text}\n耗时：{time_used}s"
+    return {
+        "item_type": "goal",
+        "role": "system",
+        "text": text,
+        "status": status or None,
+        "payload": {
+            "source": "codex_goal",
+            "method": method,
+            "thread_id": params.get("threadId"),
+            "turn_id": params.get("turnId"),
+            "goal": goal,
+        },
+    }
+
+
 def _publish_plan_timeline(client: PermissionClient | None, session_id: str, result: CodexTurnResult) -> None:
     if client is None or not result.timeline_items:
         return
@@ -669,5 +729,25 @@ def run_codex_plan_turn(
 ) -> str:
     with CodexAppServerClient() as app_server:
         result = app_server.run_plan_turn(job, client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
+    _publish_plan_timeline(client, _session_id(job), result)
+    return result.text
+
+
+def run_codex_turn(
+    job: dict[str, Any],
+    *,
+    collaboration_mode: str,
+    client: PermissionClient | None = None,
+    worker_id: str = "",
+    timeout_seconds: int = 3600,
+) -> str:
+    with CodexAppServerClient() as app_server:
+        result = app_server.run_turn(
+            job,
+            collaboration_mode=collaboration_mode,
+            client=client,
+            worker_id=worker_id,
+            timeout_seconds=timeout_seconds,
+        )
     _publish_plan_timeline(client, _session_id(job), result)
     return result.text

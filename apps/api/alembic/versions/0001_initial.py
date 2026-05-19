@@ -173,3 +173,4 @@ def downgrade() -> None:
     op.drop_table("invites")
     op.drop_table("session_tokens")
     op.drop_table("users")
+

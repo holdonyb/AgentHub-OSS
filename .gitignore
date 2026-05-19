@@ -2,15 +2,9 @@
 __pycache__/
 *.py[cod]
 *.db
-*.db-*
-*.log
 .env
-.env.*
-!.env.example
 node_modules/
 dist/
-apps/desktop/release/
-apps/desktop/.electron-dist-cache/
 *.tsbuildinfo
 coverage/
 .pytest_cache/

@@ -96,6 +96,7 @@ PROVIDERS = {
             "request_user_input": True,
             "approvals": True,
             "plan_exit": True,
+            "goal": True,
         },
     ),
     "claude": AgentProvider(
@@ -114,6 +115,7 @@ PROVIDERS = {
             "stream_json": True,
             "interaction_bridge": "compatibility",
             "plan_result_choices": True,
+            "goal": True,
             "native_runtime_prompts": False,
         },
     ),

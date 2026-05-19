@@ -10,6 +10,7 @@ DEFAULT_EXCLUDES = {
     ".git",
     ".venv",
     ".runtime",
+    "__pycache__",
     "node_modules",
     "artifacts",
     "output",
@@ -40,6 +41,8 @@ def iter_candidate_files(root: Path, extra_excludes: set[str]) -> Iterable[Path]
     excluded_prefixes = (
         root / "docs" / "oss",
         root / "apps" / "mobile" / "android" / "app" / "src" / "main" / "assets",
+        root / "docs" / "OSS_RELEASE.md",
+        root / "scripts" / "export-oss.ps1",
     )
     for path in root.rglob("*"):
         if not path.is_file():
@@ -53,7 +56,7 @@ def iter_candidate_files(root: Path, extra_excludes: set[str]) -> Iterable[Path]
         yield path
 
 
-def audit_file(path: Path, root: Path) -> list[tuple[str, int, str]]:
+def audit_file(path: Path) -> list[tuple[str, int, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -72,12 +75,7 @@ def audit_file(path: Path, root: Path) -> list[tuple[str, int, str]]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan the repo for strings that block a clean public export.")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument(
-        "--exclude",
-        action="append",
-        default=[],
-        help="Additional path segment to exclude. Can be passed multiple times.",
-    )
+    parser.add_argument("--exclude", action="append", default=[], help="Additional path segment to exclude.")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -85,7 +83,7 @@ def main() -> int:
 
     findings: list[tuple[Path, str, int, str]] = []
     for path in iter_candidate_files(root, extra_excludes):
-        for label, line_number, snippet in audit_file(path, root):
+        for label, line_number, snippet in audit_file(path):
             findings.append((path.relative_to(root), label, line_number, snippet))
 
     if not findings:

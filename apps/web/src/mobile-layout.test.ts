@@ -39,12 +39,60 @@ describe('mobile WebView layout guardrails', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
 
-    expect(mobileBlock).toContain('--mobile-topbar-height: 54px');
-    expect(mobileBlock).toContain('--mobile-nav-height: 64px');
-    expect(mobileBlock).toContain('--mobile-composer-clearance: 240px');
+    expect(mobileBlock).toContain('--mobile-topbar-height: 50px');
+    expect(mobileBlock).toContain('--mobile-nav-height: 60px');
+    expect(mobileBlock).toContain('--mobile-toast-clearance: 0px');
+    expect(mobileBlock).toContain('--mobile-composer-clearance: 224px');
     expect(mobileBlock).toMatch(/\.topbar\s*{[^}]*height:\s*var\(--mobile-topbar-height\)/s);
-    expect(mobileBlock).toMatch(/\.workspace\s*{[^}]*height:\s*calc\(100dvh - var\(--mobile-topbar-height\) - var\(--mobile-nav-height\)/s);
+    expect(mobileBlock).toMatch(/\.workspace\s*{[^}]*height:\s*calc\([^}]*var\(--mobile-toast-clearance\)/s);
     expect(mobileBlock).toMatch(/\.message-block\s*{[^}]*padding:\s*6px 0 var\(--mobile-composer-clearance\)/s);
-    expect(mobileBlock).toMatch(/\.load-older-button\s*{[^}]*margin-bottom:\s*28px/s);
+    expect(mobileBlock).toMatch(/\.load-older-button\s*{[^}]*margin-bottom:\s*22px/s);
+  });
+
+  it('keeps the mobile session detail message-first instead of showing desktop summary cards', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
+    const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
+
+    expect(mobileBlock).toMatch(/\.thread-pane\s*{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
+    expect(mobileBlock).toMatch(/\.thread-status-strip\s*{[^}]*max-height:\s*30px[^}]*overflow:\s*hidden/s);
+    expect(mobileBlock).toMatch(/\.timeline-tabs\s*{[^}]*min-height:\s*30px/s);
+    expect(styles).not.toContain('.task-summary-card');
+  });
+
+  it('keeps the mobile thread and composer inside the viewport width', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
+    const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
+
+    expect(mobileBlock).toMatch(/\.thread-pane > \*\s*{[^}]*min-width:\s*0[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
+    expect(mobileBlock).toMatch(/\.thread-head\s*{[^}]*min-width:\s*0[^}]*max-width:\s*100%[^}]*overflow:\s*hidden/s);
+    expect(mobileBlock).toMatch(/\.thread-head-actions\s*{[^}]*min-width:\s*0[^}]*flex-wrap:\s*nowrap[^}]*overflow:\s*visible/s);
+    expect(mobileBlock).toMatch(/\.thread-head-actions \.mobile-control-shortcut\s*{[^}]*flex:\s*0 0 40px[^}]*font-size:\s*0/s);
+    expect(mobileBlock).toMatch(/\.reply-box,\s*\n\s*\.reply-box textarea,\s*\n\s*\.reply-box \.reply-actions,\s*\n\s*\.reply-mode-tabs\s*{[^}]*min-width:\s*0[^}]*max-width:\s*100%/s);
+    expect(mobileBlock).toMatch(/\.reply-send-button\s*{[^}]*flex:\s*0 0 40px/s);
+  });
+
+  it('keeps mobile controls readable while exposing secondary thread actions through a menu', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
+    const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
+
+    expect(mobileBlock).toMatch(/\.session-count-inline\s*{[^}]*display:\s*none/s);
+    expect(mobileBlock).toMatch(/\.mobile-session-menu\s*{[^}]*display:\s*block/s);
+    expect(mobileBlock).toMatch(/\.thread-head-actions \.desktop-session-action\s*{[^}]*display:\s*none/s);
+    expect(mobileBlock).toMatch(/\.notification-toast\s*{[^}]*position:\s*static/s);
+    expect(mobileBlock).toMatch(/\.notification-toast \+ \.workspace\s*{[^}]*--mobile-toast-clearance:\s*74px/s);
+    expect(mobileBlock).toMatch(/\.ops-rail\s*{[^}]*overflow-y:\s*auto/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary\s*{[^}]*color:\s*#f8fafc/s);
+    expect(mobileBlock).toMatch(/\.editor-panel input,\s*\n\s*\.editor-panel select,\s*\n\s*\.editor-panel textarea\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary\s*{[^}]*min-height:\s*48px[^}]*overflow:\s*visible/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary > span\s*{[^}]*white-space:\s*nowrap/s);
+  });
+
+  it('lets the mobile status strip and composer expand on demand', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
+    const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
+
+    expect(mobileBlock).toMatch(/\.thread-status-strip\.expanded\s*{[^}]*max-height:\s*none[^}]*flex-wrap:\s*wrap/s);
+    expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*min-height:\s*142px/s);
+    expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*max-height:\s*min\(42dvh,\s*260px\)/s);
   });
 });

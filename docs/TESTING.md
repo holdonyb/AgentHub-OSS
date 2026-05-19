@@ -67,3 +67,4 @@ For releases that touch workers, job state, mobile WebView, or Android native co
 2. Send a short `session_input` to a disposable session on that worker.
 3. Confirm the job leaves `queued/running` and ends as `succeeded` or a visible `failed` error.
 4. Install the freshly built APK and check the top status/cutout area, bottom nav, and reply bar on a real phone.
+

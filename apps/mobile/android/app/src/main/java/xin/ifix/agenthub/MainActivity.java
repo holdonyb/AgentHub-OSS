@@ -1,11 +1,12 @@
 package xin.ifix.agenthub;
 
 import android.Manifest;
-import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -18,9 +19,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.view.View;
 import android.webkit.JavascriptInterface;
-import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
-import android.widget.EditText;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
@@ -34,8 +33,8 @@ import java.util.Arrays;
 public class MainActivity extends BridgeActivity {
     private static final int WEBVIEW_AUDIO_PERMISSION_REQUEST = 8701;
     private static final String APPROVAL_NOTIFICATION_CHANNEL_ID = "agenthub-approvals-v2";
-    private static final String PREFS_NAME = "agenthub-client";
-    private static final String PREF_SERVER_URL = "server_url";
+    private static final String APP_CONFIG_PREFS_NAME = "agenthub-app-config";
+    private static final String PREF_SERVER_BASE_URL = "server_base_url";
     private PermissionRequest pendingAudioPermissionRequest;
 
     @Override
@@ -45,13 +44,9 @@ public class MainActivity extends BridgeActivity {
         createAgentHubNotificationChannel();
         bridge.getWebView().setWebChromeClient(new AgentHubWebChromeClient(bridge, this));
         bridge.getWebView().addJavascriptInterface(new AgentHubAndroidBridge(this), "AgentHubAndroid");
-        String serverUrl = configuredServerUrl();
-        if (serverUrl.isEmpty()) {
-            showServerSetup();
-        } else {
-            bridge.getWebView().loadUrl(serverUrl);
-            startNotificationServiceIfAllowed();
-        }
+        startNotificationServiceIfAllowed();
+        // JavaScript interfaces become visible on the next page load in Android WebView.
+        bridge.reload();
     }
 
     private void installSystemBarInsets() {
@@ -112,76 +107,18 @@ public class MainActivity extends BridgeActivity {
         return true;
     }
 
-    private SharedPreferences clientPrefs() {
-        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-    }
-
-    private String configuredServerUrl() {
-        String saved = normalizeServerUrl(clientPrefs().getString(PREF_SERVER_URL, ""));
-        if (!saved.isEmpty()) return saved;
-        return normalizeServerUrl(BuildConfig.AGENTHUB_SERVER_URL);
-    }
-
-    private String normalizeServerUrl(String value) {
-        String raw = value == null ? "" : value.trim();
-        if (raw.isEmpty()) return "";
-        Uri uri = Uri.parse(raw);
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return "";
-        if (host == null || host.trim().isEmpty() || "agenthub.invalid".equalsIgnoreCase(host)) return "";
-        return raw.replaceAll("/+$", "");
-    }
-
-    private String saveServerUrl(String value) {
-        String normalized = normalizeServerUrl(value);
-        if (normalized.isEmpty()) return "failed:invalid-url";
-        clientPrefs().edit().putString(PREF_SERVER_URL, normalized).apply();
-        clearCookies();
-        runOnUiThread(() -> {
-            bridge.getWebView().loadUrl(normalized);
-            startNotificationServiceIfAllowed();
-        });
-        return "ok:" + normalized;
-    }
-
-    private boolean clearServerUrl() {
-        clientPrefs().edit().remove(PREF_SERVER_URL).apply();
-        clearCookies();
-        stopNotificationService();
-        runOnUiThread(this::showServerSetup);
-        return true;
-    }
-
-    private void clearCookies() {
-        CookieManager cookieManager = CookieManager.getInstance();
-        cookieManager.removeAllCookies(null);
-        cookieManager.flush();
-    }
-
-    private void showServerSetup() {
-        runOnUiThread(() -> {
-            EditText input = new EditText(this);
-            input.setSingleLine(true);
-            input.setHint("https://agenthub.example.com");
-            input.setText(configuredServerUrl());
-            AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("AgentHub 服务器")
-                .setMessage("输入你的 self-host AgentHub 地址")
-                .setView(input)
-                .setPositiveButton("继续", null)
-                .setCancelable(false)
-                .create();
-            dialog.setOnShowListener((unused) -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener((view) -> {
-                String result = saveServerUrl(input.getText().toString());
-                if (result.startsWith("ok:")) {
-                    dialog.dismiss();
-                } else {
-                    input.setError("请输入 http 或 https 地址");
-                }
-            }));
-            dialog.show();
-        });
+    private boolean setServerBaseUrl(String url) {
+        try {
+            String normalized = url == null ? "" : url.trim();
+            while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
+            if (normalized.isEmpty()) return false;
+            if (!normalized.startsWith("https://") && !normalized.startsWith("http://")) return false;
+            SharedPreferences prefs = getSharedPreferences(APP_CONFIG_PREFS_NAME, MODE_PRIVATE);
+            prefs.edit().putString(PREF_SERVER_BASE_URL, normalized).apply();
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
     }
 
     private String appVersionName() {
@@ -230,6 +167,17 @@ public class MainActivity extends BridgeActivity {
         if (clean.isEmpty()) clean = "agenthub-debug.apk";
         int suffixIndex = clean.toLowerCase().endsWith(".apk") ? clean.length() - 4 : clean.length();
         return clean.substring(0, suffixIndex) + "-" + System.currentTimeMillis() + ".apk";
+    }
+
+    private boolean copyTextToClipboard(String text) {
+        try {
+            ClipboardManager clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboardManager == null) return false;
+            clipboardManager.setPrimaryClip(ClipData.newPlainText("AgentHub", text == null ? "" : text));
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
     }
 
     private void requestAudioPermission() {
@@ -321,18 +269,8 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
-        public String currentServerUrl() {
-            return activity.configuredServerUrl();
-        }
-
-        @JavascriptInterface
-        public String setServerUrl(String url) {
-            return activity.saveServerUrl(url);
-        }
-
-        @JavascriptInterface
-        public boolean clearServerUrl() {
-            return activity.clearServerUrl();
+        public boolean setServerBaseUrl(String url) {
+            return activity.setServerBaseUrl(url);
         }
 
         @JavascriptInterface
@@ -348,6 +286,11 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public String downloadLatestApk(String url, String filename) {
             return activity.downloadLatestApk(url, filename);
+        }
+
+        @JavascriptInterface
+        public boolean copyText(String text) {
+            return activity.copyTextToClipboard(text);
         }
     }
 }

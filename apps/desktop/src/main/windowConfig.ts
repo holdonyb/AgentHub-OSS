@@ -1,22 +1,20 @@
 import type { BrowserWindowConstructorOptions } from 'electron';
-import { resolveStartupConsoleTarget } from './clientConfig.js';
 
-export function resolveDefaultConsoleUrl(
-  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
-): string | null {
-  return resolveStartupConsoleTarget({ env, argv: [], storedUrl: null }).consoleUrl;
-}
+export const DEFAULT_CONSOLE_URL = 'https://agenthub.example.com';
 
 export function resolveConsoleUrl({
   env = process.env,
   argv = process.argv,
-  storedUrl = null,
 }: {
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
   argv?: string[];
-  storedUrl?: string | null;
-} = {}): string | null {
-  return resolveStartupConsoleTarget({ env, argv, storedUrl }).consoleUrl;
+} = {}): string {
+  const argValue = argv
+    .map((value) => value.trim())
+    .find((value) => value.startsWith('--url='))
+    ?.slice('--url='.length);
+  const value = (argValue || env.AGENTHUB_DESKTOP_URL || DEFAULT_CONSOLE_URL).trim();
+  return value.replace(/\/$/, '');
 }
 
 export function buildConsoleUrl(baseUrl: string, view: 'main' | 'island'): string {
@@ -31,7 +29,7 @@ export function createWindowOptions({
   kind,
   preloadPath,
 }: {
-  kind: 'main' | 'island' | 'setup';
+  kind: 'main' | 'island';
   preloadPath: string;
 }): BrowserWindowConstructorOptions {
   const common: BrowserWindowConstructorOptions = {
@@ -57,19 +55,6 @@ export function createWindowOptions({
       frame: true,
       alwaysOnTop: true,
       skipTaskbar: true,
-    };
-  }
-
-  if (kind === 'setup') {
-    return {
-      ...common,
-      width: 560,
-      height: 440,
-      minWidth: 460,
-      minHeight: 360,
-      title: 'AgentHub Server',
-      frame: true,
-      resizable: true,
     };
   }
 

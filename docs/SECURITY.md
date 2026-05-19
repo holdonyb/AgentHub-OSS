@@ -64,7 +64,7 @@ The reverse proxy must set:
 
 ## Android APK
 
-The v1 APK is a thin WebView wrapper for the configured AgentHub console URL. Public builds use an unconfigured placeholder by default and ask for a server address on first launch.
+The v1 APK is a thin WebView wrapper for your configured AgentHub HTTPS console, for example `https://agenthub.example.com`.
 It must not embed API keys, worker tokens, bootstrap tokens, or user credentials.
 
 The APK can be hosted publicly because it contains only the console URL, but it should be treated as a convenience build:
@@ -73,7 +73,7 @@ The APK can be hosted publicly because it contains only the console URL, but it 
 - publish a SHA-256 checksum when sharing the file
 - keep one stable AgentHub upload key so Android can upgrade the app without uninstalling
 - keep `.jks`, `.keystore`, and signing passwords out of git; use local environment variables or GitHub Actions secrets
-- clear Android local server/cookie state when switching to a different AgentHub instance
+- rotate the owner password if it is ever shared outside the trusted admin channel
 
 ## Current Limits
 

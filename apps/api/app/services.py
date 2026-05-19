@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.json import dumps_json, loads_json
 from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, Memory, ProviderSnapshot, Schedule, User, Worker, utcnow
@@ -33,9 +35,22 @@ ALLOWED_JOB_KINDS = {
 SESSION_STATES = {"ready", "queued", "running", "needs_reply", "failed", "terminated"}
 JOB_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 WORKER_STATES = {"registered", "online", "degraded", "offline"}
-TIMELINE_ITEM_TYPES = {"user_message", "assistant_message", "reasoning", "tool_call", "todo", "error", "compaction"}
+TIMELINE_ITEM_TYPES = {"user_message", "assistant_message", "reasoning", "tool_call", "todo", "goal", "error", "compaction"}
 ACK_TITLES = {"ok", "okay", "好", "好的", "可以", "行", "继续", "继续吧", "收到", "回复了"}
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\[(?:\d{1,3}(?:;\d{1,3})*)m")
+CODEX_PLAN_EXIT_SOURCE = "codex_plan_exit"
+CODEX_PLAN_TIMELINE_SOURCES = {"codex_app_server", "job_complete_plan_result"}
+INTERACTION_PERMISSION_KINDS = {"question", "plan", "plan_exit", "mode"}
+CODEX_PLAN_EXIT_CHOICES = [
+    {"id": "implement", "label": "执行计划", "description": "退出计划模式，并按当前计划继续执行。"},
+    {
+        "id": "clear_context_implement",
+        "label": "清空上下文并执行",
+        "description": "要求后端尽量清理上下文后再按当前计划执行。",
+    },
+    {"id": "keep_planning", "label": "继续规划", "description": "继续留在计划模式，补充或调整计划。"},
+    {"id": "cancel", "label": "暂不处理", "description": "保留计划，不继续投递。"},
+]
 
 
 def strip_ansi(value: str) -> str:
@@ -155,6 +170,7 @@ def session_out(session: AgentSession) -> dict[str, Any]:
         "controls": loads_json(session.controls_json, {}),
         "runtime_metadata": sanitize_text(loads_json(session.runtime_metadata_json, {})),
         "metadata": sanitize_text(loads_json(session.metadata_json, {})),
+        "archived_at": session.archived_at,
         "updated_at": session.updated_at,
     }
 
@@ -194,6 +210,411 @@ def permission_out(permission: AgentPermission) -> dict[str, Any]:
     }
 
 
+def _plan_hash(plan_text: str) -> str:
+    return hashlib.sha256(strip_ansi(plan_text).strip().encode("utf-8")).hexdigest()
+
+
+def _matching_plan_exit_permission(db: Any, session: AgentSession, plan_text: str) -> AgentPermission | None:
+    plan_hash = _plan_hash(plan_text)
+    rows = (
+        db.query(AgentPermission)
+        .filter(AgentPermission.space_id == session.space_id)
+        .filter(AgentPermission.session_id == session.session_id)
+        .filter(AgentPermission.kind == "plan_exit")
+        .order_by(AgentPermission.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    for permission in rows:
+        detail = loads_json(permission.detail_json, {})
+        if not isinstance(detail, dict) or detail.get("source") != CODEX_PLAN_EXIT_SOURCE:
+            continue
+        if detail.get("plan_hash") == plan_hash or detail.get("plan_text") == plan_text:
+            if permission.status == "expired" and detail.get("source_type") == "timeline_backfill":
+                continue
+            return permission
+    return None
+
+
+def ensure_codex_plan_exit_permission(
+    db: Any,
+    session: AgentSession,
+    *,
+    plan_text: str,
+    source_type: str,
+    job_id: str | None = None,
+    raw_prompt: str = "",
+    timeline_seq: int | None = None,
+) -> AgentPermission | None:
+    if session.backend.strip().lower() != "codex" or not plan_text.strip():
+        return None
+    existing = _matching_plan_exit_permission(db, session, plan_text)
+    if existing is not None:
+        if existing.status == "pending":
+            session.status = "needs_reply"
+            session.last_activity_at = utcnow()
+            session.updated_at = session.last_activity_at
+            session.last_message = plan_text or session.last_message
+            session.last_role = "assistant"
+            session.activity_summary = "等待你处理计划审批"
+        return existing
+
+    detail: dict[str, Any] = {
+        "source": CODEX_PLAN_EXIT_SOURCE,
+        "source_type": source_type,
+        "raw_prompt": raw_prompt,
+        "plan_text": plan_text,
+        "plan_hash": _plan_hash(plan_text),
+    }
+    if job_id:
+        detail["job_id"] = job_id
+    if timeline_seq is not None:
+        detail["timeline_seq"] = timeline_seq
+    permission = AgentPermission(
+        space_id=session.space_id,
+        session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        kind="plan_exit",
+        title="计划已生成",
+        description="选择下一步，AgentHub 会投递到当前 Codex session。",
+        detail_json=dumps_json(detail),
+        actions_json=dumps_json({"choices": CODEX_PLAN_EXIT_CHOICES}),
+        status="pending",
+        response_json=dumps_json({}),
+    )
+    db.add(permission)
+    db.flush()
+    now = utcnow()
+    session.status = "needs_reply"
+    session.last_activity_at = now
+    session.updated_at = now
+    session.last_message = plan_text or session.last_message
+    session.last_role = "assistant"
+    session.activity_summary = "等待你处理计划审批"
+    write_event(
+        db,
+        space_id=session.space_id,
+        actor_type="system",
+        actor_id="codex-plan-mode",
+        source_type="permission",
+        source_id=permission.permission_id,
+        event_type="permission.request",
+        payload={"session_id": session.session_id, "kind": permission.kind, "job_id": job_id, "source_type": source_type},
+    )
+    return permission
+
+
+def _is_codex_plan_timeline_item(session: AgentSession, item: AgentTimeline) -> bool:
+    if session.backend.strip().lower() != "codex":
+        return False
+    if item.item_type != "assistant_message":
+        return False
+    if item.role not in {None, "assistant"}:
+        return False
+    text = strip_ansi(item.text or "").strip()
+    if not text:
+        return False
+    if re.search(r"</?\s*proposed_plan\b", text, flags=re.IGNORECASE):
+        return True
+    payload = loads_json(item.payload_json, {})
+    if not isinstance(payload, dict):
+        return False
+    source = str(payload.get("source") or "").strip()
+    return source in CODEX_PLAN_TIMELINE_SOURCES and (
+        payload.get("reply_mode") == "plan" or payload.get("native_turn_mode") == "plan"
+    )
+
+
+def _timeline_sort_key(item: AgentTimeline) -> tuple[datetime, int]:
+    return (item.created_at or datetime.min, item.seq)
+
+
+def _timeline_item_supersedes_plan(session: AgentSession, item: AgentTimeline, plan_item: AgentTimeline) -> bool:
+    if _timeline_sort_key(item) <= _timeline_sort_key(plan_item):
+        return False
+    if item.item_type in {"user_message", "tool_call", "error", "compaction"}:
+        return True
+    if item.item_type == "assistant_message" and not _is_codex_plan_timeline_item(session, item):
+        return bool(strip_ansi(item.text or "").strip())
+    return False
+
+
+def _latest_live_codex_plan_item(session: AgentSession, items: list[AgentTimeline]) -> AgentTimeline | None:
+    plans = [item for item in items if _is_codex_plan_timeline_item(session, item)]
+    for plan_item in sorted(plans, key=_timeline_sort_key, reverse=True):
+        if any(_timeline_item_supersedes_plan(session, item, plan_item) for item in items):
+            continue
+        return plan_item
+    return None
+
+
+def expire_superseded_pending_permissions(
+    db: Any,
+    session: AgentSession,
+    *,
+    reason: str,
+    superseded_by_job_id: str | None = None,
+) -> int:
+    permissions = (
+        db.query(AgentPermission)
+        .filter(AgentPermission.space_id == session.space_id)
+        .filter(AgentPermission.session_id == session.session_id)
+        .filter(AgentPermission.status == "pending")
+        .filter(AgentPermission.kind.in_(INTERACTION_PERMISSION_KINDS))
+        .all()
+    )
+    if not permissions:
+        return 0
+    now = utcnow()
+    response = {"action": "expired", "reason": reason}
+    if superseded_by_job_id:
+        response["superseded_by_job_id"] = superseded_by_job_id
+    for permission in permissions:
+        permission.status = "expired"
+        permission.response_json = dumps_json(response)
+        permission.resolved_at = now
+        write_event(
+            db,
+            space_id=session.space_id,
+            actor_type="system",
+            actor_id="interaction-state",
+            source_type="permission",
+            source_id=permission.permission_id,
+            event_type="permission.expire",
+            payload={
+                "session_id": session.session_id,
+                "kind": permission.kind,
+                "reason": reason,
+                "superseded_by_job_id": superseded_by_job_id,
+            },
+        )
+    return len(permissions)
+
+
+def _timeline_item_supersedes_pending_interaction(session: AgentSession, item: AgentTimeline) -> bool:
+    if item.item_type in {"user_message", "error"}:
+        return True
+    if item.item_type == "assistant_message" and not _is_codex_plan_timeline_item(session, item):
+        payload = loads_json(item.payload_json, {})
+        source = str(payload.get("source") or "").strip() if isinstance(payload, dict) else ""
+        return source in CODEX_PLAN_TIMELINE_SOURCES and bool(strip_ansi(item.text or "").strip())
+    return False
+
+
+def expire_pending_permissions_superseded_by_timeline(
+    db: Any,
+    session: AgentSession,
+    items: list[AgentTimeline],
+) -> int:
+    superseding_items = [item for item in items if _timeline_item_supersedes_pending_interaction(session, item)]
+    if not superseding_items:
+        return 0
+    permissions = (
+        db.query(AgentPermission)
+        .filter(AgentPermission.space_id == session.space_id)
+        .filter(AgentPermission.session_id == session.session_id)
+        .filter(AgentPermission.status == "pending")
+        .filter(AgentPermission.kind.in_(INTERACTION_PERMISSION_KINDS))
+        .all()
+    )
+    expired = 0
+    now = utcnow()
+    for permission in permissions:
+        if not any((item.created_at or datetime.min) >= permission.created_at for item in superseding_items):
+            continue
+        permission.status = "expired"
+        permission.response_json = dumps_json({"action": "expired", "reason": "timeline_superseded"})
+        permission.resolved_at = now
+        expired += 1
+        write_event(
+            db,
+            space_id=session.space_id,
+            actor_type="system",
+            actor_id="interaction-state",
+            source_type="permission",
+            source_id=permission.permission_id,
+            event_type="permission.expire",
+            payload={"session_id": session.session_id, "kind": permission.kind, "reason": "timeline_superseded"},
+        )
+    return expired
+
+
+def _plan_exit_permission_plan_item(
+    session: AgentSession,
+    permission: AgentPermission,
+    items: list[AgentTimeline],
+) -> AgentTimeline | None:
+    detail = loads_json(permission.detail_json, {})
+    if not isinstance(detail, dict) or detail.get("source") != CODEX_PLAN_EXIT_SOURCE:
+        return None
+    timeline_seq = detail.get("timeline_seq")
+    if isinstance(timeline_seq, int):
+        for item in items:
+            if item.seq == timeline_seq and _is_codex_plan_timeline_item(session, item):
+                return item
+    plan_text = str(detail.get("plan_text") or "")
+    plan_hash = str(detail.get("plan_hash") or "")
+    if not plan_text and not plan_hash:
+        return None
+    for item in items:
+        if not _is_codex_plan_timeline_item(session, item):
+            continue
+        if plan_text and item.text == plan_text:
+            return item
+        if plan_hash and _plan_hash(item.text) == plan_hash:
+            return item
+    return None
+
+
+def expire_pending_plan_exit_permissions_no_longer_waiting_on_timeline(
+    db: Any,
+    session: AgentSession,
+    items: list[AgentTimeline],
+) -> int:
+    if not items:
+        return 0
+    permissions = (
+        db.query(AgentPermission)
+        .filter(AgentPermission.space_id == session.space_id)
+        .filter(AgentPermission.session_id == session.session_id)
+        .filter(AgentPermission.status == "pending")
+        .filter(AgentPermission.kind == "plan_exit")
+        .all()
+    )
+    if not permissions:
+        return 0
+    now = utcnow()
+    expired = 0
+    for permission in permissions:
+        plan_item = _plan_exit_permission_plan_item(session, permission, items)
+        if plan_item is None:
+            continue
+        if not any(_timeline_item_supersedes_plan(session, item, plan_item) for item in items):
+            continue
+        permission.status = "expired"
+        permission.response_json = dumps_json({"action": "expired", "reason": "timeline_no_longer_waiting"})
+        permission.resolved_at = now
+        expired += 1
+        write_event(
+            db,
+            space_id=session.space_id,
+            actor_type="system",
+            actor_id="interaction-state",
+            source_type="permission",
+            source_id=permission.permission_id,
+            event_type="permission.expire",
+            payload={"session_id": session.session_id, "kind": permission.kind, "reason": "timeline_no_longer_waiting"},
+        )
+    if expired and not _session_has_pending_interaction_permission(db, session):
+        session.status = "ready"
+        session.updated_at = now
+        session.activity_summary = session.activity_summary if session.activity_summary != "等待你处理计划审批" else "当前空闲"
+    return expired
+
+
+def _session_has_pending_interaction_permission(db: Any, session: AgentSession) -> bool:
+    return (
+        db.query(AgentPermission.permission_id)
+        .filter(AgentPermission.space_id == session.space_id)
+        .filter(AgentPermission.session_id == session.session_id)
+        .filter(AgentPermission.status == "pending")
+        .filter(AgentPermission.kind.in_(INTERACTION_PERMISSION_KINDS))
+        .first()
+        is not None
+    )
+
+
+def reconcile_stale_plan_exit_permissions(
+    db: Any,
+    *,
+    space_id: str | None,
+    session_id: str | None = None,
+    limit: int = 200,
+) -> int:
+    query = (
+        db.query(AgentPermission)
+        .filter(AgentPermission.space_id == space_id)
+        .filter(AgentPermission.status == "pending")
+        .filter(AgentPermission.kind == "plan_exit")
+    )
+    if session_id:
+        query = query.filter(AgentPermission.session_id == session_id)
+    query = query.order_by(AgentPermission.created_at.desc()).limit(max(1, min(limit, 500)))
+    permissions = query.all()
+    expired = 0
+    checked_sessions: set[str] = set()
+    for permission in permissions:
+        if permission.session_id in checked_sessions:
+            continue
+        checked_sessions.add(permission.session_id)
+        session = (
+            db.query(AgentSession)
+            .filter(AgentSession.space_id == space_id)
+            .filter(AgentSession.session_id == permission.session_id)
+            .one_or_none()
+        )
+        if session is None:
+            continue
+        rows = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.space_id == session.space_id)
+            .filter(AgentTimeline.session_id == session.session_id)
+            .order_by(AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+            .limit(500)
+            .all()
+        )
+        expired += expire_pending_plan_exit_permissions_no_longer_waiting_on_timeline(db, session, rows)
+    return expired
+
+
+def ensure_codex_plan_exit_permission_from_timeline(
+    db: Any,
+    session: AgentSession,
+    items: list[AgentTimeline],
+) -> AgentPermission | None:
+    latest = _latest_live_codex_plan_item(session, items)
+    if latest is None:
+        return None
+    return ensure_codex_plan_exit_permission(
+        db,
+        session,
+        plan_text=latest.text,
+        source_type="timeline",
+        timeline_seq=latest.seq,
+    )
+
+
+def ensure_missing_codex_plan_exit_permission_from_session_timeline(
+    db: Any,
+    session: AgentSession,
+    *,
+    source_type: str = "timeline_open",
+    limit: int = 300,
+) -> tuple[AgentPermission | None, int]:
+    rows = (
+        db.query(AgentTimeline)
+        .filter(AgentTimeline.space_id == session.space_id)
+        .filter(AgentTimeline.session_id == session.session_id)
+        .order_by(AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    latest = _latest_live_codex_plan_item(session, rows)
+    if latest is None:
+        expired = expire_pending_plan_exit_permissions_no_longer_waiting_on_timeline(db, session, rows)
+        return None, expired
+    if _matching_plan_exit_permission(db, session, latest.text) is not None:
+        return None, 0
+    return ensure_codex_plan_exit_permission(
+        db,
+        session,
+        plan_text=latest.text,
+        source_type=source_type,
+        timeline_seq=latest.seq,
+    ), 0
+
+
 def provider_snapshot_out(snapshot: ProviderSnapshot) -> dict[str, Any]:
     diagnostics = loads_json(snapshot.diagnostics_json, {})
     return {
@@ -229,6 +650,108 @@ def _timeline_payload(item: Any) -> dict[str, Any]:
     return item if isinstance(item, dict) else {}
 
 
+def _timeline_text_key(value: Any) -> str:
+    return strip_ansi(str(value or "")).strip()
+
+
+def _optional_created_at(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+        except ValueError:
+            return None
+    return None
+
+
+def _timeline_job_id(payload: dict[str, Any]) -> str:
+    raw_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    job_id = (raw_payload.get("job_id") or raw_payload.get("agenthub_job_id")) if isinstance(raw_payload, dict) else ""
+    return str(job_id or "")
+
+
+def _timeline_created_at(payload: dict[str, Any]) -> datetime | None:
+    return _optional_created_at(payload.get("created_at"))
+
+
+def _created_at_close_enough(left: datetime | None, right: datetime | None) -> bool:
+    if left is None or right is None:
+        return False
+    return abs((left - right).total_seconds()) <= 600
+
+
+def _preserved_session_input_rows(existing_rows: list[AgentTimeline]) -> list[dict[str, Any]]:
+    preserved: list[dict[str, Any]] = []
+    for row in existing_rows:
+        payload = loads_json(row.payload_json, {})
+        if row.item_type != "user_message":
+            continue
+        if not isinstance(payload, dict) or payload.get("source") != "session_input":
+            continue
+        preserved.append(
+            {
+                "item_type": row.item_type,
+                "role": row.role,
+                "text": row.text,
+                "tool_call_id": row.tool_call_id,
+                "tool_name": row.tool_name,
+                "status": row.status,
+                "payload": payload,
+                "created_at": row.created_at,
+            }
+        )
+    return preserved
+
+
+def _pop_matching_preserved_row(payload: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    incoming_job_id = _timeline_job_id(payload)
+    if incoming_job_id:
+        for index, candidate in enumerate(candidates):
+            if _timeline_job_id(candidate) == incoming_job_id:
+                return candidates.pop(index)
+
+    incoming_created_at = _timeline_created_at(payload)
+    for index, candidate in enumerate(candidates):
+        if _created_at_close_enough(incoming_created_at, _timeline_created_at(candidate)):
+            return candidates.pop(index)
+    return None
+
+
+def _merge_replace_timeline_with_local_inputs(existing_rows: list[AgentTimeline], incoming_items: list[Any]) -> list[dict[str, Any]]:
+    preserved_rows = _preserved_session_input_rows(existing_rows)
+    if not preserved_rows:
+        return [_timeline_payload(item) for item in incoming_items]
+
+    preserved_by_text: dict[str, list[dict[str, Any]]] = {}
+    for row in preserved_rows:
+        preserved_by_text.setdefault(_timeline_text_key(row.get("text")), []).append(row)
+
+    merged: list[dict[str, Any]] = []
+    for incoming in incoming_items:
+        payload = _timeline_payload(incoming)
+        item_type = str(payload.get("item_type") or "")
+        if item_type == "user_message":
+            text_key = _timeline_text_key(payload.get("text"))
+            candidates = preserved_by_text.get(text_key) or []
+            preserved = _pop_matching_preserved_row(payload, candidates)
+            if preserved:
+                preserved_payload = preserved.get("payload") if isinstance(preserved.get("payload"), dict) else {}
+                incoming_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                payload["payload"] = {**preserved_payload, **incoming_payload}
+                if not payload.get("created_at") and preserved.get("created_at") is not None:
+                    payload["created_at"] = preserved["created_at"]
+        merged.append(payload)
+
+    for remaining in preserved_by_text.values():
+        remaining.sort(key=lambda item: _timeline_created_at(item) or datetime.min)
+        merged.extend(remaining)
+    return merged
+
+
 def upsert_timeline_items(
     db: Any,
     session_id: str,
@@ -237,16 +760,16 @@ def upsert_timeline_items(
     replace: bool = False,
     space_id: str | None = None,
 ) -> list[AgentTimeline]:
-    if replace:
-        query = db.query(AgentTimeline).filter(AgentTimeline.session_id == session_id)
-        if space_id is not None:
-            query = query.filter(AgentTimeline.space_id == space_id)
-        query.delete()
-        db.flush()
     existing_query = db.query(AgentTimeline).filter(AgentTimeline.session_id == session_id)
     if space_id is not None:
         existing_query = existing_query.filter(AgentTimeline.space_id == space_id)
-    existing = {item.seq: item for item in existing_query.all()}
+    existing_rows = existing_query.all()
+    if replace:
+        items = _merge_replace_timeline_with_local_inputs(existing_rows, items)
+        existing_query.delete()
+        db.flush()
+        existing_rows = []
+    existing = {item.seq: item for item in existing_rows}
     next_seq = (max(existing) + 1) if existing else 1
     saved: list[AgentTimeline] = []
     for raw in items:
@@ -285,6 +808,7 @@ def _message_from_timeline(item: AgentTimeline) -> dict[str, Any] | None:
         role = "assistant" if item.item_type == "assistant_message" else "user" if item.item_type == "user_message" else "system"
     return {
         "session_id": item.session_id,
+        "seq": item.seq,
         "role": role,
         "text": strip_ansi(item.text),
         "created_at": item.created_at.isoformat(),
@@ -307,20 +831,23 @@ def sync_session_from_timeline(db: Any, session: AgentSession) -> None:
     metadata.pop("timeline", None)
     metadata["messages"] = messages[-20:]
     session.runtime_metadata_json = dumps_json(metadata)
-    last_activity = rows[-1]
+    last_activity = max(rows, key=lambda row: (row.created_at, row.seq))
     last_conversation = next(
         (
             message
-            for message in reversed(messages)
+            for message in sorted(messages, key=lambda item: (str(item.get("created_at") or ""), int(item.get("seq") or 0)), reverse=True)
             if message["role"] in {"assistant", "user"} and str(message["text"]).strip()
         ),
         messages[-1] if messages else None,
     )
-    if last_conversation:
+    current_activity = session.last_activity_at
+    timeline_is_current = current_activity is None or last_activity.created_at >= current_activity
+    if timeline_is_current and last_conversation:
         session.last_message = str(last_conversation["text"])
         session.last_role = str(last_conversation["role"])
-    session.last_activity_at = last_activity.created_at
-    if not session.activity_summary and session.last_message:
+    if timeline_is_current:
+        session.last_activity_at = last_activity.created_at
+    if timeline_is_current and not session.activity_summary and session.last_message:
         session.activity_summary = f"最近上下文：{_compact(session.last_message)}"
     session.updated_at = utcnow()
 
@@ -335,8 +862,9 @@ def _job_queue_reason(job: Job, payload: dict[str, Any]) -> tuple[str | None, st
     return "waiting_for_available_worker", "等待可用 worker 领取"
 
 
-def job_out(job: Job) -> dict[str, Any]:
-    payload = redact_payload(loads_json(job.payload_json, {}))
+def job_out(job: Job, *, include_private_payload: bool = False) -> dict[str, Any]:
+    raw_payload = loads_json(job.payload_json, {})
+    payload = sanitize_text(raw_payload) if include_private_payload else redact_payload(raw_payload)
     queue_reason, queue_reason_text = _job_queue_reason(job, payload)
     return {
         "space_id": job.space_id,
@@ -405,6 +933,7 @@ class DoubaoAsrFacade:
     SUBMIT_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
     QUERY_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
     FLASH_RESOURCE_ID = "volc.bigasr.auc_turbo"
+    STS_SUCCESS_KEYS = ("jwt_token", "token")
     PENDING_STATUS_CODES = {"20000001", "20000002"}
     SUCCESS_STATUS_CODES = {"", "0", "20000000"}
 
@@ -576,8 +1105,159 @@ class DoubaoAsrFacade:
             raise RuntimeError("Doubao ASR returned empty text")
         return text
 
+    async def issue_stream_auth(self, *, uid: str) -> dict[str, Any]:
+        settings = get_settings()
+        app_key = settings.doubao_asr_app_key.strip()
+        access_key = settings.doubao_asr_access_key.strip()
+        if not app_key or not access_key:
+            raise RuntimeError("Doubao streaming ASR credentials are not configured")
+        headers = {
+            "Authorization": f"Bearer; {access_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "appid": app_key,
+            "duration": settings.doubao_stream_token_duration_seconds,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(settings.doubao_asr_sts_endpoint, json=payload, headers=headers)
+            response.raise_for_status()
+        body = response.json() if response.content else {}
+        token = ""
+        if isinstance(body, dict):
+            for key in self.STS_SUCCESS_KEYS:
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    token = value.strip()
+                    break
+        if not token:
+            raise RuntimeError("Doubao streaming ASR token response was empty")
+        return {
+            "url": settings.doubao_stream_asr_url,
+            "auth": {
+                "api_resource_id": settings.doubao_stream_asr_resource_id.strip() or "volc.bigasr.sauc.duration",
+                "api_app_key": app_key,
+                "api_access_key": f"Jwt; {token}",
+            },
+            "config": {
+                "user": {"uid": uid},
+                "audio": {
+                    "format": "pcm",
+                    "rate": 16000,
+                    "bits": 16,
+                    "channel": 1,
+                },
+                "request": {
+                    "model_name": "bigmodel",
+                    "show_utterances": True,
+                    "enable_itn": True,
+                    "enable_punc": True,
+                    "enable_ddc": True,
+                },
+            },
+            "expires_in_seconds": settings.doubao_stream_token_duration_seconds,
+        }
+
 
 doubao_asr = DoubaoAsrFacade()
+
+
+class OpenAiAsrFacade:
+    async def transcribe_audio_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        audio_format: str,
+        language: str | None = None,
+    ) -> str:
+        settings = get_settings()
+        api_key = settings.openai_asr_api_key.strip()
+        base_url = settings.openai_asr_base_url.strip().rstrip("/")
+        model = settings.openai_asr_model.strip() or "whisper-1"
+        if not api_key:
+            raise RuntimeError("OpenAI ASR credentials are not configured")
+        if not base_url:
+            raise RuntimeError("OpenAI ASR base URL is not configured")
+        files = {
+            "file": (
+                f"voice.{audio_format or 'wav'}",
+                audio_bytes,
+                f"audio/{audio_format or 'wav'}",
+            )
+        }
+        data = {"model": model, "response_format": "text"}
+        if language:
+            data["language"] = language
+        headers = {"Authorization": f"Bearer {api_key}"}
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(
+                f"{base_url}/audio/transcriptions",
+                data=data,
+                files=files,
+                headers=headers,
+            )
+            response.raise_for_status()
+        text = response.text.strip()
+        if text:
+            return text
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "").strip()
+            if text:
+                return text
+        raise RuntimeError("OpenAI ASR returned empty text")
+
+
+openai_asr = OpenAiAsrFacade()
+
+
+class VoiceAsrFacade:
+    def configured_provider(self) -> str:
+        provider = get_settings().voice_asr_provider.strip().lower()
+        return provider or "doubao"
+
+    def diagnostics_provider(self) -> str:
+        provider = self.configured_provider()
+        return "openai" if provider in {"openai", "openai-compatible", "whisper"} else provider
+
+    def provider_label(self) -> str:
+        provider = self.configured_provider()
+        if provider in {"openai", "openai-compatible", "whisper"}:
+            return "OpenAI ASR"
+        if provider == "doubao":
+            return "Doubao ASR"
+        return f"{provider} ASR"
+
+    async def transcribe_audio_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        audio_format: str,
+        language: str | None = None,
+    ) -> str:
+        provider = self.configured_provider()
+        if provider == "doubao":
+            return await doubao_asr.transcribe_audio_bytes(
+                audio_bytes,
+                audio_format=audio_format,
+                language=language,
+            )
+        if provider in {"openai", "openai-compatible", "whisper"}:
+            return await openai_asr.transcribe_audio_bytes(
+                audio_bytes,
+                audio_format=audio_format,
+                language=language,
+            )
+        raise RuntimeError(f"Unsupported voice ASR provider: {provider}")
+
+    async def issue_stream_auth(self, *, uid: str) -> dict[str, Any]:
+        provider = self.configured_provider()
+        if provider == "doubao":
+            return await doubao_asr.issue_stream_auth(uid=uid)
+        raise RuntimeError("Configured voice ASR provider does not support streaming auth")
+
+
+voice_asr = VoiceAsrFacade()
 
 
 def schedule_out(schedule: Schedule) -> dict[str, Any]:

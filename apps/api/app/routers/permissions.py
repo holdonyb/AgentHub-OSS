@@ -6,9 +6,9 @@ from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role, require_worker
 from app.core.json import dumps_json, loads_json
 from app.models import AgentPermission, AgentSession, Job, utcnow
-from app.routers.internal import _assert_worker_binding
+from app.routers.internal import _assert_worker_binding, _touch_session_activity
 from app.schemas import PermissionRequestedIn, PermissionResolvedIn, PermissionRespondIn
-from app.services import permission_out
+from app.services import permission_out, reconcile_stale_plan_exit_permissions
 
 router = APIRouter()
 
@@ -114,11 +114,14 @@ def _enqueue_permission_answer_job(
 ) -> Job:
     reply_mode = "direct"
     native_plan_mode = False
+    native_turn_mode: str | None = None
     if _is_plan_exit_permission(permission):
         plan_exit = _plan_exit_prompt_and_mode(response)
         if plan_exit is None:
             raise ValueError("plan exit was cancelled")
         prompt, reply_mode, native_plan_mode = plan_exit
+        if session.backend.strip().lower() == "codex" and _permission_source(permission) in PLAN_EXIT_SOURCES:
+            native_turn_mode = "plan" if native_plan_mode else "default"
     else:
         label = _permission_answer_summary(permission, response)
         prompt = f"我选择：\n{label}\n请按这个选择继续执行。"
@@ -143,6 +146,8 @@ def _enqueue_permission_answer_job(
     }
     if native_plan_mode:
         payload["native_plan_mode"] = True
+    if native_turn_mode:
+        payload["native_turn_mode"] = native_turn_mode
     job = Job(
         space_id=session.space_id,
         kind="session_input",
@@ -158,7 +163,12 @@ def _enqueue_permission_answer_job(
     db.flush()
     if session.status != "running":
         session.status = "queued"
-    session.updated_at = utcnow()
+    _touch_session_activity(
+        session,
+        message=prompt,
+        role="user",
+        summary="已提交审批回复，等待 worker 领取",
+    )
     write_event(
         db,
         space_id=session.space_id,
@@ -179,6 +189,10 @@ def list_permissions(
     status: str | None = None,
     session_id: str | None = None,
 ):
+    if status in {None, "pending"}:
+        expired = reconcile_stale_plan_exit_permissions(db, space_id=actor.space_id, session_id=session_id)
+        if expired:
+            db.commit()
     query = db.query(AgentPermission).filter(AgentPermission.space_id == actor.space_id)
     if status:
         query = query.filter(AgentPermission.status == status)
@@ -226,7 +240,7 @@ def respond_permission(
         )
         if continuation_job is None and not has_pending and session.status == "needs_reply":
             session.status = "running" if native_turn_permission and _session_has_running_job(db, session.session_id) else "ready"
-            session.updated_at = utcnow()
+            _touch_session_activity(session, summary=session.activity_summary)
     write_event(
         db,
         space_id=actor.space_id,
@@ -312,7 +326,12 @@ def request_permission(
     permission.response_json = dumps_json({})
     permission.resolved_at = None
     session.status = "needs_reply"
-    session.updated_at = utcnow()
+    _touch_session_activity(
+        session,
+        message=permission.description or permission.title or session.last_message,
+        role="assistant",
+        summary=permission.description or permission.title or "等待你处理审批",
+    )
     db.flush()
     write_event(
         db,

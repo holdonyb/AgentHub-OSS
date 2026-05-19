@@ -5,6 +5,7 @@ import binascii
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import mimetypes
 import os
 from pathlib import Path
 import shlex
@@ -13,7 +14,7 @@ import subprocess
 import tempfile
 from typing import Any
 
-from agenthub_worker.codex_app_server import resolve_codex_executable, run_codex_plan_turn
+from agenthub_worker.codex_app_server import resolve_codex_executable, run_codex_plan_turn, run_codex_turn
 from agenthub_worker.discovery import parse_claude_jsonl, parse_codex_jsonl, parse_kimi_session, recent_session_files
 from agenthub_worker.paths import default_agent_session_roots, normalize_workspace_root, project_name_from_root
 
@@ -30,7 +31,8 @@ DEFAULT_JOB_TIMEOUT_SECONDS = 3600
 IMAGE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 MAX_FILE_LIST_ENTRIES = 300
 DEFAULT_FILE_READ_BYTES = 200_000
-MAX_FILE_READ_BYTES = 1_000_000
+MAX_FILE_READ_BYTES = 5_000_000
+MAX_INLINE_FILE_BYTES = 5_000_000
 
 
 @dataclass(frozen=True)
@@ -142,17 +144,41 @@ def _execute_file_read(job: dict[str, Any]) -> str:
     data = target.read_bytes()[: max_bytes + 1]
     truncated = size_bytes > max_bytes
     preview = data[:max_bytes]
+    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    base_payload = {
+        "path": relative_text,
+        "filename": target.name,
+        "content_type": content_type,
+        "size_bytes": size_bytes,
+        "truncated": truncated,
+        "modified_at": _modified_at(target),
+    }
+    inline_downloadable = size_bytes <= min(max_bytes, MAX_INLINE_FILE_BYTES)
+    if content_type.startswith("image/"):
+        payload = {
+            **base_payload,
+            "preview_kind": "image",
+            "downloadable": inline_downloadable,
+        }
+        if inline_downloadable:
+            payload["data_base64"] = base64.b64encode(preview).decode("ascii")
+        return _json_result(payload)
     if b"\x00" in preview[:4096]:
-        raise ValueError("File is not text-previewable")
+        payload = {
+            **base_payload,
+            "preview_kind": "download",
+            "downloadable": inline_downloadable,
+        }
+        if inline_downloadable:
+            payload["data_base64"] = base64.b64encode(preview).decode("ascii")
+        return _json_result(payload)
     return _json_result(
         {
-            "path": relative_text,
-            "filename": target.name,
-            "content_type": "text/plain",
-            "size_bytes": size_bytes,
-            "truncated": truncated,
-            "modified_at": _modified_at(target),
+            **base_payload,
+            "preview_kind": "text",
+            "downloadable": inline_downloadable,
             "text": preview.decode("utf-8", errors="replace"),
+            **({"data_base64": base64.b64encode(preview).decode("ascii")} if inline_downloadable else {}),
         }
     )
 
@@ -648,6 +674,15 @@ def _is_codex_native_plan_fallback_error(message: str) -> bool:
     return "codex app-server" in lowered or "responsestreamdisconnected" in lowered or "willretry" in lowered
 
 
+def _is_codex_native_default_fallback_error(message: str) -> bool:
+    lowered = message.lower()
+    return (
+        "codex app-server thread/resume failed" in lowered
+        and "failed to load configuration" in lowered
+        and "model provider" in lowered
+    )
+
+
 def _build_codex_native_plan_fallback_prompt(job: dict[str, Any]) -> str:
     payload = _payload(job)
     raw_prompt = str(payload.get("raw_prompt") or payload.get("prompt") or "").strip()
@@ -862,6 +897,61 @@ def _execute_codex_native_plan_cli_fallback(job: dict[str, Any], payload: dict[s
             Path(output_file).unlink(missing_ok=True)
 
 
+def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], secret_env: dict[str, str]) -> str:
+    backend = str(job.get("backend") or "").lower()
+    output_file: str | None = None
+    if backend == "codex" and not payload.get("dry_run"):
+        fd, output_file = tempfile.mkstemp(prefix="agenthub-codex-", suffix=".txt")
+        os.close(fd)
+    attachments: list[MaterializedAttachment] = []
+    try:
+        attachments = _materialize_attachments(payload)
+        job_for_command = _job_with_attachment_context(job, attachments)
+        image_paths = [str(attachment.path) for attachment in attachments if attachment.is_image]
+        args = build_backend_command(job_for_command, output_file=output_file, attachment_paths=image_paths)
+        timeout_seconds = _job_timeout_seconds(payload)
+        if payload.get("dry_run"):
+            return f"dry_run: {_format_command(args)}"
+        if secret_env:
+            return _run_backend_command(
+                args,
+                str(job.get("workspace_root") or "."),
+                timeout_seconds,
+                output_file=output_file,
+                env=secret_env,
+            )
+        return _run_backend_command(args, str(job.get("workspace_root") or "."), timeout_seconds, output_file=output_file)
+    except RuntimeError as exc:
+        if backend == "codex" and _is_codex_context_full_error(str(exc)):
+            if output_file:
+                Path(output_file).write_text("", encoding="utf-8")
+            fallback_args = build_codex_compact_handoff_command(
+                _job_with_attachment_context(job, attachments),
+                output_file=output_file,
+                attachment_paths=[str(attachment.path) for attachment in attachments if attachment.is_image],
+            )
+            if secret_env:
+                return _run_backend_command(
+                    fallback_args,
+                    str(job.get("workspace_root") or "."),
+                    timeout_seconds,
+                    output_file=output_file,
+                    env=secret_env,
+                )
+            return _run_backend_command(
+                fallback_args,
+                str(job.get("workspace_root") or "."),
+                timeout_seconds,
+                output_file=output_file,
+            )
+        raise
+    finally:
+        for attachment in attachments:
+            attachment.path.unlink(missing_ok=True)
+        if output_file:
+            Path(output_file).unlink(missing_ok=True)
+
+
 def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: str = "") -> str:
     kind = job["kind"]
     payload = _payload(job)
@@ -884,8 +974,27 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
     if kind == "session_input":
         backend = str(job.get("backend") or "").lower()
         secret_env = _resolve_job_secrets(client, job, payload)
+        native_turn_mode = str(payload.get("native_turn_mode") or "").strip().lower()
+        if backend == "codex" and native_turn_mode == "default":
+            timeout_seconds = _job_timeout_seconds(payload)
+            if payload.get("dry_run"):
+                return f"dry_run: codex app-server turn/start default {_prompt(job)}"
+            try:
+                return run_codex_turn(
+                    job,
+                    collaboration_mode="default",
+                    client=client,
+                    worker_id=worker_id,
+                    timeout_seconds=timeout_seconds,
+                )
+            except RuntimeError as exc:
+                if _is_codex_native_default_fallback_error(str(exc)):
+                    return _execute_session_input_cli(job, payload, secret_env)
+                raise
         if backend == "codex" and payload.get("reply_mode") == "plan" and payload.get("native_plan_mode") is True:
             timeout_seconds = _job_timeout_seconds(payload)
+            if payload.get("attachments"):
+                return _execute_codex_native_plan_cli_fallback(job, payload)
             if payload.get("dry_run"):
                 return f"dry_run: codex app-server turn/start plan {_prompt(job)}"
             try:
@@ -894,51 +1003,7 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
                 if _is_codex_native_plan_fallback_error(str(exc)):
                     return _execute_codex_native_plan_cli_fallback(job, payload)
                 raise
-        output_file: str | None = None
-        if backend == "codex" and not payload.get("dry_run"):
-            fd, output_file = tempfile.mkstemp(prefix="agenthub-codex-", suffix=".txt")
-            os.close(fd)
-        attachments: list[MaterializedAttachment] = []
-        try:
-            attachments = _materialize_attachments(payload)
-            job_for_command = _job_with_attachment_context(job, attachments)
-            image_paths = [str(attachment.path) for attachment in attachments if attachment.is_image]
-            args = build_backend_command(job_for_command, output_file=output_file, attachment_paths=image_paths)
-            timeout_seconds = _job_timeout_seconds(payload)
-            if payload.get("dry_run"):
-                return f"dry_run: {_format_command(args)}"
-            if secret_env:
-                return _run_backend_command(args, str(job.get("workspace_root") or "."), timeout_seconds, output_file=output_file, env=secret_env)
-            return _run_backend_command(args, str(job.get("workspace_root") or "."), timeout_seconds, output_file=output_file)
-        except RuntimeError as exc:
-            if str(job.get("backend") or "").lower() == "codex" and _is_codex_context_full_error(str(exc)):
-                if output_file:
-                    Path(output_file).write_text("", encoding="utf-8")
-                fallback_args = build_codex_compact_handoff_command(
-                    _job_with_attachment_context(job, attachments),
-                    output_file=output_file,
-                    attachment_paths=[str(attachment.path) for attachment in attachments if attachment.is_image],
-                )
-                if secret_env:
-                    return _run_backend_command(
-                        fallback_args,
-                        str(job.get("workspace_root") or "."),
-                        timeout_seconds,
-                        output_file=output_file,
-                        env=secret_env,
-                    )
-                return _run_backend_command(
-                    fallback_args,
-                    str(job.get("workspace_root") or "."),
-                    timeout_seconds,
-                    output_file=output_file,
-                )
-            raise
-        finally:
-            for attachment in attachments:
-                attachment.path.unlink(missing_ok=True)
-            if output_file:
-                Path(output_file).unlink(missing_ok=True)
+        return _execute_session_input_cli(job, payload, secret_env)
     if kind in {"observer", "reflector", "memory_extract"}:
         return f"{kind} accepted"
     raise ValueError(f"Unknown job kind: {kind}")

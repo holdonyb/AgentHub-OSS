@@ -1,0 +1,116 @@
+name: Self-host Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch or ref to install on the smoke VM
+        required: true
+        default: main
+      mode:
+        description: Network mode to verify
+        required: true
+        default: public_relay
+        type: choice
+        options:
+          - public_relay
+          - tailscale_private
+      skip_certbot:
+        description: Use a temporary self-signed certificate and curl -k
+        required: false
+        default: false
+        type: boolean
+      skip_packages:
+        description: Skip apt/package installation on the smoke VM
+        required: false
+        default: false
+        type: boolean
+      run_worker_smoke:
+        description: Also verify enrollment, heartbeat, claim, and complete with AGENTHUB_SMOKE_ADMIN_TOKEN
+        required: false
+        default: false
+        type: boolean
+      install_root:
+        description: Remote smoke install root
+        required: true
+        default: /opt/agenthub-smoke
+      confirm:
+        description: Type SELFHOST_SMOKE_OK to run against the configured VM
+        required: true
+
+concurrency:
+  group: agenthub-selfhost-smoke-${{ inputs.branch }}-${{ inputs.mode }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Validate confirmation
+        shell: bash
+        run: |
+          test "${{ inputs.confirm }}" = "SELFHOST_SMOKE_OK" || {
+            echo "Self-host smoke requires confirm=SELFHOST_SMOKE_OK"
+            exit 1
+          }
+
+      - name: Prepare SSH key
+        shell: bash
+        env:
+          AGENTHUB_SELFHOST_SMOKE_SSH_KEY: ${{ secrets.AGENTHUB_SELFHOST_SMOKE_SSH_KEY }}
+        run: |
+          test -n "$AGENTHUB_SELFHOST_SMOKE_SSH_KEY" || {
+            echo "Missing AGENTHUB_SELFHOST_SMOKE_SSH_KEY secret"
+            exit 1
+          }
+          key_file="$RUNNER_TEMP/agenthub_selfhost_smoke_key"
+          printf '%s\n' "$AGENTHUB_SELFHOST_SMOKE_SSH_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          echo "AGENTHUB_SELFHOST_SMOKE_KEY_FILE=$key_file" >> "$GITHUB_ENV"
+
+      - name: Run VM smoke
+        shell: bash
+        env:
+          AGENTHUB_SELFHOST_SMOKE_HOST: ${{ secrets.AGENTHUB_SELFHOST_SMOKE_HOST }}
+          AGENTHUB_SELFHOST_SMOKE_USER: ${{ secrets.AGENTHUB_SELFHOST_SMOKE_USER }}
+          AGENTHUB_SELFHOST_SMOKE_PORT: ${{ secrets.AGENTHUB_SELFHOST_SMOKE_PORT }}
+          AGENTHUB_SELFHOST_SMOKE_DOMAIN: ${{ vars.AGENTHUB_SELFHOST_SMOKE_DOMAIN }}
+          AGENTHUB_SELFHOST_SMOKE_ADMIN_EMAIL: ${{ vars.AGENTHUB_SELFHOST_SMOKE_ADMIN_EMAIL }}
+          AGENTHUB_SELFHOST_SMOKE_REPO_URL: ${{ vars.AGENTHUB_SELFHOST_SMOKE_REPO_URL }}
+          AGENTHUB_SMOKE_ADMIN_TOKEN: ${{ secrets.AGENTHUB_SMOKE_ADMIN_TOKEN }}
+        run: |
+          test -n "$AGENTHUB_SELFHOST_SMOKE_HOST" || (echo "Missing AGENTHUB_SELFHOST_SMOKE_HOST secret" && exit 1)
+          test -n "$AGENTHUB_SELFHOST_SMOKE_DOMAIN" || (echo "Missing AGENTHUB_SELFHOST_SMOKE_DOMAIN variable" && exit 1)
+
+          args=(
+            --host "$AGENTHUB_SELFHOST_SMOKE_HOST"
+            --ssh-user "${AGENTHUB_SELFHOST_SMOKE_USER:-root}"
+            --ssh-key "$AGENTHUB_SELFHOST_SMOKE_KEY_FILE"
+            --ssh-port "${AGENTHUB_SELFHOST_SMOKE_PORT:-22}"
+            --domain "$AGENTHUB_SELFHOST_SMOKE_DOMAIN"
+            --repo-url "${AGENTHUB_SELFHOST_SMOKE_REPO_URL:-https://github.com/your-org/AgentHub.git}"
+            --branch "${{ inputs.branch }}"
+            --install-root "${{ inputs.install_root }}"
+            --mode "${{ inputs.mode }}"
+            --confirm SELFHOST_SMOKE_OK
+          )
+          if [ -n "$AGENTHUB_SELFHOST_SMOKE_ADMIN_EMAIL" ]; then
+            args+=(--admin-email "$AGENTHUB_SELFHOST_SMOKE_ADMIN_EMAIL")
+          fi
+          if [ "${{ inputs.skip_certbot }}" = "true" ]; then
+            args+=(--skip-certbot)
+          fi
+          if [ "${{ inputs.skip_packages }}" = "true" ]; then
+            args+=(--skip-packages)
+          fi
+          if [ "${{ inputs.run_worker_smoke }}" = "true" ]; then
+            args+=(--run-worker-smoke)
+          fi
+
+          bash scripts/smoke-selfhost-vm.sh "${args[@]}"

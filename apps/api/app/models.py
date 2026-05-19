@@ -164,6 +164,7 @@ class AgentSession(Base):
     controls_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     runtime_metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 

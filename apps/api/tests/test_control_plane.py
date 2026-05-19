@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from sqlalchemy.dialects import sqlite
 
 from conftest import auth_headers, bootstrap_owner, create_worker, login
 from app.core.json import dumps_json, loads_json
-from app.models import AgentSession, Event, Job, SpaceMembership
+from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, SpaceMembership
 from app.routers.sessions import _session_ordering
 
 
@@ -20,6 +21,254 @@ VALID_PNG_BYTES = base64.b64decode(
 def test_anonymous_business_apis_return_401(client: TestClient) -> None:
     response = client.get("/api/sessions")
     assert response.status_code == 401
+
+
+def test_sync_status_changes_only_when_relevant_state_changes(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-sync",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-sync",
+            "status": "ready",
+            "title": "AgentHub sync",
+            "last_message": "ready",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    first = client.get("/api/sync/status?selected_session_id=sess-sync", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert first_payload["selected_session_id"] == "sess-sync"
+
+    unchanged = client.get("/api/sync/status?selected_session_id=sess-sync", headers=headers)
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json() == first_payload
+
+    input_response = client.post(
+        "/api/sessions/sess-sync/input",
+        json={"prompt": "同步状态应该变化"},
+        headers=headers,
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    changed = client.get("/api/sync/status?selected_session_id=sess-sync", headers=headers)
+    assert changed.status_code == 200, changed.text
+    changed_payload = changed.json()
+    assert changed_payload["sessions_digest"] != first_payload["sessions_digest"]
+    assert changed_payload["jobs_digest"] != first_payload["jobs_digest"]
+    assert changed_payload["selected_timeline_digest"] != first_payload["selected_timeline_digest"]
+    assert changed_payload["workers_digest"] == first_payload["workers_digest"]
+
+
+def test_inbox_sync_returns_only_changed_sessions_and_archive_removals(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    for session_id, title in [("sess-alpha", "Alpha"), ("sess-beta", "Beta")]:
+        response = client.post(
+            "/api/sessions",
+            json={
+                "session_id": session_id,
+                "backend": "codex",
+                "worker_id": worker["worker"]["worker_id"],
+                "workspace_root": "E:/work/AgentHub",
+                "project_name": "AgentHub",
+                "namespace": "default",
+                "mode": "direct_reply",
+                "runtime_session_ref": f"codex/{session_id}",
+                "status": "ready",
+                "title": title,
+                "last_message": "ready",
+                "metadata": {},
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    first = client.get("/api/sync/inbox", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert {item["session_id"] for item in first_payload["items"]} == {"sess-alpha", "sess-beta"}
+    assert first_payload["removed_session_ids"] == []
+    assert first_payload["cursor"]
+
+    unchanged = client.get("/api/sync/inbox", headers=headers, params={"cursor": first_payload["cursor"]})
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["items"] == []
+    assert unchanged.json()["removed_session_ids"] == []
+
+    queued = client.post(
+        "/api/sessions/sess-alpha/input",
+        json={"prompt": "新的输入"},
+        headers=headers,
+    )
+    assert queued.status_code == 200, queued.text
+
+    changed = client.get("/api/sync/inbox", headers=headers, params={"cursor": first_payload["cursor"]})
+    assert changed.status_code == 200, changed.text
+    changed_payload = changed.json()
+    assert [item["session_id"] for item in changed_payload["items"]] == ["sess-alpha"]
+    assert changed_payload["items"][0]["status"] == "queued"
+    assert changed_payload["removed_session_ids"] == []
+
+    archived = client.post("/api/sessions/sess-beta/archive", headers=headers)
+    assert archived.status_code == 200, archived.text
+
+    removed = client.get("/api/sync/inbox", headers=headers, params={"cursor": changed_payload["cursor"]})
+    assert removed.status_code == 200, removed.text
+    removed_payload = removed.json()
+    assert removed_payload["items"] == []
+    assert removed_payload["removed_session_ids"] == ["sess-beta"]
+
+
+def test_session_sync_returns_only_new_timeline_rows_and_recent_session_jobs(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta",
+            "status": "ready",
+            "title": "Delta",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {"seq": 1, "item_type": "user_message", "role": "user", "text": "hello"},
+                {"seq": 2, "item_type": "assistant_message", "role": "assistant", "text": "world"},
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert [item["seq"] for item in first_payload["items"]] == [1, 2]
+    assert first_payload["next_after_seq"] == 2
+    assert first_payload["session"]["session_id"] == "sess-delta"
+
+    queued = client.post(
+        "/api/sessions/sess-delta/input",
+        json={"prompt": "继续执行"},
+        headers=headers,
+    )
+    assert queued.status_code == 200, queued.text
+    job_id = queued.json()["job"]["job_id"]
+
+    second = client.get("/api/sync/session/sess-delta?after_seq=2", headers=headers)
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert [item["seq"] for item in second_payload["items"]] == [3]
+    assert second_payload["items"][0]["text"] == "继续执行"
+    assert second_payload["next_after_seq"] == 3
+    assert any(job["job_id"] == job_id for job in second_payload["jobs"])
+
+    unchanged = client.get("/api/sync/session/sess-delta?after_seq=3", headers=headers)
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["items"] == []
+
+
+def test_permission_sync_returns_incremental_pending_and_resolved_updates(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-perm-delta",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-perm-delta",
+            "status": "needs_reply",
+            "title": "Permission delta",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    with client.app.state.SessionLocal() as db:
+        permission = AgentPermission(
+            space_id=created.json()["session"]["space_id"],
+            session_id="sess-perm-delta",
+            worker_id=worker_id,
+            backend="codex",
+            kind="plan_exit",
+            title="计划已生成",
+            description="请选择下一步",
+            status="pending",
+        )
+        db.add(permission)
+        db.commit()
+        permission_id = permission.permission_id
+
+    first = client.get("/api/sync/permissions", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert [item["permission_id"] for item in first_payload["items"]] == [permission_id]
+    assert first_payload["items"][0]["status"] == "pending"
+    assert first_payload["cursor"]
+
+    answered = client.post(
+        f"/api/permissions/{permission_id}/respond",
+        json={"action": "answer", "response": {"text": "直接实现"}},
+        headers=headers,
+    )
+    assert answered.status_code == 200, answered.text
+
+    second = client.get("/api/sync/permissions", headers=headers, params={"cursor": first_payload["cursor"]})
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert [item["permission_id"] for item in second_payload["items"]] == [permission_id]
+    assert second_payload["items"][0]["status"] == "answered"
+
+    unchanged = client.get("/api/sync/permissions", headers=headers, params={"cursor": second_payload["cursor"]})
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["items"] == []
 
 
 def test_session_ordering_compiles_for_old_sqlite_without_nulls_last() -> None:
@@ -111,7 +360,362 @@ def test_session_input_creates_queued_job_and_audit_event(client: TestClient) ->
     assert any(event["event_type"] == "job.create" for event in events)
 
 
-def test_session_input_accepts_one_image_attachment_and_redacts_public_payload(client: TestClient) -> None:
+def test_stale_worker_discovery_does_not_rewind_recent_user_input(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-rewind",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-rewind",
+            "status": "ready",
+            "title": "AgentHub planning",
+            "last_message": "旧的 assistant 消息",
+            "last_activity_at": "2026-04-25T10:00:00Z",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-rewind/input",
+        json={"prompt": "刚从手机发出的新消息"},
+        headers=headers,
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    with client.app.state.SessionLocal() as db:
+        local_session = db.query(AgentSession).filter(AgentSession.session_id == "sess-rewind").one()
+        local_activity = local_session.last_activity_at
+        assert local_session.last_message == "刚从手机发出的新消息"
+        assert local_session.status == "queued"
+
+    stale_discovery = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-rewind",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-rewind",
+            "status": "ready",
+            "title": "AgentHub planning",
+            "last_message": "旧的 assistant 消息",
+            "last_activity_at": "2026-04-25T10:00:00Z",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert stale_discovery.status_code == 200, stale_discovery.text
+
+    with client.app.state.SessionLocal() as db:
+        refreshed = db.query(AgentSession).filter(AgentSession.session_id == "sess-rewind").one()
+        assert refreshed.last_activity_at == local_activity
+        assert refreshed.last_message == "刚从手机发出的新消息"
+        assert refreshed.status == "queued"
+
+
+def test_stale_timeline_replace_does_not_swallow_repeated_recent_user_input(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-repeat-rewind",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-repeat-rewind",
+            "status": "ready",
+            "title": "AgentHub repeated prompt",
+            "last_message": "ready",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    old_timeline = {
+        "worker_id": worker_id,
+        "replace": True,
+        "items": [
+            {
+                "seq": 1,
+                "item_type": "user_message",
+                "role": "user",
+                "text": "Implement the plan",
+                "created_at": "2026-04-25T10:00:00Z",
+            },
+            {
+                "seq": 2,
+                "item_type": "assistant_message",
+                "role": "assistant",
+                "text": "旧回复",
+                "created_at": "2026-04-25T10:01:00Z",
+            },
+        ],
+    }
+    timeline_response = client.post(
+        "/api/internal/sessions/sess-repeat-rewind/timeline",
+        headers=worker_headers,
+        json=old_timeline,
+    )
+    assert timeline_response.status_code == 200, timeline_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-repeat-rewind/input",
+        json={"prompt": "Implement the plan"},
+        headers=headers,
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    with client.app.state.SessionLocal() as db:
+        local_session = db.query(AgentSession).filter(AgentSession.session_id == "sess-repeat-rewind").one()
+        local_activity = local_session.last_activity_at
+        assert local_activity is not None
+        assert local_activity > datetime(2026, 4, 25, 10, 1)
+        assert local_session.last_message == "Implement the plan"
+
+    stale_replace = client.post(
+        "/api/internal/sessions/sess-repeat-rewind/timeline",
+        headers=worker_headers,
+        json=old_timeline,
+    )
+    assert stale_replace.status_code == 200, stale_replace.text
+
+    with client.app.state.SessionLocal() as db:
+        refreshed = db.query(AgentSession).filter(AgentSession.session_id == "sess-repeat-rewind").one()
+        rows = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-repeat-rewind")
+            .order_by(AgentTimeline.seq.asc())
+            .all()
+        )
+        local_rows = [row for row in rows if loads_json(row.payload_json, {}).get("source") == "session_input"]
+        assert len(local_rows) == 1
+        assert local_rows[0].text == "Implement the plan"
+        assert refreshed.last_activity_at == local_activity
+        assert refreshed.last_message == "Implement the plan"
+
+
+def test_session_input_claim_and_completion_refresh_session_activity(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-activity-refresh",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-activity-refresh",
+            "status": "ready",
+            "title": "AgentHub activity refresh",
+            "last_message": "旧消息",
+            "last_activity_at": "2026-04-25T10:00:00Z",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-activity-refresh/input",
+        json={"prompt": "继续"},
+        headers=headers,
+    )
+    assert input_response.status_code == 200, input_response.text
+    job_id = input_response.json()["job"]["job_id"]
+    stale_activity = datetime(2026, 4, 25, 10, 0)
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-activity-refresh").one()
+        session.last_activity_at = stale_activity
+        session.updated_at = stale_activity
+        db.commit()
+
+    claimed = client.post("/api/internal/jobs/claim", headers=worker_headers, json={"worker_id": worker_id})
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["job"]["job_id"] == job_id
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-activity-refresh").one()
+        claimed_activity = session.last_activity_at
+        assert claimed_activity is not None
+        assert claimed_activity > stale_activity
+        assert session.status == "running"
+
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "result_text": "执行完成，等待下一步"},
+    )
+    assert completed.status_code == 200, completed.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-activity-refresh").one()
+        assert session.last_activity_at is not None
+        assert session.last_activity_at > claimed_activity
+        assert session.status == "ready"
+        assert session.last_message == "执行完成，等待下一步"
+
+
+def test_stale_timeline_sync_does_not_rewind_claim_activity(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-claim-rewind",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-claim-rewind",
+            "status": "ready",
+            "title": "AgentHub claim rewind",
+            "last_message": "旧消息",
+            "last_activity_at": "2026-04-25T10:00:00Z",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-claim-rewind/input",
+        json={"prompt": "继续"},
+        headers=headers,
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    claimed = client.post("/api/internal/jobs/claim", headers=worker_headers, json={"worker_id": worker_id})
+    assert claimed.status_code == 200, claimed.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-claim-rewind").one()
+        claimed_activity = session.last_activity_at
+        assert claimed_activity is not None
+        assert session.status == "running"
+
+    stale_timeline = client.post(
+        "/api/internal/sessions/sess-claim-rewind/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "replace": True,
+            "items": [
+                {
+                    "seq": 1,
+                    "item_type": "user_message",
+                    "role": "user",
+                    "text": "旧问题",
+                    "created_at": "2026-04-25T10:00:00Z",
+                },
+                {
+                    "seq": 2,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "旧回复",
+                    "created_at": "2026-04-25T10:01:00Z",
+                },
+            ],
+        },
+    )
+    assert stale_timeline.status_code == 200, stale_timeline.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-claim-rewind").one()
+        assert session.last_activity_at == claimed_activity
+        assert session.status == "running"
+
+
+def test_session_archive_hides_from_inbox_and_can_be_restored(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    for session_id, title in [("keep-session", "Keep visible"), ("archive-session", "Archive this")]:
+        response = client.post(
+            "/api/sessions",
+            json={
+                "session_id": session_id,
+                "backend": "codex",
+                "worker_id": worker["worker"]["worker_id"],
+                "workspace_root": "E:/work/AgentHub",
+                "project_name": "AgentHub",
+                "namespace": "default",
+                "mode": "direct_reply",
+                "runtime_session_ref": f"codex/{session_id}",
+                "status": "ready",
+                "title": title,
+                "last_message": "ready",
+                "metadata": {},
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+
+    archived = client.post("/api/sessions/archive-session/archive", headers=headers)
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["session"]["archived_at"] is not None
+
+    inbox = client.get("/api/sessions", headers=headers).json()["items"]
+    assert [session["session_id"] for session in inbox] == ["keep-session"]
+
+    archived_list = client.get("/api/sessions?archived=true", headers=headers).json()["items"]
+    assert [session["session_id"] for session in archived_list] == ["archive-session"]
+
+    restored = client.post("/api/sessions/archive-session/unarchive", headers=headers)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["session"]["archived_at"] is None
+
+    restored_inbox = client.get("/api/sessions", headers=headers).json()["items"]
+    assert {session["session_id"] for session in restored_inbox} == {"keep-session", "archive-session"}
+
+    events = client.get("/api/events", headers=headers).json()["items"]
+    assert any(event["event_type"] == "session.archive" for event in events)
+    assert any(event["event_type"] == "session.unarchive" for event in events)
+
+
+def test_session_input_accepts_multiple_image_attachments_and_redacts_public_payload(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
     worker = create_worker(client)
@@ -145,7 +749,12 @@ def test_session_input_accepts_one_image_attachment_and_redacts_public_payload(c
                     "filename": "screen.png",
                     "content_type": "image/png",
                     "data_base64": image_data,
-                }
+                },
+                {
+                    "filename": "detail.png",
+                    "content_type": "image/png",
+                    "data_base64": image_data,
+                },
             ],
         },
         headers=auth_headers(owner_login),
@@ -154,18 +763,95 @@ def test_session_input_accepts_one_image_attachment_and_redacts_public_payload(c
 
     public_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
     assert public_payload["attachments"] == [
-        {"filename": "screen.png", "content_type": "image/png", "size_bytes": len(VALID_PNG_BYTES)}
+        {"filename": "screen.png", "content_type": "image/png", "size_bytes": len(VALID_PNG_BYTES)},
+        {"filename": "detail.png", "content_type": "image/png", "size_bytes": len(VALID_PNG_BYTES)},
     ]
     assert "data_base64" not in str(public_payload)
 
     with client.app.state.SessionLocal() as db:
         job = db.query(Job).filter(Job.target_session_id == "sess-image").one()
         raw_payload = loads_json(job.payload_json, {})
-    assert raw_payload["attachments"][0]["data_base64"] == image_data
+    assert [item["data_base64"] for item in raw_payload["attachments"]] == [image_data, image_data]
+
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+    claimed = client.post(
+        "/api/internal/jobs/claim",
+        headers=worker_headers,
+        json={"worker_id": worker["worker"]["worker_id"]},
+    )
+    assert claimed.status_code == 200, claimed.text
+    claimed_attachments = claimed.json()["job"]["payload"]["attachments"]
+    assert [item["filename"] for item in claimed_attachments] == ["screen.png", "detail.png"]
+    assert [item["data_base64"] for item in claimed_attachments] == [image_data, image_data]
 
     timeline = client.get("/api/sessions/sess-image/timeline", headers=auth_headers(owner_login)).json()["items"]
     assert timeline[0]["payload"]["attachments"][0]["filename"] == "screen.png"
+    assert timeline[0]["payload"]["attachments"][1]["filename"] == "detail.png"
     assert "data_base64" not in str(timeline)
+
+
+def test_worker_timeline_replace_preserves_session_input_attachment_metadata(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    image_data = base64.b64encode(VALID_PNG_BYTES).decode("ascii")
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-image-preserve",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-image-preserve",
+            "status": "ready",
+            "title": "Attachment preserve",
+            "last_message": "ready",
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-image-preserve/input",
+        json={
+            "prompt": "",
+            "attachments": [
+                {
+                    "filename": "screen.png",
+                    "content_type": "image/png",
+                    "data_base64": image_data,
+                }
+            ],
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    timeline_response = client.post(
+        "/api/internal/sessions/sess-image-preserve/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "replace": True,
+            "items": [
+                {"seq": 1, "item_type": "assistant_message", "role": "assistant", "text": "旧 transcript 快照"},
+            ],
+        },
+    )
+    assert timeline_response.status_code == 200, timeline_response.text
+
+    timeline = client.get("/api/sessions/sess-image-preserve/timeline", headers=auth_headers(owner_login)).json()["items"]
+    attachment_row = next(item for item in timeline if item["item_type"] == "user_message")
+    assert attachment_row["text"] == "请看这张图片。"
+    assert attachment_row["payload"]["attachments"][0]["filename"] == "screen.png"
+    assert attachment_row["payload"]["job_id"] == input_response.json()["job"]["job_id"]
 
 
 def test_session_input_rejects_invalid_image_attachment_bytes(client: TestClient) -> None:
@@ -324,11 +1010,11 @@ def test_admin_can_cancel_running_session_input_to_unblock_session(client: TestC
     assert stale_worker_complete.status_code == 409
 
 
-def test_session_input_rejects_multiple_image_attachments(client: TestClient) -> None:
+def test_session_input_rejects_too_many_attachments(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
     worker = create_worker(client)
-    image_data = base64.b64encode(b"fake-png-bytes").decode("ascii")
+    image_data = base64.b64encode(VALID_PNG_BYTES).decode("ascii")
 
     client.post(
         "/api/sessions",
@@ -353,8 +1039,8 @@ def test_session_input_rejects_multiple_image_attachments(client: TestClient) ->
         json={
             "prompt": "",
             "attachments": [
-                {"filename": "a.png", "content_type": "image/png", "data_base64": image_data},
-                {"filename": "b.png", "content_type": "image/png", "data_base64": image_data},
+                {"filename": f"{index}.png", "content_type": "image/png", "data_base64": image_data}
+                for index in range(6)
             ],
         },
         headers=auth_headers(owner_login),
@@ -509,6 +1195,251 @@ def test_codex_plan_session_input_uses_native_payload_without_downgrading_contro
     assert job_payload["controls"]["sandbox_mode"] == "danger-full-access"
     assert job_payload["controls"]["approval_mode"] == "never"
     assert job_payload["controls"]["yolo"] is True
+
+
+def test_codex_plan_completion_writes_plan_timeline_for_cli_fallback(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-plan-fallback",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-plan-fallback",
+            "status": "ready",
+            "title": "AgentHub plan fallback",
+            "last_message": "ready",
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-plan-fallback/input",
+        json={"prompt": "先列计划", "reply_mode": "plan"},
+        headers=auth_headers(owner_login),
+    )
+    assert input_response.status_code == 200, input_response.text
+
+    claimed = client.post("/api/internal/jobs/claim", headers=worker_headers, json={"worker_id": worker_id})
+    assert claimed.status_code == 200, claimed.text
+    job_id = claimed.json()["job"]["job_id"]
+    result_text = "<proposed_plan>\n1. 修复附件\n2. 修复计划模式\n</proposed_plan>"
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "result_text": result_text},
+    )
+    assert completed.status_code == 200, completed.text
+
+    timeline = client.get("/api/sessions/sess-plan-fallback/timeline", headers=auth_headers(owner_login)).json()["items"]
+    plan_item = next(item for item in timeline if item["item_type"] == "assistant_message" and "修复计划模式" in item["text"])
+    assert plan_item["payload"]["source"] == "job_complete_plan_result"
+    assert plan_item["payload"]["job_id"] == job_id
+
+    permissions = client.get("/api/permissions", headers=auth_headers(owner_login)).json()["items"]
+    permission = next(item for item in permissions if item["session_id"] == "sess-plan-fallback")
+    assert permission["kind"] == "plan_exit"
+    assert "修复附件" in permission["detail"]["plan_text"]
+
+
+def test_codex_goal_session_input_uses_native_default_turn(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-goal",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-goal",
+            "status": "ready",
+            "title": "AgentHub goal mode",
+            "last_message": "ready",
+            "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-goal/input",
+        json={"prompt": "/goal 完成移动端收件箱打磨并通过测试"},
+        headers=auth_headers(owner_login),
+    )
+
+    assert input_response.status_code == 200, input_response.text
+    job_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
+    assert job_payload["reply_mode"] == "direct"
+    assert job_payload["raw_prompt"] == "/goal 完成移动端收件箱打磨并通过测试"
+    assert job_payload["prompt"] == "/goal 完成移动端收件箱打磨并通过测试"
+    assert job_payload["native_plan_mode"] is False
+    assert job_payload["native_goal_command"] is True
+    assert job_payload["native_turn_mode"] == "default"
+
+
+def test_codex_direct_session_input_uses_native_default_turn(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-direct-default",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-direct-default",
+            "status": "ready",
+            "title": "AgentHub direct default",
+            "last_message": "ready",
+            "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-direct-default/input",
+        json={"prompt": "不用计划了，直接执行这个修复。"},
+        headers=auth_headers(owner_login),
+    )
+
+    assert input_response.status_code == 200, input_response.text
+    job_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
+    assert job_payload["reply_mode"] == "direct"
+    assert job_payload["raw_prompt"] == "不用计划了，直接执行这个修复。"
+    assert job_payload["prompt"] == "不用计划了，直接执行这个修复。"
+    assert job_payload["native_plan_mode"] is False
+    assert job_payload["native_turn_mode"] == "default"
+
+
+def test_new_session_input_expires_prior_pending_plan_exit(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    space_id = worker["worker"]["space_id"]
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "expire-old-plan",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/expire-old-plan",
+            "status": "needs_reply",
+            "title": "Expire old plan",
+            "last_message": "计划已生成",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    from app.core.json import dumps_json
+    from app.models import AgentPermission
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            AgentPermission(
+                space_id=space_id,
+                session_id="expire-old-plan",
+                worker_id=worker_id,
+                backend="codex",
+                kind="plan_exit",
+                title="计划已生成",
+                description="旧计划",
+                detail_json=dumps_json({"source": "codex_plan_exit", "plan_hash": "old", "plan_text": "旧计划"}),
+                actions_json=dumps_json({"choices": []}),
+                status="pending",
+                response_json=dumps_json({}),
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/sessions/expire-old-plan/input",
+        json={"prompt": "不用旧计划了，直接修复。"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    pending = client.get("/api/permissions?session_id=expire-old-plan&status=pending", headers=headers).json()["items"]
+    assert pending == []
+    permissions = client.get("/api/permissions?session_id=expire-old-plan", headers=headers).json()["items"]
+    expired = next(item for item in permissions if item["kind"] == "plan_exit")
+    assert expired["status"] == "expired"
+    assert expired["response"]["action"] == "expired"
+
+
+def test_claude_goal_session_input_is_marked_and_preserved(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-claude-goal",
+            "backend": "claude",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-claude-goal",
+            "status": "ready",
+            "title": "AgentHub Claude goal",
+            "last_message": "ready",
+            "controls": {"permission_mode": "auto"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/sess-claude-goal/input",
+        json={"prompt": "  /goal 所有移动端搜索体验测试通过"},
+        headers=auth_headers(owner_login),
+    )
+
+    assert input_response.status_code == 200, input_response.text
+    job_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
+    assert job_payload["reply_mode"] == "direct"
+    assert job_payload["raw_prompt"] == "/goal 所有移动端搜索体验测试通过"
+    assert job_payload["prompt"] == "/goal 所有移动端搜索体验测试通过"
+    assert job_payload["native_plan_mode"] is False
+    assert job_payload["native_goal_command"] is True
+    assert "native_turn_mode" not in job_payload
 
 
 def test_session_input_rejects_worker_without_backend(client: TestClient) -> None:

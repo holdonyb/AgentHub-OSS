@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case
@@ -25,7 +25,15 @@ from app.schemas import (
     SessionRenameIn,
     SessionStartIn,
 )
-from app.services import SESSION_STATES, job_out, session_out, strip_ansi, sync_session_from_timeline, upsert_timeline_items
+from app.services import (
+    SESSION_STATES,
+    expire_superseded_pending_permissions,
+    job_out,
+    session_out,
+    strip_ansi,
+    sync_session_from_timeline,
+    upsert_timeline_items,
+)
 
 router = APIRouter()
 ACK_TITLES = {"ok", "okay", "好", "好的", "可以", "行", "继续", "继续吧", "收到", "回复了"}
@@ -56,6 +64,12 @@ def _is_machine_title(value: str) -> bool:
         return True
     machine_chars = sum(ch.isdigit() or ch in "abcdef-_" for ch in normalized)
     return machine_chars >= max(12, int(len(normalized) * 0.65))
+
+
+def _naive_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
 
 
 def _workspace_label(workspace_root: str) -> str:
@@ -131,17 +145,17 @@ def _require_worker_backend(db: DbSession, session: AgentSession) -> None:
     _require_worker_backend_available(db, session.space_id, session.worker_id, session.backend)
 
 
-def _session_has_running_input_job(db: DbSession, session_id: str, space_id: str | None) -> bool:
-    return (
-        db.query(Job.job_id)
+def _active_session_input_job_status(db: DbSession, session_id: str, space_id: str | None) -> str | None:
+    row = (
+        db.query(Job.status)
         .filter(Job.space_id == space_id)
         .filter(Job.target_session_id == session_id)
         .filter(Job.kind == "session_input")
-        .filter(Job.status == "running")
+        .filter(Job.status.in_(["running", "queued"]))
+        .order_by(case((Job.status == "running", 0), else_=1).asc(), Job.updated_at.desc())
         .first()
-        is not None
     )
-
+    return row[0] if row is not None else None
 
 def _session_has_pending_permission(db: DbSession, session_id: str, space_id: str | None) -> bool:
     return (
@@ -157,8 +171,9 @@ def _session_has_pending_permission(db: DbSession, session_id: str, space_id: st
 def _merged_discovered_status(db: DbSession, session: AgentSession, discovered_status: str) -> str:
     if _session_has_pending_permission(db, session.session_id, session.space_id):
         return "needs_reply"
-    if _session_has_running_input_job(db, session.session_id, session.space_id):
-        return "running"
+    active_input_status = _active_session_input_job_status(db, session.session_id, session.space_id)
+    if active_input_status:
+        return active_input_status
     return discovered_status
 
 
@@ -250,6 +265,18 @@ def _controls_for_reply_mode(backend: str, controls: dict[str, object], reply_mo
     return next_controls
 
 
+NATIVE_GOAL_BACKENDS = {"codex", "claude"}
+
+
+def _is_native_goal_command(backend: str, prompt: str) -> bool:
+    if backend.strip().lower() not in NATIVE_GOAL_BACKENDS:
+        return False
+    text = prompt.lstrip()
+    if not text.lower().startswith("/goal"):
+        return False
+    return len(text) == 5 or text[5].isspace()
+
+
 def _normalize_controls(value: dict[str, object] | None) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
@@ -295,6 +322,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
         db.add(session)
     elif session.space_id is None:
         session.space_id = space_id
+    previous_activity_at = session.last_activity_at
     existing_controls = loads_json(session.controls_json, {})
     runtime_metadata = dict(payload.runtime_metadata)
     timeline_items = runtime_metadata.pop("timeline", [])
@@ -314,10 +342,17 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     session.llm_title = payload.llm_title
     session.display_title = display_title
     session.title = display_title
-    session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
-    session.last_message = payload.last_message
-    session.last_activity_at = payload.last_activity_at
-    session.last_role = payload.last_role
+    incoming_activity_at = _naive_utc(payload.last_activity_at)
+    should_accept_activity = previous_activity_at is None or (
+        incoming_activity_at is not None and incoming_activity_at >= previous_activity_at
+    )
+    if should_accept_activity:
+        session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
+        session.last_message = payload.last_message
+        session.last_activity_at = incoming_activity_at
+        session.last_role = payload.last_role
+    elif not session.activity_summary:
+        session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
     session.controls_json = dumps_json(existing_controls or payload.controls)
     session.runtime_metadata_json = dumps_json(runtime_metadata)
     session.metadata_json = dumps_json(payload.metadata)
@@ -357,10 +392,12 @@ def list_sessions(
     worker: str | None = None,
     status: str | None = None,
     search: str = "",
+    archived: bool = False,
 ):
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
     query = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id)
+    query = query.filter(AgentSession.archived_at.is_not(None) if archived else AgentSession.archived_at.is_(None))
     if backend:
         query = query.filter(AgentSession.backend == backend)
     if project:
@@ -389,6 +426,37 @@ def list_sessions(
             ).lower()
         ]
     return {"items": [session_out(session) for session in sessions]}
+
+
+def _require_session(db: DbSession, space_id: str | None, session_id: str) -> AgentSession:
+    session = db.query(AgentSession).filter(AgentSession.space_id == space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    return session
+
+
+def _set_session_archive(
+    *,
+    session_id: str,
+    archived: bool,
+    db: DbSession,
+    actor: Actor,
+) -> dict[str, object]:
+    session = _require_session(db, actor.space_id, session_id)
+    now = utcnow()
+    session.archived_at = now if archived else None
+    session.updated_at = now
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="session",
+        source_id=session.session_id,
+        event_type="session.archive" if archived else "session.unarchive",
+    )
+    db.commit()
+    return {"session": session_out(session)}
 
 
 @router.post("/api/sessions/start")
@@ -652,9 +720,15 @@ def _attachment_summaries(attachments: list[dict[str, object]]) -> list[dict[str
 
 
 def _normalize_session_attachments(payload: SessionInputIn) -> list[dict[str, object]]:
-    if len(payload.attachments) > 1:
-        raise HTTPException(status_code=400, detail={"message": "Only one attachment is supported", "code": "ATTACHMENT_LIMIT"})
     settings = get_settings()
+    if len(payload.attachments) > settings.max_session_attachments:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"At most {settings.max_session_attachments} attachments are supported",
+                "code": "ATTACHMENT_LIMIT",
+            },
+        )
     normalized: list[dict[str, object]] = []
     for attachment in payload.attachments:
         content_type = attachment.content_type.split(";", 1)[0].strip().lower()
@@ -693,17 +767,42 @@ def send_session_input(
     if not raw_prompt and not attachments:
         raise HTTPException(status_code=400, detail={"message": "Prompt cannot be empty", "code": "PROMPT_EMPTY"})
     if not raw_prompt:
-        has_image = any(str(item.get("content_type") or "").startswith("image/") for item in attachments)
-        raw_prompt = "请看这张图片。" if has_image else "请看这个附件。"
+        image_count = sum(1 for item in attachments if str(item.get("content_type") or "").startswith("image/"))
+        if image_count == len(attachments) == 1:
+            raw_prompt = "请看这张图片。"
+        elif image_count == len(attachments):
+            raw_prompt = "请看这些图片。"
+        else:
+            raw_prompt = "请看这些附件。"
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
     _require_worker_backend(db, session)
     session_was_running = _session_runtime_busy(session)
     reply_mode = payload.reply_mode
-    native_plan_mode = reply_mode == "plan" and session.backend.strip().lower() == "codex"
+    backend_name = session.backend.strip().lower()
+    native_plan_mode = reply_mode == "plan" and backend_name == "codex"
+    native_goal_command = _is_native_goal_command(session.backend, raw_prompt)
+    native_default_turn = backend_name == "codex" and reply_mode == "direct" and not attachments
+    native_turn_mode = "default" if native_default_turn or (backend_name == "codex" and native_goal_command) else None
     job_prompt = raw_prompt if native_plan_mode or reply_mode != "plan" else _plan_prompt(raw_prompt, session.backend)
     controls = _controls_for_reply_mode(session.backend, loads_json(session.controls_json, {}), reply_mode)
+    job_payload = {
+        "prompt": job_prompt,
+        "raw_prompt": raw_prompt,
+        "reply_mode": reply_mode,
+        "native_plan_mode": native_plan_mode,
+        "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+        "controls": controls,
+        "handoff_context": _session_handoff_context(db, session),
+        "runtime_session_ref": session.runtime_session_ref,
+        "defer_until_session_ready": session_was_running,
+        "attachments": attachments,
+    }
+    if native_turn_mode:
+        job_payload["native_turn_mode"] = native_turn_mode
+    if native_goal_command:
+        job_payload["native_goal_command"] = True
     job = Job(
         space_id=session.space_id,
         kind="session_input",
@@ -712,20 +811,7 @@ def send_session_input(
         backend=session.backend,
         workspace_root=session.workspace_root,
         namespace=session.namespace,
-        payload_json=dumps_json(
-            {
-                "prompt": job_prompt,
-                "raw_prompt": raw_prompt,
-                "reply_mode": reply_mode,
-                "native_plan_mode": native_plan_mode,
-                "timeout_seconds": get_settings().default_session_job_timeout_seconds,
-                "controls": controls,
-                "handoff_context": _session_handoff_context(db, session),
-                "runtime_session_ref": session.runtime_session_ref,
-                "defer_until_session_ready": session_was_running,
-                "attachments": attachments,
-            }
-        ),
+        payload_json=dumps_json(job_payload),
         created_by=actor.actor_id,
     )
     if not session_was_running:
@@ -733,6 +819,12 @@ def send_session_input(
     session.updated_at = utcnow()
     db.add(job)
     db.flush()
+    expire_superseded_pending_permissions(
+        db,
+        session,
+        reason="new_session_input",
+        superseded_by_job_id=job.job_id,
+    )
     upsert_timeline_items(
         db,
         session.session_id,
@@ -824,6 +916,24 @@ def update_session_controls(
     )
     db.commit()
     return {"session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/archive")
+def archive_session(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    return _set_session_archive(session_id=session_id, archived=True, db=db, actor=actor)
+
+
+@router.post("/api/sessions/{session_id}/unarchive")
+def unarchive_session(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    return _set_session_archive(session_id=session_id, archived=False, db=db, actor=actor)
 
 
 @router.post("/api/sessions/{session_id}/terminate")

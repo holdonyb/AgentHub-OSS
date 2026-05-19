@@ -17,6 +17,54 @@ log() {
   printf '[agenthub-deploy] %s\n' "$*"
 }
 
+archive_root_backups() {
+  mkdir -p .runtime/config-backups
+  shopt -s nullglob
+  local backup moved=0
+  for backup in .env.backup-*; do
+    mv -f -- "$backup" ".runtime/config-backups/"
+    moved=1
+  done
+  shopt -u nullglob
+
+  if [[ "$moved" == "1" ]]; then
+    log "archived root config backups into .runtime/config-backups"
+  fi
+}
+
+prepare_git_checkout() {
+  local target_branch="$1"
+  local remote_ref="origin/$target_branch"
+
+  git rev-parse --is-inside-work-tree >/dev/null
+
+  log "fetching $remote_ref"
+  git fetch --prune origin "$target_branch"
+  git show-ref --verify --quiet "refs/remotes/$remote_ref"
+
+  if [[ -n "$(git status --short --untracked-files=no)" ]]; then
+    log "discarding tracked working tree drift before deploy checkout"
+    git reset --hard HEAD
+  fi
+
+  log "checking out canonical local branch $target_branch"
+  git checkout -B "$target_branch" "$remote_ref"
+  git branch --set-upstream-to "$remote_ref" "$target_branch" >/dev/null 2>&1 || true
+  git reset --hard "$remote_ref"
+
+  archive_root_backups
+
+  log "cleaning repo-local untracked artifacts"
+  git clean -fdx \
+    -e .env \
+    -e .venv \
+    -e .runtime \
+    -e data
+
+  log "current branch: $(git rev-parse --abbrev-ref HEAD)"
+  log "current revision: $(git rev-parse --short HEAD)"
+}
+
 wait_for_health() {
   local url="$1"
   local attempts="${AGENTHUB_HEALTH_ATTEMPTS:-30}"
@@ -139,10 +187,7 @@ if ! flock -w 300 9; then
 fi
 
 log "project root: $project_root"
-log "fetching origin/$branch"
-git fetch --prune origin "$branch"
-git merge --ff-only FETCH_HEAD
-log "current revision: $(git rev-parse --short HEAD)"
+prepare_git_checkout "$branch"
 
 if [[ "$skip_pip" != "1" && -x ".venv/bin/python" ]]; then
   log "installing Python API dependencies"

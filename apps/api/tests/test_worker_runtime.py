@@ -121,10 +121,12 @@ def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
     assert codex_features["interaction_bridge"] == "native"
     assert codex_features["request_user_input"] is True
     assert codex_features["plan_exit"] is True
+    assert codex_features["goal"] is True
 
     claude_features = by_backend["claude"]["features"]
     assert claude_features["interaction_bridge"] == "compatibility"
     assert claude_features["plan_result_choices"] is True
+    assert claude_features["goal"] is True
     assert claude_features["native_runtime_prompts"] is False
 
     kimi_features = by_backend["kimi"]["features"]
@@ -290,6 +292,51 @@ def test_worker_runtime_batch_sizing_does_not_reserialize_accumulated_lists(monk
     assert len(timeline_batches[0].items) == 10
     assert serialized_sessions_lengths == [0]
     assert serialized_timeline_lengths == [0]
+
+
+def test_worker_runtime_skips_unchanged_timeline_publish_on_next_tick() -> None:
+    client = FakeClient()
+    timeline = [
+        {
+            "seq": 1,
+            "item_type": "assistant_message",
+            "role": "assistant",
+            "text": "同一份 transcript 不应该每轮重复上传",
+        }
+    ]
+    runtime = WorkerRuntime(
+        client=client,
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda roots: [
+            {
+                "session_id": "codex-traffic",
+                "backend": "codex",
+                "workspace_root": str(roots[0]),
+                "project_name": "work",
+                "runtime_session_ref": "codex-traffic.jsonl",
+                "timeline": timeline,
+            }
+        ],
+    )
+
+    runtime.run_once()
+    runtime.run_once()
+
+    assert len(client.published_timelines) == 1
+
+    timeline.append(
+        {
+            "seq": 2,
+            "item_type": "assistant_message",
+            "role": "assistant",
+            "text": "变更后才需要再次上传",
+        }
+    )
+    runtime.run_once()
+
+    assert len(client.published_timelines) == 2
 
 
 def test_worker_runtime_keeps_long_conversation_text_but_marks_truncated_tool_output() -> None:

@@ -27,6 +27,7 @@ TimelineItemType = Literal[
     "reasoning",
     "tool_call",
     "todo",
+    "goal",
     "error",
     "compaction",
 ]

@@ -29,3 +29,4 @@ AgentHub API session/job/event protocol
 ```
 
 The bridge should emit AgentHub `Session` objects and capability metadata only. It should not expose arbitrary shell execution or raw local filesystem browsing.
+

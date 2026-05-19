@@ -29,6 +29,7 @@ TimelineItemType = Literal[
     "reasoning",
     "tool_call",
     "todo",
+    "goal",
     "error",
     "compaction",
 ]
@@ -226,6 +227,7 @@ class SessionOut(BaseModel):
     controls: dict[str, Any]
     runtime_metadata: dict[str, Any]
     metadata: dict[str, Any]
+    archived_at: datetime | None
     updated_at: datetime
 
 
@@ -333,10 +335,65 @@ class VoiceTranscribeIn(BaseModel):
     content_type: str = Field(min_length=1, max_length=100)
     data_base64: str = Field(min_length=1)
     language: str | None = Field(default=None, max_length=20)
+    duration_ms: int | None = Field(default=None, ge=0, le=60 * 60 * 1000)
+    chunk_count: int | None = Field(default=None, ge=0, le=100_000)
+
+
+class VoiceTranscribeDiagnostics(BaseModel):
+    provider: str
+    filename: str
+    content_type: str
+    input_format: str
+    asr_format: str
+    input_bytes: int
+    prepared_bytes: int
+    duration_ms: int | None = None
+    chunk_count: int | None = None
 
 
 class VoiceTranscribeOut(BaseModel):
     text: str
+    diagnostics: VoiceTranscribeDiagnostics
+
+
+class VoiceStreamAuthOut(BaseModel):
+    url: str
+    auth: dict[str, str]
+    config: dict[str, Any]
+    expires_in_seconds: int
+
+
+class SyncStatusOut(BaseModel):
+    archived: bool
+    selected_session_id: str | None = None
+    sessions_digest: str
+    workers_digest: str
+    jobs_digest: str
+    schedules_digest: str
+    providers_digest: str
+    permissions_digest: str
+    selected_timeline_digest: str
+    generated_at: datetime
+
+
+class InboxSyncOut(BaseModel):
+    archived: bool
+    cursor: str
+    items: list[SessionOut]
+    removed_session_ids: list[str] = Field(default_factory=list)
+
+
+class SessionSyncOut(BaseModel):
+    session: SessionOut
+    items: list[AgentTimelineItemOut]
+    jobs: list["JobOut"] = Field(default_factory=list)
+    next_after_seq: int = 0
+    has_more: bool = False
+
+
+class PermissionSyncOut(BaseModel):
+    cursor: str
+    items: list[PermissionOut]
 
 
 class JobCreateIn(BaseModel):

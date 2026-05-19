@@ -4,6 +4,12 @@ server {
 
     root __AGENTHUB_WEB_ROOT__;
     index index.html;
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_min_length 1024;
+    gzip_comp_level 5;
+    gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml;
 
     location = /healthz {
         proxy_pass http://__AGENTHUB_API_UPSTREAM__/healthz;

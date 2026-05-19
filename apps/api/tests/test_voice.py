@@ -7,7 +7,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from conftest import auth_headers, bootstrap_owner, login
-from app.services import DoubaoAsrFacade, doubao_asr
+from app.services import DoubaoAsrFacade, doubao_asr, voice_asr
 
 
 def test_voice_transcribe_accepts_base64_audio_and_returns_text(
@@ -38,8 +38,50 @@ def test_voice_transcribe_accepts_base64_audio_and_returns_text(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"text": "继续优化 UI"}
+    assert response.json()["text"] == "继续优化 UI"
     assert calls == {"audio_bytes": b"fake-audio", "audio_format": "wav", "language": "zh-CN"}
+
+
+def test_voice_transcribe_returns_recording_diagnostics(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+
+    async def fake_transcribe_audio_bytes(audio_bytes: bytes, *, audio_format: str, language: str | None = None) -> str:
+        return "带诊断的语音"
+
+    monkeypatch.setattr(doubao_asr, "transcribe_audio_bytes", fake_transcribe_audio_bytes)
+
+    response = client.post(
+        "/api/voice/transcribe",
+        json={
+            "filename": "voice.wav",
+            "content_type": "audio/wav",
+            "data_base64": base64.b64encode(b"fake-audio").decode("ascii"),
+            "language": "zh-CN",
+            "duration_ms": 2345,
+            "chunk_count": 7,
+        },
+        headers=auth_headers(owner_login),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "text": "带诊断的语音",
+        "diagnostics": {
+            "provider": "doubao",
+            "filename": "voice.wav",
+            "content_type": "audio/wav",
+            "input_format": "wav",
+            "asr_format": "wav",
+            "input_bytes": len(b"fake-audio"),
+            "prepared_bytes": len(b"fake-audio"),
+            "duration_ms": 2345,
+            "chunk_count": 7,
+        },
+    }
 
 
 def test_voice_transcribe_transcodes_webm_to_wav_for_doubao_standard_model(
@@ -76,7 +118,7 @@ def test_voice_transcribe_transcodes_webm_to_wav_for_doubao_standard_model(
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"text": "转码后的语音"}
+    assert response.json()["text"] == "转码后的语音"
     assert calls == {
         "source_audio_bytes": b"fake-audio",
         "source_format": "webm",
@@ -126,6 +168,17 @@ def test_voice_transcribe_reports_provider_http_errors_without_500(
                 "[resource_id=volc.bigasr.auc_turbo] requested resource not granted"
             ),
             "code": "VOICE_ASR_FAILED",
+            "diagnostics": {
+                "provider": "doubao",
+                "filename": "voice.wav",
+                "content_type": "audio/wav",
+                "input_format": "wav",
+                "asr_format": "wav",
+                "input_bytes": len(b"fake-audio"),
+                "prepared_bytes": len(b"fake-audio"),
+                "duration_ms": None,
+                "chunk_count": None,
+            },
         }
     }
 
@@ -155,7 +208,124 @@ def test_voice_transcribe_reports_provider_timeout_without_500(
 
     assert response.status_code == 504, response.text
     assert response.json() == {
-        "detail": {"message": "Doubao ASR timed out", "code": "VOICE_ASR_TIMEOUT"}
+        "detail": {
+            "message": "Doubao ASR timed out",
+            "code": "VOICE_ASR_TIMEOUT",
+            "diagnostics": {
+                "provider": "doubao",
+                "filename": "voice.wav",
+                "content_type": "audio/wav",
+                "input_format": "wav",
+                "asr_format": "wav",
+                "input_bytes": len(b"fake-audio"),
+                "prepared_bytes": len(b"fake-audio"),
+                "duration_ms": None,
+                "chunk_count": None,
+            },
+        }
+    }
+
+
+def test_voice_stream_auth_returns_streaming_config(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    calls: dict[str, object] = {}
+
+    async def fake_issue_stream_auth(*, uid: str) -> dict[str, object]:
+        calls["uid"] = uid
+        return {
+            "url": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            "auth": {
+                "api_resource_id": "volc.bigasr.sauc.duration",
+                "api_app_key": "app-key",
+                "api_access_key": "Jwt; token-123",
+            },
+            "config": {
+                "user": {"uid": uid},
+                "audio": {"format": "pcm", "rate": 16000, "bits": 16, "channel": 1},
+                "request": {"model_name": "bigmodel", "show_utterances": True},
+            },
+            "expires_in_seconds": 300,
+        }
+
+    monkeypatch.setattr(doubao_asr, "issue_stream_auth", fake_issue_stream_auth)
+
+    response = client.post("/api/voice/stream-auth", headers=auth_headers(owner_login))
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["url"] == "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
+    assert payload["auth"]["api_access_key"] == "Jwt; token-123"
+    assert payload["config"]["request"]["model_name"] == "bigmodel"
+    assert payload["expires_in_seconds"] == 300
+    assert calls["uid"]
+
+
+def test_voice_transcribe_uses_configured_openai_provider(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    calls: dict[str, object] = {}
+
+    async def fake_transcribe_audio_bytes(audio_bytes: bytes, *, audio_format: str, language: str | None = None) -> str:
+        calls["audio_bytes"] = audio_bytes
+        calls["audio_format"] = audio_format
+        calls["language"] = language
+        return "openai whisper transcript"
+
+    monkeypatch.setattr(voice_asr, "diagnostics_provider", lambda: "openai")
+    monkeypatch.setattr(voice_asr, "provider_label", lambda: "OpenAI ASR")
+    monkeypatch.setattr(voice_asr, "transcribe_audio_bytes", fake_transcribe_audio_bytes)
+
+    response = client.post(
+        "/api/voice/transcribe",
+        json={
+            "filename": "voice.webm",
+            "content_type": "audio/webm",
+            "data_base64": base64.b64encode(b"fake-audio").decode("ascii"),
+            "language": "en",
+        },
+        headers=auth_headers(owner_login),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["text"] == "openai whisper transcript"
+    assert response.json()["diagnostics"]["provider"] in {"openai", "openai-compatible"}
+    assert calls == {"audio_bytes": b"fake-audio", "audio_format": "webm", "language": "en"}
+
+
+def test_voice_stream_auth_rejects_non_streaming_provider(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+
+    async def fake_issue_stream_auth(*, uid: str) -> dict[str, object]:
+        raise RuntimeError("Configured voice ASR provider does not support streaming auth")
+
+    monkeypatch.setattr(voice_asr, "issue_stream_auth", fake_issue_stream_auth)
+
+    response = client.post("/api/voice/stream-auth", headers=auth_headers(owner_login))
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "VOICE_STREAM_UNAVAILABLE"
+    assert "does not support streaming auth" in response.json()["detail"]["message"]
+
+
+def test_voice_stream_auth_reports_missing_credentials_without_500(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+
+    async def fake_issue_stream_auth(*, uid: str) -> dict[str, object]:
+        raise RuntimeError("Doubao streaming ASR credentials are not configured")
+
+    monkeypatch.setattr(doubao_asr, "issue_stream_auth", fake_issue_stream_auth)
+
+    response = client.post("/api/voice/stream-auth", headers=auth_headers(owner_login))
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "detail": {
+            "message": "Doubao streaming ASR credentials are not configured",
+            "code": "VOICE_STREAM_AUTH_FAILED",
+        }
     }
 
 

@@ -58,6 +58,7 @@ def _ensure_compatible_columns(engine: Engine) -> None:
         "last_role": "VARCHAR(32) NOT NULL DEFAULT ''",
         "controls_json": "TEXT NOT NULL DEFAULT '{}'",
         "runtime_metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+        "archived_at": "DATETIME",
     }
     if engine.dialect.name == "sqlite":
         with engine.begin() as conn:

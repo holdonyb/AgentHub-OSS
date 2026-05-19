@@ -4,12 +4,13 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.core.config import Settings
 from app.core.database import create_db_engine, create_session_local, init_database
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.security import generate_token
-from app.routers import auth, events, internal, jobs, memory, permissions, providers, schedules, secrets, sessions, timeline, voice, worker_relay, workers
+from app.routers import auth, events, internal, jobs, memory, permissions, providers, schedules, secrets, sessions, sync, timeline, voice, worker_relay, workers
 
 logger = logging.getLogger("agenthub")
 
@@ -29,6 +30,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     init_database(engine)
 
     app.add_middleware(RateLimitMiddleware, settings=settings)
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -48,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(secrets.router)
     app.include_router(permissions.router)
     app.include_router(providers.router)
+    app.include_router(sync.router)
     app.include_router(voice.router)
     app.include_router(internal.router)
     app.include_router(worker_relay.router)

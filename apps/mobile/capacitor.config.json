@@ -1,0 +1,19 @@
+{
+  "appId": "xin.ifix.agenthub",
+  "appName": "AgentHub",
+  "webDir": "../web/dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://agenthub.example.com",
+    "cleartext": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_agenthub",
+      "iconColor": "#2563eb"
+    }
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

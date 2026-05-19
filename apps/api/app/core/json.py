@@ -15,3 +15,4 @@ def loads_json(value: str | None, default: Any = None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return {} if default is None else default
+

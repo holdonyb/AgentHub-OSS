@@ -32,3 +32,4 @@ def hash_token(token: str) -> str:
 
 def constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
+

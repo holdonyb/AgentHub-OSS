@@ -131,6 +131,30 @@ def test_session_input_preserves_http_url_prompt_as_single_backend_argument() ->
     assert kimi[-1] == prompt
 
 
+def test_claude_goal_session_input_uses_resume_prompt_path() -> None:
+    prompt = "/goal all mobile inbox checks pass and the APK is published"
+
+    claude = build_backend_command(
+        {
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-goal-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": prompt,
+                "native_goal_command": True,
+                "controls": {"model": "sonnet", "permission_mode": "auto"},
+            },
+        }
+    )
+
+    assert claude[:3] == ["claude", "-p", "--resume"]
+    assert claude[3] == "claude-goal-session"
+    assert "--model" in claude
+    assert "--permission-mode" in claude
+    assert claude[-1] == prompt
+
+
 def test_codex_session_input_adds_image_paths_to_exec_resume() -> None:
     codex = build_backend_command(
         {
@@ -231,6 +255,28 @@ def test_file_read_returns_bounded_text_preview(tmp_path: Path) -> None:
     assert payload["truncated"] is True
     assert payload["text"].startswith("第一行")
     assert payload["size_bytes"] > 18
+
+
+def test_file_read_returns_inline_download_data_for_small_images(tmp_path: Path) -> None:
+    target = tmp_path / "diagram.png"
+    target.write_bytes(VALID_PNG_BYTES)
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-image",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "diagram.png", "max_bytes": 200_000},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["path"] == "diagram.png"
+    assert payload["content_type"] == "image/png"
+    assert payload["preview_kind"] == "image"
+    assert payload["downloadable"] is True
+    assert payload["data_base64"] == base64.b64encode(VALID_PNG_BYTES).decode("ascii")
+    assert "text" not in payload
 
 
 def test_file_read_rejects_paths_outside_workspace(tmp_path: Path) -> None:
@@ -399,6 +445,129 @@ def test_codex_plan_session_input_uses_native_app_server(monkeypatch: pytest.Mon
     assert payload["controls"]["sandbox_mode"] == "danger-full-access"  # type: ignore[index]
 
 
+def test_codex_default_turn_uses_native_app_server_to_exit_plan_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    client = object()
+
+    def fake_run_codex_turn(
+        job: dict[str, object],
+        *,
+        collaboration_mode: str,
+        client: object | None = None,
+        worker_id: str = "",
+        timeout_seconds: int = 0,
+    ) -> str:
+        calls.append(
+            {
+                "job": job,
+                "collaboration_mode": collaboration_mode,
+                "client": client,
+                "worker_id": worker_id,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return "DIRECT_OK"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(
+        executor,
+        "_run_backend_command",
+        lambda *args, **kwargs: pytest.fail("native codex default turn must not fall back to CLI resume"),
+    )
+
+    result = execute_job(
+        {
+            "job_id": "job-implement-plan",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "Implement the plan.",
+                "raw_prompt": "Implement the plan.",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "timeout_seconds": 321,
+                "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            },
+        },
+        client=client,
+        worker_id="win-main",
+    )
+
+    assert result == "DIRECT_OK"
+    assert calls[0]["collaboration_mode"] == "default"
+    assert calls[0]["client"] is client
+    assert calls[0]["worker_id"] == "win-main"
+    assert calls[0]["timeout_seconds"] == 321
+    payload = calls[0]["job"]["payload"]  # type: ignore[index]
+    assert payload["prompt"] == "Implement the plan."  # type: ignore[index]
+
+
+def test_codex_default_turn_falls_back_to_cli_resume_for_legacy_provider_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'failed to load configuration: Model provider `codex` not found'}"
+        )
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(
+            {
+                "args": args,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+                "output_file": output_file,
+                "env": env,
+            }
+        )
+        return "legacy resume fallback"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-legacy-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "legacy-codex-session",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "认真研究客户反馈",
+                "raw_prompt": "认真研究客户反馈",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "timeout_seconds": 77,
+                "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            },
+        },
+        client=object(),
+        worker_id="win-main",
+    )
+
+    assert result == "legacy resume fallback"
+    assert calls[0]["cwd"] == "E:/work"
+    assert calls[0]["timeout_seconds"] == 77
+    args = calls[0]["args"]  # type: ignore[assignment]
+    assert args[:3] == ["codex", "-C", "E:/work"]
+    assert "exec" in args
+    assert "resume" in args
+    assert args[-2:] == ["legacy-codex-session", "认真研究客户反馈"]
+    assert "AgentHub native plan fallback" not in args[-1]
+
+
 def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 
@@ -441,6 +610,68 @@ def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(m
     assert args[-2] == "codex-session"
     assert "AgentHub native plan fallback" in args[-1]
     assert "先规划 UI 改造" in args[-1]
+
+
+def test_codex_native_plan_with_image_attachment_uses_cli_fallback_to_preserve_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
+    monkeypatch.setattr(
+        executor,
+        "run_codex_plan_turn",
+        lambda *args, **kwargs: pytest.fail("native app-server plan path cannot preserve image attachments"),
+        raising=False,
+    )
+
+    def fake_run_backend_command(args: list[str], cwd: str, timeout_seconds: int, *, output_file: str | None = None) -> str:
+        image_path = Path(args[args.index("-i") + 1])
+        captured["args"] = args
+        captured["cwd"] = cwd
+        captured["timeout_seconds"] = timeout_seconds
+        captured["image_bytes"] = image_path.read_bytes()
+        if output_file:
+            Path(output_file).write_text("Codex saw plan image", encoding="utf-8")
+        return "Codex saw plan image"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-plan-image",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "看顶栏截图，先列计划",
+                "raw_prompt": "看顶栏截图，先列计划",
+                "reply_mode": "plan",
+                "native_plan_mode": True,
+                "timeout_seconds": 123,
+                "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never", "yolo": True},
+                "attachments": [
+                    {
+                        "filename": "topbar.png",
+                        "content_type": "image/png",
+                        "size_bytes": len(VALID_PNG_BYTES),
+                        "data_base64": base64.b64encode(VALID_PNG_BYTES).decode("ascii"),
+                    }
+                ],
+            },
+        },
+        client=object(),
+        worker_id="win-main",
+    )
+
+    assert result == "Codex saw plan image"
+    assert captured["cwd"] == "E:/work/AgentHub"
+    assert captured["timeout_seconds"] == 123
+    assert captured["image_bytes"] == VALID_PNG_BYTES
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert "-i" in args
+    assert "AgentHub native plan fallback" in args[-1]
+    assert "看顶栏截图，先列计划" in args[-1]
 
 
 def test_codex_app_server_plan_params_preserve_full_access_controls() -> None:
@@ -514,6 +745,7 @@ def test_codex_app_server_retryable_turn_error_does_not_fail(monkeypatch: pytest
             "workspace_root": "E:/work/AgentHub",
             "payload": {"prompt": "列计划"},
         },
+        collaboration_mode="plan",
         client=None,
         worker_id="win-main",
         timeout_seconds=5,
@@ -753,6 +985,65 @@ def test_codex_app_server_request_user_input_prefers_freeform_text(monkeypatch: 
         "id": 7,
         "result": {"answers": {"object_store": {"answers": ["Cloudflare R2"]}}},
     }
+
+
+def test_codex_app_server_returns_goal_updates_in_timeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agenthub_worker.codex_app_server import CodexAppServerClient
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.timeline_items: list[dict[str, object]] = []
+
+        def publish_timeline(self, session_id: str, items: list[dict[str, object]], *, replace: bool = False) -> None:
+            assert session_id == "codex-session"
+            assert replace is False
+            self.timeline_items.extend(items)
+
+    app_server = CodexAppServerClient(executable="codex")
+    monkeypatch.setattr(app_server, "initialize", lambda: {})
+    monkeypatch.setattr(app_server, "request", lambda *args, **kwargs: {})
+    messages = iter(
+        [
+            {
+                "method": "thread/goal/updated",
+                "params": {
+                    "threadId": "codex-session",
+                    "turnId": "turn-1",
+                    "goal": {
+                        "threadId": "codex-session",
+                        "objective": "完成移动端收件箱打磨",
+                        "status": "active",
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                        "tokensUsed": 128,
+                        "tokenBudget": 1000,
+                        "timeUsedSeconds": 15,
+                    },
+                },
+            },
+            {"method": "turn/completed", "params": {"threadId": "codex-session", "turnId": "turn-1"}},
+        ]
+    )
+    monkeypatch.setattr(app_server, "_read_message", lambda deadline: next(messages))
+
+    result = app_server.run_turn(
+        {
+            "job_id": "job-goal",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": "/goal 完成移动端收件箱打磨", "controls": {}},
+        },
+        collaboration_mode="default",
+        client=FakeClient(),
+        worker_id="win-main",
+        timeout_seconds=30,
+    )
+
+    assert "完成移动端收件箱打磨" in result.text
+    assert result.timeline_items[0]["item_type"] == "goal"
+    assert result.timeline_items[0]["status"] == "active"
+    assert "完成移动端收件箱打磨" in result.timeline_items[0]["text"]
+    assert result.timeline_items[0]["payload"]["source"] == "codex_goal"  # type: ignore[index]
 
 
 def test_codex_app_server_command_approval_round_trips_agenthub_permission(monkeypatch: pytest.MonkeyPatch) -> None:

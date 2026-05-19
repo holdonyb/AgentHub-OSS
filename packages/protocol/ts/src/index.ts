@@ -59,13 +59,14 @@ export interface AgentSession {
   controls: Record<string, unknown>;
   runtime_metadata: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  archived_at: string | null;
   updated_at?: string;
 }
 
 export interface AgentTimelineItem {
   session_id: string;
   seq: number;
-  item_type: 'user_message' | 'assistant_message' | 'reasoning' | 'tool_call' | 'todo' | 'error' | 'compaction';
+  item_type: 'user_message' | 'assistant_message' | 'reasoning' | 'tool_call' | 'todo' | 'goal' | 'error' | 'compaction';
   role: 'user' | 'assistant' | 'system' | 'tool' | null;
   text: string;
   tool_call_id: string | null;

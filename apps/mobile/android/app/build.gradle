@@ -5,22 +5,16 @@ def agentHubKeystorePassword = System.getenv("AGENTHUB_ANDROID_KEYSTORE_PASSWORD
 def agentHubKeyAlias = System.getenv("AGENTHUB_ANDROID_KEY_ALIAS")
 def agentHubKeyPassword = System.getenv("AGENTHUB_ANDROID_KEY_PASSWORD")
 def agentHubSigningReady = agentHubKeystoreFile && agentHubKeystorePassword && agentHubKeyAlias && agentHubKeyPassword
-def agentHubServerUrl = (System.getenv("AGENTHUB_MOBILE_SERVER_URL") ?: System.getenv("AGENTHUB_PUBLIC_BASE_URL") ?: "https://agenthub.invalid").trim().replaceAll('/+$', '')
-def escapedAgentHubServerUrl = agentHubServerUrl.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace "xin.ifix.agenthub"
     compileSdk rootProject.ext.compileSdkVersion
-    buildFeatures {
-        buildConfig true
-    }
     defaultConfig {
         applicationId "xin.ifix.agenthub"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "1.8"
-        buildConfigField "String", "AGENTHUB_SERVER_URL", "\"${escapedAgentHubServerUrl}\""
+        versionCode 10
+        versionName "1.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
