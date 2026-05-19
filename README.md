@@ -31,6 +31,8 @@ Open `http://localhost:5173` and create the first owner with `AGENTHUB_BOOTSTRAP
 - Self-Host Public Relay: [docs/SELF_HOST_QUICKSTART.md](docs/SELF_HOST_QUICKSTART.md)
 - Tailscale Private Mode: [docs/TAILSCALE_PRIVATE_MODE.md](docs/TAILSCALE_PRIVATE_MODE.md)
 - Configuration Reference: [docs/CONFIGURATION_REFERENCE.md](docs/CONFIGURATION_REFERENCE.md)
+- AI deployment runbook: [docs/AI_DEPLOYMENT_RUNBOOK.md](docs/AI_DEPLOYMENT_RUNBOOK.md)
+- Deployment brief template: [docs/DEPLOYMENT_BRIEF.example.json](docs/DEPLOYMENT_BRIEF.example.json)
 - OSS export flow: [docs/OSS_RELEASE.md](docs/OSS_RELEASE.md)
 
 ## Clients
@@ -90,5 +92,7 @@ Before exporting a public release, run:
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
+- [AI deployment runbook](docs/AI_DEPLOYMENT_RUNBOOK.md)
+- [Deployment brief template](docs/DEPLOYMENT_BRIEF.example.json)
 - [Provenance](PROVENANCE.md)
 - [Contributing](CONTRIBUTING.md)

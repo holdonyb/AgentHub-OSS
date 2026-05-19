@@ -1,0 +1,28 @@
+{
+  "deployment_name": "agenthub-demo",
+  "mode": "public_relay",
+  "repo_url": "https://github.com/YOUR_ORG/AgentHub.git",
+  "branch": "main",
+  "server": {
+    "host": "agenthub.example.com",
+    "domain": "agenthub.example.com",
+    "install_root": "/opt/agenthub",
+    "ssh_user": "root",
+    "admin_email": "you@example.com"
+  },
+  "voice": {
+    "provider": "none"
+  },
+  "workers": {
+    "windows": true,
+    "linux": false,
+    "workspace_roots": [
+      "C:/Work"
+    ],
+    "session_roots": []
+  },
+  "clients": {
+    "android": true,
+    "desktop": true
+  }
+}

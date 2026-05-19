@@ -14,6 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     required_files = [
+        "docs/AI_DEPLOYMENT_RUNBOOK.md",
+        "docs/DEPLOYMENT_BRIEF.example.json",
         "docs/OSS_RELEASE.md",
         "docs/CONFIGURATION_REFERENCE.md",
         "docs/SELF_HOST_QUICKSTART.md",
@@ -24,6 +26,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "scripts/install-selfhost-linux.sh",
         "scripts/check-selfhost.sh",
         "scripts/check-selfhost.ps1",
+        "scripts/render-deployment-brief.py",
         "scripts/smoke-selfhost-vm.sh",
         "scripts/smoke-worker-onboarding.sh",
         "deploy/nginx/agenthub-selfhost.conf.template",
@@ -37,16 +40,39 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Self-Host Public Relay" in readme
     assert "Tailscale Private Mode" in readme
     assert "docs/CONFIGURATION_REFERENCE.md" in readme
+    assert "docs/AI_DEPLOYMENT_RUNBOOK.md" in readme
+    assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
     assert "docs/OSS_RELEASE.md" in readme
     assert "docs/SELF_HOST_QUICKSTART.md" in readme
     assert "docs/TAILSCALE_PRIVATE_MODE.md" in readme
 
 
 def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
+    ai_runbook = (REPO_ROOT / "docs" / "AI_DEPLOYMENT_RUNBOOK.md").read_text(encoding="utf-8")
+    deployment_brief = (REPO_ROOT / "docs" / "DEPLOYMENT_BRIEF.example.json").read_text(encoding="utf-8")
     config_reference = (REPO_ROOT / "docs" / "CONFIGURATION_REFERENCE.md").read_text(encoding="utf-8")
     quickstart = (REPO_ROOT / "docs" / "SELF_HOST_QUICKSTART.md").read_text(encoding="utf-8")
     tailscale = (REPO_ROOT / "docs" / "TAILSCALE_PRIVATE_MODE.md").read_text(encoding="utf-8")
     troubleshooting = (REPO_ROOT / "docs" / "SELF_HOST_TROUBLESHOOTING.md").read_text(encoding="utf-8")
+
+    for expected in [
+        '"mode": "public_relay"',
+        '"voice"',
+        '"provider": "none"',
+        '"workers"',
+        '"host": "agenthub.example.com"',
+    ]:
+        assert expected in deployment_brief
+
+    for expected in [
+        "render-deployment-brief.py",
+        "public_relay",
+        "tailscale_private",
+        "local_laptop",
+        "voice provider",
+        "missing fields",
+    ]:
+        assert expected in ai_runbook
 
     for expected in [
         "AGENTHUB_VOICE_ASR_PROVIDER",
@@ -101,6 +127,7 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     install_script = (REPO_ROOT / "scripts" / "install-selfhost-linux.sh").read_text(encoding="utf-8")
     check_sh = (REPO_ROOT / "scripts" / "check-selfhost.sh").read_text(encoding="utf-8")
     check_ps1 = (REPO_ROOT / "scripts" / "check-selfhost.ps1").read_text(encoding="utf-8")
+    render_brief = (REPO_ROOT / "scripts" / "render-deployment-brief.py").read_text(encoding="utf-8")
     smoke_vm = (REPO_ROOT / "scripts" / "smoke-selfhost-vm.sh").read_text(encoding="utf-8")
     smoke_worker = (REPO_ROOT / "scripts" / "smoke-worker-onboarding.sh").read_text(encoding="utf-8")
     workflow = (REPO_ROOT / ".github" / "workflows" / "selfhost-smoke.yml").read_text(encoding="utf-8")
@@ -142,6 +169,13 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "/healthz" in check_ps1
     assert "/api/worker/enroll" in check_ps1
     assert "/api/internal/jobs/claim" in check_ps1
+
+    assert "usage:" in render_brief.lower()
+    assert "public_relay" in render_brief
+    assert "tailscale_private" in render_brief
+    assert "local_laptop" in render_brief
+    assert "--json" in render_brief
+    assert "OpenAI-compatible" in render_brief
 
     assert "client_max_body_size" in nginx_template
     assert "location ^~ /api/internal/" in nginx_template
@@ -270,3 +304,38 @@ def test_selfhost_installer_supports_render_only_config_generation() -> None:
         assert "server_name agenthub-smoke.example.test;" in nginx_path.read_text(encoding="utf-8")
         assert f"ssl_certificate {cert_dir}/fullchain.pem;" in nginx_path.read_text(encoding="utf-8")
         assert "render-only complete" in result.stdout
+
+
+def test_render_deployment_brief_renders_example_and_reports_missing_fields() -> None:
+    script_path = REPO_ROOT / "scripts" / "render-deployment-brief.py"
+    brief_path = REPO_ROOT / "docs" / "DEPLOYMENT_BRIEF.example.json"
+
+    example = subprocess.run(
+        ["python", str(script_path), "--brief", str(brief_path)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Mode: public_relay" in example.stdout
+    assert "Voice provider: none" in example.stdout
+    assert "install-selfhost-linux.sh" in example.stdout
+    assert "check-selfhost.sh" in example.stdout
+    assert "Add Worker" in example.stdout
+
+    with tempfile.TemporaryDirectory(prefix="agenthub-brief-") as temp_dir:
+        broken_brief = Path(temp_dir) / "brief.json"
+        broken_brief.write_text(
+            '{"mode":"public_relay","server":{"host":"agenthub.example.com"}}',
+            encoding="utf-8",
+        )
+        broken = subprocess.run(
+            ["python", str(script_path), "--brief", str(broken_brief)],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert broken.returncode == 2
+        assert "missing fields" in broken.stderr.lower()
+        assert "server.domain" in broken.stderr
