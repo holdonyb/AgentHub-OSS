@@ -13,6 +13,22 @@ It provides:
 
 The project is self-host first. Public SaaS relay, billing, and hosted multi-tenant operations are not part of the v0.1 release.
 
+## v0.1 Release Surface
+
+Officially supported in the first public release:
+
+- Web self-host deployment
+- Android APK client
+- Windows desktop client
+- Windows and Linux worker bundles
+
+Not part of the current public support matrix:
+
+- iOS
+- macOS
+
+If you want to add one of those platforms, see [CONTRIBUTING.md](CONTRIBUTING.md). The repo includes contribution prompts and platform guardrails so you can open a focused PR instead of starting from scratch.
+
 ## Quick Start
 
 ```powershell
@@ -55,6 +71,14 @@ npm run mobile:build:release
 ```
 
 `npm run desktop:package:win` prewarms the Electron Windows archive in small chunks and defaults Electron and `electron-builder` downloads to `npmmirror` on local machines. Override with `ELECTRON_MIRROR`, `ELECTRON_BUILDER_BINARIES_MIRROR`, `AGENTHUB_ELECTRON_MIRROR`, or `AGENTHUB_ELECTRON_BUILDER_BINARIES_MIRROR` if you need a different cache or relay.
+
+Current release packaging:
+
+- Android: separate APK artifact, even though the app is primarily a WebView shell
+- Windows: separate desktop package artifact
+- Web: self-host source and build output
+
+iOS and macOS builds are not published today.
 
 ## Workers
 

@@ -45,6 +45,11 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "docs/OSS_RELEASE.md" in readme
     assert "docs/SELF_HOST_QUICKSTART.md" in readme
     assert "docs/TAILSCALE_PRIVATE_MODE.md" in readme
+    assert "Android APK client" in readme
+    assert "Windows desktop client" in readme
+    assert "iOS" in readme
+    assert "macOS" in readme
+    assert "CONTRIBUTING.md" in readme
 
 
 def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
@@ -119,6 +124,24 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "Android",
     ]:
         assert expected in troubleshooting
+
+
+def test_contributing_covers_platform_scope_and_prompts() -> None:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    for expected in [
+        "Android APK client",
+        "Windows desktop client",
+        "iOS",
+        "macOS",
+        "community contributions",
+        "Suggested prompt for an iOS contribution",
+        "Suggested prompt for a macOS contribution",
+        "server URL must stay configurable",
+        "Do not hardcode",
+        "Configuration-first rule",
+    ]:
+        assert expected in contributing
 
 
 def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
