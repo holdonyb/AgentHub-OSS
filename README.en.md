@@ -20,7 +20,7 @@ AgentHub is not a hosted SaaS and not a generic remote shell. Your agents keep r
 
 - **One inbox for every agent session.** See local Codex, Claude, Kimi, and OpenCode sessions in one place.
 - **Multi-machine control.** Register Windows and Linux workers, then route session input and health jobs to the right machine.
-- **Phone and desktop access.** Use Web, Android APK, or Windows desktop to continue work away from the terminal.
+- **Phone and desktop access.** Use Web, Android APK, or Windows desktop to continue work away from the terminal. The Android APK asks for your server URL on first launch before showing login.
 - **Tailscale-first private mode.** Start without opening worker ports to the public internet.
 - **Configuration-first setup.** Voice ASR, server URL, worker roots, and provider credentials are configuration, not hardcoded maintainer defaults.
 
@@ -38,6 +38,12 @@ This path is the default recommendation for:
 - delegating setup to Codex, Claude Code, or another engineering agent
 - avoiding manual command assembly and configuration lookup
 - switching quickly between local, Tailscale, and VM deployment modes
+
+After deployment:
+
+- the Android APK asks for your AgentHub server URL on first launch
+- it then opens the login page for that server
+- this is not passwordless access; it is server selection first, normal login second
 
 ### No VM: run AgentHub on your own machine
 
@@ -74,7 +80,7 @@ Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 | Surface | Status | Notes |
 | --- | --- | --- |
 | Web self-host | Supported | Main console and API surface |
-| Android APK | Supported | WebView client with configurable server URL |
+| Android APK | Supported | First-launch server setup, then normal login |
 | Windows desktop | Supported | Electron client with first-launch server setup |
 | Windows worker | Supported | Bundle + PowerShell installer |
 | Linux worker | Supported | Bundle + shell/systemd installer |
