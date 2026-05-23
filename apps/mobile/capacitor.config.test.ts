@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import config from './capacitor.config.json';
 
 describe('AgentHub Android wrapper config', () => {
-  it('loads only the HTTPS AgentHub console', () => {
+  it('ships a local shell and relies on runtime server setup', () => {
     expect(config.appId).toBe('xin.ifix.agenthub');
     expect(config.appName).toBe('AgentHub');
-    expect(config.server?.url).toBe('https://agenthub.example.com');
-    expect(config.server?.cleartext).toBe(false);
+    expect(config.server).toBeUndefined();
   });
 
   it('configures the Android native notification status icon', () => {

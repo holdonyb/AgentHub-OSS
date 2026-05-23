@@ -6,7 +6,6 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
@@ -33,11 +32,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AgentHubNotificationService extends Service {
-    private static final String DEFAULT_BASE_URL = "https://agenthub.example.com";
     private static final String ALERT_CHANNEL_ID = "agenthub-approvals-v2";
     private static final String SERVICE_CHANNEL_ID = "agenthub-background-v1";
-    private static final String PREFS_NAME = "agenthub-notifications";
-    private static final String PREF_SERVER_URL = "server_url";
     private static final String PREF_NOTIFIED_PERMISSIONS = "notified_permissions";
     private static final String PREF_NOTIFIED_SESSIONS = "notified_sessions";
     private static final int FOREGROUND_NOTIFICATION_ID = 4401;
@@ -105,6 +101,7 @@ public class AgentHubNotificationService extends Service {
 
     private void pollAgentHub() throws Exception {
         String baseUrl = loadBaseUrl();
+        if (baseUrl == null || baseUrl.trim().isEmpty()) return;
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie == null || cookie.trim().isEmpty()) return;
 
@@ -122,10 +119,7 @@ public class AgentHubNotificationService extends Service {
     }
 
     private String loadBaseUrl() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        String stored = prefs.getString(PREF_SERVER_URL, DEFAULT_BASE_URL);
-        if (stored == null || stored.trim().isEmpty()) return DEFAULT_BASE_URL;
-        return stored.trim().replaceAll("/$", "");
+        return AgentHubServerConfig.loadServerUrl(this);
     }
 
     private JSONObject getJson(String baseUrl, String path, String cookie) throws Exception {
@@ -201,7 +195,7 @@ public class AgentHubNotificationService extends Service {
     }
 
     private boolean rememberOnce(String name, String key) {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        android.content.SharedPreferences prefs = getSharedPreferences(AgentHubServerConfig.PREFS_NAME, MODE_PRIVATE);
         Set<String> current = new HashSet<>(prefs.getStringSet(name, Collections.emptySet()));
         if (current.contains(key)) return false;
         current.add(key);

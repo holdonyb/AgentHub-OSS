@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">AgentHub</string>
     <string name="title_activity_main">AgentHub</string>
+    <string name="title_activity_server_setup">配置 AgentHub 服务器</string>
     <string name="package_name">xin.ifix.agenthub</string>
     <string name="custom_url_scheme">xin.ifix.agenthub</string>
 </resources>
