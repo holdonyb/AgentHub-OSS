@@ -39,25 +39,31 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         assert (REPO_ROOT / relative_path).is_file(), relative_path
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "Personal Agent Control Plane" in readme
-    assert "Codex, Claude, Kimi, OpenCode" in readme
-    assert "No VM: run AgentHub on your own machine" in readme
-    assert "Tailscale-first" in readme
-    assert "Local server mode" in readme
-    assert "docs/CONFIGURATION_REFERENCE.md" in readme
-    assert "docs/LOCAL_SERVER_MODE.md" in readme
+    readme_en = (REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+    assert "[简体中文](README.md) | [English](README.en.md)" in readme
+    assert "个人 AI Agent 控制台" in readme
+    assert "Codex、Claude、Kimi、OpenCode" in readme
+    assert "推荐方式：直接给另一个 agent 一份部署提示词" in readme
     assert "docs/AI_DEPLOYMENT_RUNBOOK.md" in readme
     assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
-    assert "docs/OSS_RELEASE.md" in readme
-    assert "docs/OPEN_SOURCE_LAUNCH.md" in readme
-    assert "docs/SELF_HOST_QUICKSTART.md" in readme
-    assert "docs/TAILSCALE_PRIVATE_MODE.md" in readme
+    assert "没有 VM：直接跑在自己的电脑上" in readme
+    assert "Tailscale-first 私有模式" in readme
+    assert "Local server mode" in readme
     assert "Android APK" in readme
     assert "Windows desktop" in readme
     assert "iOS client" in readme
     assert "macOS desktop" in readme
-    assert "Community welcome" in readme
-    assert "CONTRIBUTING.md" in readme
+    assert "欢迎社区贡献" in readme
+    assert "English README" in readme
+
+    assert "[简体中文](README.md) | [English](README.en.md)" in readme_en
+    assert "Personal Agent Control Plane" in readme_en
+    assert "Codex, Claude, Kimi, OpenCode" in readme_en
+    assert "Recommended: deploy from an agent-friendly prompt" in readme_en
+    assert "No VM: run AgentHub on your own machine" in readme_en
+    assert "Tailscale-first private mode" in readme_en
+    assert "Community welcome" in readme_en
+    assert "中文 README" in readme_en
 
     assert (REPO_ROOT / ".github" / "CODEOWNERS").is_file()
     assert (REPO_ROOT / ".github" / "pull_request_template.md").is_file()
