@@ -40,10 +40,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "Personal Agent Control Plane" in readme
-    assert "个人 AI Agent 控制台" in readme
     assert "Codex, Claude, Kimi, OpenCode" in readme
     assert "No VM: run AgentHub on your own machine" in readme
-    assert "没有 VM：直接跑在自己的电脑上" in readme
     assert "Tailscale-first" in readme
     assert "Local server mode" in readme
     assert "docs/CONFIGURATION_REFERENCE.md" in readme
@@ -58,8 +56,11 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Windows desktop" in readme
     assert "iOS client" in readme
     assert "macOS desktop" in readme
-    assert "欢迎社区贡献" in readme
+    assert "Community welcome" in readme
     assert "CONTRIBUTING.md" in readme
+
+    assert (REPO_ROOT / ".github" / "CODEOWNERS").is_file()
+    assert (REPO_ROOT / ".github" / "pull_request_template.md").is_file()
 
 
 def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
