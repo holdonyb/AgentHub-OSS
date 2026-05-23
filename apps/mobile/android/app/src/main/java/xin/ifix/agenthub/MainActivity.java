@@ -15,6 +15,7 @@ import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.view.View;
 import android.webkit.JavascriptInterface;
@@ -35,15 +36,30 @@ public class MainActivity extends BridgeActivity {
     private PermissionRequest pendingAudioPermissionRequest;
 
     @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        if (AgentHubServerConfig.loadServerUrl(this) == null) {
+            startActivity(new Intent(this, ServerSetupActivity.class));
+            finish();
+            return;
+        }
+        super.onCreate(savedInstanceState);
+    }
+
+    @Override
     protected void load() {
         super.load();
         installSystemBarInsets();
         createAgentHubNotificationChannel();
         bridge.getWebView().setWebChromeClient(new AgentHubWebChromeClient(bridge, this));
         bridge.getWebView().addJavascriptInterface(new AgentHubAndroidBridge(this), "AgentHubAndroid");
+        String configuredUrl = AgentHubServerConfig.loadServerUrl(this);
+        if (configuredUrl == null) {
+            startActivity(new Intent(this, ServerSetupActivity.class));
+            finish();
+            return;
+        }
         startNotificationServiceIfAllowed();
-        // JavaScript interfaces become visible on the next page load in Android WebView.
-        bridge.reload();
+        bridge.getWebView().loadUrl(configuredUrl);
     }
 
     private void installSystemBarInsets() {
@@ -269,6 +285,18 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public boolean copyText(String text) {
             return activity.copyTextToClipboard(text);
+        }
+
+        @JavascriptInterface
+        public String configuredServerUrl() {
+            String serverUrl = AgentHubServerConfig.loadServerUrl(activity);
+            return serverUrl == null ? "" : serverUrl;
+        }
+
+        @JavascriptInterface
+        public boolean openServerSetup() {
+            activity.runOnUiThread(() -> activity.startActivity(new Intent(activity, ServerSetupActivity.class)));
+            return true;
         }
     }
 }

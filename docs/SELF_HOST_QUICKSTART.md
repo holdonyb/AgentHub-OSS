@@ -144,6 +144,12 @@ https://agenthub.example.com
 
 Then log in with the owner or invited user account.
 
+Android notes:
+
+- the first screen is server setup, not the login form
+- after saving the URL, the APK opens that server and uses the normal web login flow
+- public domains should use HTTPS; plain HTTP is only meant for local, LAN, or Tailscale-style private addresses
+
 ## 9. Update and redeploy
 
 For a normal update:

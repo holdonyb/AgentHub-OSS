@@ -84,10 +84,14 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(mainActivity).toContain('downloadLatestApk');
     expect(mainActivity).toContain('copyTextToClipboard');
     expect(mainActivity).toContain('copyText(String text)');
+    expect(mainActivity).toContain('configuredServerUrl');
+    expect(mainActivity).toContain('openServerSetup');
+    expect(mainActivity).toContain('ServerSetupActivity');
+    expect(mainActivity).toContain('AgentHubServerConfig.loadServerUrl');
     expect(mainActivity).toContain('DownloadManager');
     expect(mainActivity).toContain('application/vnd.android.package-archive');
     expect(mainActivity).toContain('error.getMessage()');
-    expect(mainActivity).toContain('bridge.reload()');
+    expect(mainActivity).toContain('bridge.getWebView().loadUrl(configuredUrl)');
     expect(mainActivity).not.toContain('OnBackPressedCallback');
     expect(mainActivity).not.toContain('getOnBackPressedDispatcher().addCallback');
     expect(mainActivity).not.toContain('AgentHubHandleAndroidBack');
@@ -105,6 +109,8 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(service).toContain('withCursor');
     expect(service).toContain('CookieManager.getInstance().getCookie');
     expect(service).toContain('START_STICKY');
+    expect(service).not.toContain('https://agenthub.example.com');
+    expect(manifest).toContain('ServerSetupActivity');
     expect(capacitorSettings).toContain("include ':capacitor-local-notifications'");
     expect(capacitorSettings).toContain("include ':capacitor-app'");
   });

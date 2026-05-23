@@ -56,6 +56,12 @@ Then open the Web console locally and point Android or Windows desktop at either
 - `http://localhost:5173` for local-only testing
 - your Tailscale URL for remote access from phone or another machine
 
+Android behavior:
+
+- first launch opens a server setup screen
+- paste the local or Tailscale URL there
+- after saving, the app opens the login page for that server
+
 ### macOS / Linux
 
 ```bash
@@ -85,6 +91,11 @@ https://agenthub.tailnet-name.ts.net
 ```
 
 If you use HTTPS on the tailnet hostname, prefer that over raw IP.
+
+On Android:
+
+- public internet hosts should use `https://`
+- `http://` is accepted only for localhost, LAN, and Tailscale-style private addresses
 
 ## When to move to a VM
 

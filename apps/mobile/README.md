@@ -1,18 +1,19 @@
 # AgentHub Android APK
 
-This is a thin Capacitor Android wrapper for the hosted AgentHub console.
+This is a thin Capacitor Android wrapper for AgentHub.
 
-The APK loads:
+On first launch, the APK asks for your AgentHub server URL before opening the login screen.
+
+Supported first-launch targets:
 
 ```text
 https://agenthub.example.com
+https://agenthub.tailnet-name.ts.net
+http://100.x.y.z:8019
+http://192.168.x.y:8019
 ```
 
-Example hosted APK:
-
-```text
-https://agenthub.example.com/downloads/agenthub-debug.apk
-```
+Public internet hosts must use HTTPS. Plain HTTP is only accepted for localhost, LAN, and Tailscale-style private addresses.
 
 Build APKs through GitHub Actions or locally with an Android SDK:
 
@@ -40,11 +41,7 @@ AGENTHUB_ANDROID_KEY_PASSWORD
 
 GitHub Actions reads the same values from repository secrets, with the keystore stored as `AGENTHUB_ANDROID_KEYSTORE_BASE64`.
 
-For a generic self-host build, point the wrapper at your own server before packaging:
-
-```text
-apps/mobile/capacitor.config.json
-```
+The public release flow publishes Android assets only when you cut a version tag that matches `v*`. If there is no GitHub Release yet, no public APK has been published yet.
 
 Publish your signed debug APK to your own download path:
 

@@ -20,7 +20,7 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 - **统一会话收件箱。** 把本机和远程机器上的 Codex、Claude、Kimi、OpenCode 会话放到同一个入口。
 - **多机器控制。** Windows 和 Linux worker 都可以接入，消息、健康检查和任务会路由到对应机器。
-- **手机和桌面都能用。** Web、Android APK、Windows 桌面端都可以接入同一个 AgentHub server。
+- **手机和桌面都能用。** Web、Android APK、Windows 桌面端都可以接入同一个 AgentHub server；其中 Android APK 首启会先要求填写 server URL。
 - **Tailscale-first 私有模式。** 不需要把 worker 端口暴露到公网，也能从手机控制本机 agent。
 - **配置优先。** 语音识别、服务器地址、worker 根目录、provider 密钥都走配置，不写死维护者环境。
 
@@ -38,6 +38,12 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 - 你想把部署交给 Codex、Claude Code 或其他工程 agent
 - 你不想自己手动拼接安装命令和配置项
 - 你要在本机、Tailscale 或 VM 三种模式之间快速切换
+
+部署完成后：
+
+- Android APK 首启先填写 AgentHub server URL
+- 然后进入对应站点的登录页
+- 不是免登录，而是先选自己的 server，再登录自己的账号
 
 ### 没有 VM：直接跑在自己的电脑上
 
@@ -74,7 +80,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 | 端 | 状态 | 说明 |
 | --- | --- | --- |
 | Web self-host | 已支持 | 主控制台和 API |
-| Android APK | 已支持 | 可配置 server URL 的 WebView 客户端 |
+| Android APK | 已支持 | 首启先配置 server URL，再进入登录 |
 | Windows desktop | 已支持 | Electron 客户端，首启配置服务器 |
 | Windows worker | 已支持 | bundle + PowerShell 安装脚本 |
 | Linux worker | 已支持 | bundle + shell/systemd 安装脚本 |
