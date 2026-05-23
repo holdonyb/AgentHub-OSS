@@ -39,8 +39,12 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         assert (REPO_ROOT / relative_path).is_file(), relative_path
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "Self-Host Public Relay" in readme
-    assert "Tailscale Private Mode" in readme
+    assert "Personal Agent Control Plane" in readme
+    assert "个人 AI Agent 控制台" in readme
+    assert "Codex, Claude, Kimi, OpenCode" in readme
+    assert "No VM: run AgentHub on your own machine" in readme
+    assert "没有 VM：直接跑在自己的电脑上" in readme
+    assert "Tailscale-first" in readme
     assert "Local server mode" in readme
     assert "docs/CONFIGURATION_REFERENCE.md" in readme
     assert "docs/LOCAL_SERVER_MODE.md" in readme
@@ -50,10 +54,11 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "docs/OPEN_SOURCE_LAUNCH.md" in readme
     assert "docs/SELF_HOST_QUICKSTART.md" in readme
     assert "docs/TAILSCALE_PRIVATE_MODE.md" in readme
-    assert "Android APK client" in readme
-    assert "Windows desktop client" in readme
-    assert "iOS" in readme
-    assert "macOS" in readme
+    assert "Android APK" in readme
+    assert "Windows desktop" in readme
+    assert "iOS client" in readme
+    assert "macOS desktop" in readme
+    assert "欢迎社区贡献" in readme
     assert "CONTRIBUTING.md" in readme
 
 
