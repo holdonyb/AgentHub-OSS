@@ -91,6 +91,26 @@ def test_session_input_builds_backend_specific_commands() -> None:
     assert "--yolo" in kimi
     assert "--thinking" in kimi
 
+    opencode = build_backend_command(
+        {
+            "kind": "session_input",
+            "backend": "opencode",
+            "target_session_id": "opencode-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "controls": {"model": "anthropic/claude-sonnet-4", "agent": "plan", "yolo": True},
+            },
+        },
+        attachment_paths=["C:/Temp/mock.png"],
+    )
+    assert opencode[:6] == ["opencode", "run", "--dir", "E:/work/AgentHub", "--session", "opencode-session"]
+    assert "--model" in opencode
+    assert "--agent" in opencode
+    assert "--dangerously-skip-permissions" in opencode
+    assert "--file" in opencode
+    assert opencode[-1] == "继续执行"
+
 
 def test_session_input_preserves_http_url_prompt_as_single_backend_argument() -> None:
     prompt = (
@@ -125,14 +145,32 @@ def test_session_input_preserves_http_url_prompt_as_single_backend_argument() ->
             "payload": {"prompt": prompt},
         }
     )
+    opencode = build_backend_command(
+        {
+            "kind": "session_input",
+            "backend": "opencode",
+            "target_session_id": "opencode-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": prompt},
+        }
+    )
 
     assert codex[-1] == prompt
     assert claude[-1] == prompt
     assert kimi[-1] == prompt
+    assert opencode[-1] == prompt
 
 
-def test_claude_goal_session_input_uses_resume_prompt_path() -> None:
-    prompt = "/goal all mobile inbox checks pass and the APK is published"
+def test_provider_auth_supports_opencode_cli_handoff() -> None:
+    login = executor._provider_handoff_command("opencode", "login")
+    logout = executor._provider_handoff_command("opencode", "logout")
+
+    assert login == ["opencode", "auth", "login"]
+    assert logout == ["opencode", "auth", "logout"]
+
+
+def test_claude_session_input_uses_resume_prompt_path() -> None:
+    prompt = "Continue until all mobile inbox checks pass and the APK is published"
 
     claude = build_backend_command(
         {
@@ -142,7 +180,6 @@ def test_claude_goal_session_input_uses_resume_prompt_path() -> None:
             "workspace_root": "E:/work/AgentHub",
             "payload": {
                 "prompt": prompt,
-                "native_goal_command": True,
                 "controls": {"model": "sonnet", "permission_mode": "auto"},
             },
         }
@@ -1378,6 +1415,22 @@ def test_backend_failure_includes_combined_cli_diagnostics(monkeypatch: pytest.M
     assert "ran out of room" in message
 
 
+def test_backend_auth_error_is_reported_even_when_cli_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
+    monkeypatch.setattr(
+        executor.subprocess,
+        "Popen",
+        fake_popen_factory(stdout="Error: invalid x-api-key", returncode=0),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        executor._run_backend_command(["opencode", "run", "hello"], "E:/Work", 30)
+
+    message = str(exc_info.value)
+    assert "opencode exited 0" in message
+    assert "invalid x-api-key" in message
+
+
 def test_session_start_builds_non_interactive_backend_commands() -> None:
     codex = build_session_start_command(
         {
@@ -1425,6 +1478,41 @@ def test_session_start_builds_non_interactive_backend_commands() -> None:
     assert "--thinking" in kimi
     assert "--yolo" in kimi
     assert kimi[-2:] == ["-p", "新建 Kimi"]
+
+    opencode = build_session_start_command(
+        {
+            "kind": "session_start",
+            "backend": "opencode",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "新建 OpenCode",
+                "controls": {"model": "openai/gpt-5", "agent": "build", "yolo": True},
+            },
+        }
+    )
+    assert opencode[:4] == ["opencode", "run", "--dir", "E:/work/AgentHub"]
+    assert "--model" in opencode
+    assert "--agent" in opencode
+    assert "--dangerously-skip-permissions" in opencode
+    assert opencode[-1] == "新建 OpenCode"
+
+
+def test_opencode_session_start_uses_worker_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTHUB_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
+
+    opencode = build_session_start_command(
+        {
+            "kind": "session_start",
+            "backend": "opencode",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": "新建 OpenCode", "controls": {"yolo": True}},
+        }
+    )
+
+    assert opencode[:4] == ["opencode", "run", "--dir", "E:/work/AgentHub"]
+    assert opencode[opencode.index("--model") + 1] == "opencode/deepseek-v4-flash-free"
+    assert "--dangerously-skip-permissions" in opencode
+    assert opencode[-1] == "新建 OpenCode"
 
 
 def test_session_fork_dry_run_uses_bounded_handoff_prompt() -> None:
@@ -1626,6 +1714,38 @@ def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.Mo
     assert published[0][0]["worker_id"] == "win-main"
     assert published[0][0]["runtime_metadata"]["created_by_job_id"] == "job-start"
     assert calls[0][:3] == ["codex", "-C", "E:/work/AgentHub"]
+
+
+def test_session_start_matches_windows_workspace_case_insensitively() -> None:
+    created = executor._select_created_session(
+        before=[
+            {
+                "session_id": "old",
+                "backend": "opencode",
+                "workspace_root": "E:/Work/AgentHub",
+                "last_activity_at": "2026-01-01T00:00:00",
+            }
+        ],
+        after=[
+            {
+                "session_id": "old",
+                "backend": "opencode",
+                "workspace_root": "E:/Work/AgentHub",
+                "last_activity_at": "2026-01-01T00:00:00",
+            },
+            {
+                "session_id": "new",
+                "backend": "opencode",
+                "workspace_root": "E:/Work/AgentHub",
+                "last_activity_at": "2026-01-02T00:00:00",
+            },
+        ],
+        backend="opencode",
+        workspace_root="E:/work/AgentHub",
+    )
+
+    assert created is not None
+    assert created["session_id"] == "new"
 
 
 def test_provider_auth_jobs_are_whitelisted_and_non_blocking() -> None:

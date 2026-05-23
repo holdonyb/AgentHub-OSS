@@ -286,6 +286,34 @@ def test_kimi_wire_session_parses_user_assistant_and_state(tmp_path: Path) -> No
     assert [item["item_type"] for item in session.runtime_metadata["timeline"]] == ["user_message", "assistant_message"]
 
 
+def test_kimi_wire_session_preserves_tool_call_and_result_details(tmp_path: Path) -> None:
+    session_dir = tmp_path / ".kimi" / "sessions" / "workspace-hash" / "session-uuid"
+    session_dir.mkdir(parents=True)
+    (session_dir / "wire.jsonl").write_text(
+        '{"timestamp":1775529995.0255253,"message":{"type":"TurnBegin","payload":{"user_input":"继续"}}}\n'
+        '{"timestamp":1775529996.0255253,"message":{"type":"ToolCall","payload":{"type":"function","id":"tool_1","function":{"name":"ReadFile","arguments":"{\\"path\\":\\"README.md\\"}"}}}}\n'
+        '{"timestamp":1775529997.0255253,"message":{"type":"ToolResult","payload":{"tool_call_id":"tool_1","return_value":{"is_error":false,"output":"hello from file","message":"1 line read","display":[{"type":"text","text":"preview text"}]}}}}\n'
+        '{"timestamp":1775529998.0255253,"message":{"type":"ApprovalRequest","payload":{"id":"approval_1","tool_call_id":"tool_2","sender":"Shell","action":"run command","description":"Run command `dir`"}}}\n',
+        encoding="utf-8",
+    )
+
+    session = parse_kimi_session(session_dir)
+
+    timeline = session.runtime_metadata["timeline"]
+    tool_call = next(item for item in timeline if item["tool_call_id"] == "tool_1")
+    tool_result = next(item for item in timeline if item["text"].startswith("工具结果:"))
+    approval = next(item for item in timeline if item["tool_call_id"] == "tool_2")
+
+    assert tool_call["item_type"] == "tool_call"
+    assert tool_call["tool_name"] == "ReadFile"
+    assert "README.md" in tool_call["text"]
+    assert tool_result["tool_call_id"] == "tool_1"
+    assert "hello from file" in tool_result["text"]
+    assert "preview text" in tool_result["text"]
+    assert approval["tool_name"] == "Shell"
+    assert "Run command `dir`" in approval["text"]
+
+
 def test_kimi_session_resolves_hashed_workdir_from_kimi_registry(tmp_path: Path) -> None:
     workdir = r"E:\Work\Kimi Project"
     workdir_hash = hashlib.md5(workdir.encode()).hexdigest()

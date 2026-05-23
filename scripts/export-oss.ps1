@@ -50,12 +50,31 @@ if (-not (Test-Path (Join-Path $target ".git"))) {
 $keepFiles = @(
     "README.md",
     "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
     "PROVENANCE.md",
     "SECURITY.md",
+    "docs\AI_DEPLOYMENT_RUNBOOK.md",
+    "docs\CONFIGURATION_REFERENCE.md",
+    "docs\DEPLOYMENT_BRIEF.example.json",
+    "docs\LOCAL_SERVER_MODE.md",
+    "docs\OPEN_SOURCE_LAUNCH.md",
     "docs\OSS_RELEASE.md",
+    "apps\api\tests\test_selfhost_onboarding_assets.py",
+    "apps\desktop\package.json",
+    "apps\desktop\scripts\electron-dist-cache.mjs",
+    "apps\desktop\scripts\package-win-config.mjs",
+    "apps\desktop\scripts\package-win.mjs",
+    "apps\desktop\scripts\package-win-config.test.mjs",
     ".github\workflows\ci.yml",
+    ".github\workflows\android-apk.yml",
     ".github\workflows\release.yml",
     ".github\workflows\secret-scan.yml"
+    ".github\workflows\selfhost-smoke.yml",
+    "scripts\audit-public-export.py",
+    "scripts\export-oss.ps1",
+    "scripts\render-deployment-brief.py"
 )
 
 $removeAfterCopy = @(
@@ -102,7 +121,7 @@ try {
     }
 
     if (-not $SkipAudit) {
-        & python (Join-Path $source "scripts\audit-public-export.py") --root $target
+        & python (Join-Path $target "scripts\audit-public-export.py") --root $target
         if ($LASTEXITCODE -ne 0) {
             throw "Public export audit failed"
         }

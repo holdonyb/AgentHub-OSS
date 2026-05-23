@@ -59,6 +59,19 @@ class SpaceMembership(Base):
     user: Mapped[User] = relationship(back_populates="memberships")
 
 
+class SettingEntry(Base):
+    __tablename__ = "setting_entries"
+    __table_args__ = (UniqueConstraint("scope_type", "scope_id", "key", name="uq_setting_scope_key"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("set"))
+    scope_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    key: Mapped[str] = mapped_column(String(120), nullable=False)
+    value_json: Mapped[str] = mapped_column(Text, default="null", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
 class WorkerEnrollment(Base):
     __tablename__ = "worker_enrollments"
 
@@ -131,6 +144,9 @@ class Worker(Base):
     reachable_backends_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     workspace_roots_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     capabilities_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    max_concurrent_jobs: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    job_poll_interval_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="registered", nullable=False)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

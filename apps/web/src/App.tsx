@@ -1,6 +1,7 @@
 import {
   Activity,
   Archive,
+  ArrowDown,
   Bell,
   Bot,
   CalendarClock,
@@ -65,10 +66,30 @@ import {
   requestNativeNotificationPermission,
 } from './nativeNotifications';
 import { startStreamingVoice, type StreamingVoiceController, type VoiceStreamAuthPayload } from './voiceStreaming';
+import {
+  formatRelativeTime,
+  isLocaleCode,
+  localeLabel,
+  pickLocale,
+  statusText,
+  t,
+  themeModeLabel,
+  voiceLanguageLabel,
+  voiceModeLabel,
+  type LocaleCode,
+} from './i18n';
+import {
+  buildSandboxedSrcDoc,
+  detectMessageRenderKind,
+  renderMarkdownPreview,
+  sanitizeHtmlPreview,
+  sanitizeRunnableHtml,
+  type MessageRenderKind,
+} from './messageRenderPreview';
 
 type LoadState = 'loading' | 'ready' | 'login' | 'error';
 type MobilePane = 'sessions' | 'thread' | 'controls' | 'files' | 'workers' | 'me';
-type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi';
+type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi' | 'opencode';
 type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
 type ReplyMode = 'direct' | 'plan';
@@ -78,15 +99,26 @@ type LaunchMode = 'none' | 'start' | 'fork';
 type NativeMicrophoneState = 'granted' | 'denied' | 'unavailable';
 type ApkUpdateStatus = 'idle' | 'checking' | 'ready' | 'failed';
 type ThemeMode = 'dark' | 'light';
+type VoiceMode = 'streaming' | 'standard';
 type VoiceInputMode = 'standard' | 'streaming';
+type InviteRole = Extract<Role, 'admin' | 'operator' | 'viewer'>;
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
 
 const mobilePanes = ['sessions', 'thread', 'controls', 'files', 'workers', 'me'] as const;
 const MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024;
+const VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+};
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
 const APK_DOWNLOAD_PATH = '/downloads/agenthub-debug.apk';
 const APK_DOWNLOAD_FILENAME = 'agenthub-debug.apk';
 const THEME_STORAGE_KEY = 'agenthub.theme';
+const LOCALE_STORAGE_KEY = 'agenthub.locale';
 const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
 const NOTIFICATION_READ_STORAGE_KEY = 'agenthub.notifications.read';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
@@ -98,7 +130,6 @@ declare global {
       requestMicrophonePermission?: () => boolean;
       startNotificationService?: () => boolean;
       stopNotificationService?: () => boolean;
-      setServerBaseUrl?: (url: string) => boolean;
       appVersionName?: () => string;
       appVersionCode?: () => number;
       downloadLatestApk?: (url: string, filename: string) => string;
@@ -118,6 +149,40 @@ interface AuthPayload {
     mode: string;
     role?: string | null;
   } | null;
+}
+
+interface UserPreferences {
+  locale: LocaleCode;
+  theme_mode: ThemeMode;
+  voice_mode: VoiceMode;
+  voice_language: string;
+  quick_replies: string[];
+}
+
+interface WorkerRuntimeDefaults {
+  max_concurrent_jobs: number;
+  job_poll_interval_seconds: number;
+  heartbeat_interval_seconds: number;
+}
+
+type WorkerWithRuntimeSettings = Worker & {
+  runtime_settings?: Partial<WorkerRuntimeDefaults>;
+};
+
+interface AgentHubSettings {
+  preferences: UserPreferences;
+  worker_runtime_defaults: WorkerRuntimeDefaults;
+  options: {
+    locales: Array<{ value: LocaleCode; label: string }>;
+    theme_modes: Array<{ value: ThemeMode; label: string }>;
+    voice_modes: Array<{ value: VoiceMode; label: string }>;
+    voice_languages: Array<{ value: string; label: string }>;
+  };
+  limits: {
+    max_session_attachments: number;
+    max_session_attachment_bytes: number;
+    max_voice_audio_bytes: number;
+  };
 }
 
 interface ControlsDraft {
@@ -222,21 +287,29 @@ interface SlashCommandOption {
   insertText: string;
   backends?: string[];
   action?: 'insert' | 'open-start' | 'open-fork';
+  featureKey?: string;
 }
 
 const slashCommandOptions: SlashCommandOption[] = [
   {
     command: '/goal',
     title: '目标模式',
-    description: '让 Codex/Claude 围绕一个目标持续推进。',
+    description: 'Codex 原生支持；Claude、Kimi、OpenCode 走 AgentHub 兼容目标提示。',
     insertText: '/goal ',
-    backends: ['codex', 'claude'],
+    backends: ['codex', 'claude', 'kimi', 'opencode'],
+    featureKey: 'goal',
   },
   {
     command: '/btw',
     title: '旁路提问',
     description: '基于当前 session 提问，但不写入原后端 session。',
     insertText: '/btw ',
+  },
+  {
+    command: '/stop',
+    title: '停止当前任务',
+    description: '停止当前会话里正在运行或排队的输入作业。',
+    insertText: '/stop',
   },
   {
     command: '/new',
@@ -371,9 +444,33 @@ interface WorkerInstallDraft {
     codex: boolean;
     claude: boolean;
     kimi: boolean;
+    opencode: boolean;
   };
   expires_in_hours: number;
   api_url: string;
+  max_concurrent_jobs: number;
+  job_poll_interval_seconds: number;
+  heartbeat_interval_seconds: number;
+}
+
+interface WorkerRuntimeSettingsDraft {
+  max_concurrent_jobs: string;
+  job_poll_interval_seconds: string;
+  heartbeat_interval_seconds: string;
+}
+
+interface InviteDraft {
+  email: string;
+  role: InviteRole;
+  expires_in_hours: string;
+}
+
+interface InviteCreated {
+  invite_id: string;
+  invite_token: string;
+  email: string;
+  role: Role;
+  expires_at: string;
 }
 
 interface AgentHubDesktopApi {
@@ -409,6 +506,24 @@ const emptyControls: ControlsDraft = {
   secret_namespace: '',
 };
 
+const defaultWorkerRuntimeSettings = {
+  max_concurrent_jobs: 2,
+  job_poll_interval_seconds: 5,
+  heartbeat_interval_seconds: 30,
+};
+
+const emptyWorkerRuntimeDraft: WorkerRuntimeSettingsDraft = {
+  max_concurrent_jobs: '2',
+  job_poll_interval_seconds: '5',
+  heartbeat_interval_seconds: '30',
+};
+
+const emptyInviteDraft: InviteDraft = {
+  email: '',
+  role: 'operator',
+  expires_in_hours: '168',
+};
+
 const defaultSecretDraft: SecretDraft = {
   name: '',
   value: '',
@@ -417,29 +532,34 @@ const defaultSecretDraft: SecretDraft = {
   description: '',
 };
 
-const providerFilters: { id: ProviderFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'codex', label: 'Codex' },
-  { id: 'claude', label: 'Claude' },
-  { id: 'kimi', label: 'Kimi' },
-];
+function providerFilters(locale: LocaleCode): { id: ProviderFilter; label: string }[] {
+  return [
+    { id: 'all', label: t(locale, 'allProviders') },
+    { id: 'codex', label: 'Codex' },
+    { id: 'claude', label: 'Claude' },
+    { id: 'kimi', label: 'Kimi' },
+    { id: 'opencode', label: 'OpenCode' },
+  ];
+}
 
-const timelineFilterLabels: Record<TimelineFilter, string> = {
-  focus: '重点',
-  all: '全部',
-  messages: '消息',
-  tools: '工具',
-  events: '事件',
-};
+function timelineFilterLabel(locale: LocaleCode, filter: TimelineFilter) {
+  const labels: Record<TimelineFilter, string> = {
+    focus: t(locale, 'focus'),
+    all: t(locale, 'all'),
+    messages: t(locale, 'messages'),
+    tools: t(locale, 'tools'),
+    events: t(locale, 'events'),
+  };
+  return labels[filter];
+}
 
 const OPTIMISTIC_TIMELINE_SEQ_BASE = 1_000_000_000;
 const TIMELINE_PROMPT_MATCH_WINDOW_MS = 10 * 60 * 1000;
 const TIMELINE_DISPLAY_DUPLICATE_WINDOW_MS = 2_000;
 
-const replyModeLabels: Record<ReplyMode, string> = {
-  direct: '直接',
-  plan: '计划',
-};
+function replyModeLabel(locale: LocaleCode, mode: ReplyMode) {
+  return mode === 'plan' ? t(locale, 'plan') : t(locale, 'direct');
+}
 
 const fullAccessControls = {
   sandbox_mode: 'danger-full-access',
@@ -462,14 +582,18 @@ const defaultWorkerInstallDraft: WorkerInstallDraft = {
     codex: true,
     claude: true,
     kimi: true,
+    opencode: true,
   },
   expires_in_hours: 24,
   api_url: '',
+  max_concurrent_jobs: 2,
+  job_poll_interval_seconds: 5,
+  heartbeat_interval_seconds: 30,
 };
 
 function emptyLaunchDraft(worker?: Worker, session?: AgentSession): SessionLaunchDraft {
   const controls = session ? controlsFromSession(session) : emptyControls;
-  const backend = session?.backend ?? worker?.reachable_backends.find((item) => ['codex', 'claude', 'kimi'].includes(item.toLowerCase())) ?? 'codex';
+  const backend = session?.backend ?? worker?.reachable_backends.find((item) => ['codex', 'claude', 'kimi', 'opencode'].includes(item.toLowerCase())) ?? 'codex';
   const workspace = session?.workspace_root ?? worker?.workspace_roots[0] ?? '';
   return {
     worker_id: session?.worker_id ?? worker?.worker_id ?? '',
@@ -550,7 +674,10 @@ function workerInstallCommands(draft: WorkerInstallDraft, enrollment: WorkerEnro
         draft.api_url.trim(),
       )} -EnrollmentToken ${quoteSinglePowerShell(enrollment.enrollment_token)} -WorkerId ${quoteSinglePowerShell(
         draft.worker_id.trim(),
-      )} ${modeArg} -InstallRoot $workerRoot ${workspaceArg}${sessionArg ? ` ${sessionArg}` : ''} ${startArg}`,
+      )} ${modeArg} -InstallRoot $workerRoot -MaxConcurrentJobs ${Math.max(1, Number(draft.max_concurrent_jobs) || 1)} -JobPollSeconds ${Math.max(
+        1,
+        Number(draft.job_poll_interval_seconds) || 1,
+      )} -HeartbeatSeconds ${Math.max(1, Number(draft.heartbeat_interval_seconds) || 1)} ${workspaceArg}${sessionArg ? ` ${sessionArg}` : ''} ${startArg}`,
       `Remove-Item -LiteralPath $bundleDir -Recurse -Force -ErrorAction SilentlyContinue`,
       `Remove-Item -LiteralPath $bundleZip -Force -ErrorAction SilentlyContinue`,
     ].join('\n');
@@ -566,7 +693,7 @@ function workerInstallCommands(draft: WorkerInstallDraft, enrollment: WorkerEnro
     `bundle_dir="$(mktemp -d /tmp/agenthub-worker-XXXXXX)"`,
     `curl -fsSL "$bundle_url" -o "$bundle_tar"`,
     `tar -xzf "$bundle_tar" -C "$bundle_dir"`,
-    `sudo bash "$bundle_dir/agenthub-worker/scripts/install-linux-worker.sh" --api-url ${quoteSingleShell(draft.api_url.trim())} --enrollment-token ${quoteSingleShell(enrollment.enrollment_token)} --worker-id ${quoteSingleShell(draft.worker_id.trim())} --connection-mode ${draft.connection_mode} --install-root "$worker_root" --service-name ${quoteSingleShell(serviceName)}${workspaceArgs ? ` ${workspaceArgs}` : ''}${sessionArgs ? ` ${sessionArgs}` : ''}`,
+    `sudo bash "$bundle_dir/agenthub-worker/scripts/install-linux-worker.sh" --api-url ${quoteSingleShell(draft.api_url.trim())} --enrollment-token ${quoteSingleShell(enrollment.enrollment_token)} --worker-id ${quoteSingleShell(draft.worker_id.trim())} --connection-mode ${draft.connection_mode} --install-root "$worker_root" --service-name ${quoteSingleShell(serviceName)} --max-concurrent-jobs ${Math.max(1, Number(draft.max_concurrent_jobs) || 1)} --job-poll-seconds ${Math.max(1, Number(draft.job_poll_interval_seconds) || 1)} --heartbeat-seconds ${Math.max(1, Number(draft.heartbeat_interval_seconds) || 1)}${workspaceArgs ? ` ${workspaceArgs}` : ''}${sessionArgs ? ` ${sessionArgs}` : ''}`,
     `rm -rf "$bundle_dir" "$bundle_tar"`,
   ].join('\n');
 }
@@ -596,8 +723,8 @@ function splitSecretRefs(value: string) {
 }
 
 function workerBackendOptions(worker: Worker | undefined) {
-  const values = worker?.reachable_backends ?? ['codex', 'claude', 'kimi'];
-  return values.filter((backend) => ['codex', 'claude', 'kimi'].includes(backend.toLowerCase()));
+  const values = worker?.reachable_backends ?? ['codex', 'claude', 'kimi', 'opencode'];
+  return values.filter((backend) => ['codex', 'claude', 'kimi', 'opencode'].includes(backend.toLowerCase()));
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -667,6 +794,10 @@ function replyAttachmentPayload(attachment: ReplyAttachment) {
   };
 }
 
+function replyAttachmentContentKey(attachment: ReplyAttachment) {
+  return `${attachment.content_type}:${attachment.size_bytes}:${attachment.data_base64}`;
+}
+
 function statusClass(status: string) {
   if (['needs_reply'].includes(status)) return 'status-approval';
   if (['running', 'queued'].includes(status)) return 'status-running';
@@ -685,13 +816,21 @@ function canOperate(user: User | null) {
   return user ? roleRank[user.role] >= roleRank.operator : false;
 }
 
+function cancellableSessionInputJob(jobs: Job[]) {
+  return (
+    jobs.find((job) => job.kind === 'session_input' && job.status === 'running') ??
+    jobs.find((job) => job.kind === 'session_input' && job.status === 'queued') ??
+    null
+  );
+}
+
 function workerSupportsBackend(worker: Worker | undefined, session: AgentSession | null) {
   if (!worker || !session) return true;
   return worker.reachable_backends.some((backend) => backend.toLowerCase() === session.backend.toLowerCase());
 }
 
 function backendLabel(value: string) {
-  const labels: Record<string, string> = { codex: 'Codex', claude: 'Claude', kimi: 'Kimi' };
+  const labels: Record<string, string> = { codex: 'Codex', claude: 'Claude', kimi: 'Kimi', opencode: 'OpenCode' };
   return labels[value.toLowerCase()] ?? value;
 }
 
@@ -726,6 +865,31 @@ function controlsFromSession(session?: AgentSession): ControlsDraft {
 }
 
 function sameControlsDraft(left: ControlsDraft, right: ControlsDraft) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function workerRuntimeSettingsFromWorker(worker?: WorkerWithRuntimeSettings | null) {
+  return {
+    max_concurrent_jobs: Number(worker?.runtime_settings?.max_concurrent_jobs ?? defaultWorkerRuntimeSettings.max_concurrent_jobs),
+    job_poll_interval_seconds: Number(
+      worker?.runtime_settings?.job_poll_interval_seconds ?? defaultWorkerRuntimeSettings.job_poll_interval_seconds,
+    ),
+    heartbeat_interval_seconds: Number(
+      worker?.runtime_settings?.heartbeat_interval_seconds ?? defaultWorkerRuntimeSettings.heartbeat_interval_seconds,
+    ),
+  };
+}
+
+function workerRuntimeDraftFromWorker(worker?: Worker | null): WorkerRuntimeSettingsDraft {
+  const settings = workerRuntimeSettingsFromWorker(worker);
+  return {
+    max_concurrent_jobs: String(settings.max_concurrent_jobs),
+    job_poll_interval_seconds: String(settings.job_poll_interval_seconds),
+    heartbeat_interval_seconds: String(settings.heartbeat_interval_seconds),
+  };
+}
+
+function sameWorkerRuntimeDraft(left: WorkerRuntimeSettingsDraft, right: WorkerRuntimeSettingsDraft) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
@@ -777,12 +941,37 @@ function parsedSlashCommand(value: string) {
   };
 }
 
-function availableSlashCommands(value: string, session: AgentSession | null) {
+function providerFeatureEnabled(provider: ProviderSnapshot | undefined, key: string) {
+  const value = provider?.features?.[key];
+  return typeof value === 'boolean' ? value : null;
+}
+
+function slashCommandDescription(option: SlashCommandOption, provider: ProviderSnapshot | undefined, locale: LocaleCode = 'zh-CN') {
+  if (option.command === '/goal') {
+    const nativeGoal = providerFeatureEnabled(provider, 'native_goal_command');
+    const goalEnabled = providerFeatureEnabled(provider, 'goal');
+    if (nativeGoal === true) {
+      return pickLocale(locale, '当前 provider 原生支持 /goal。', 'This provider supports /goal natively.');
+    }
+    if (goalEnabled === false) {
+      return pickLocale(locale, '当前 provider 未上报 /goal 能力。', 'This provider does not report /goal support.');
+    }
+    return pickLocale(
+      locale,
+      '当前 provider 走 AgentHub 兼容目标提示，不直接透传原生命令。',
+      'This provider uses the AgentHub goal compatibility prompt instead of a native slash command.',
+    );
+  }
+  return option.description;
+}
+
+function availableSlashCommands(value: string, session: AgentSession | null, provider: ProviderSnapshot | undefined) {
   const query = slashQuery(value);
   if (query === null) return [];
   const backend = session?.backend.toLowerCase();
   return slashCommandOptions.filter((option) => {
     if (option.backends && backend && !option.backends.includes(backend)) return false;
+    if (option.featureKey && providerFeatureEnabled(provider, option.featureKey) === false) return false;
     const normalized = option.command.slice(1).toLowerCase();
     return normalized.startsWith(query);
   });
@@ -793,15 +982,15 @@ function providerFeatureText(provider: ProviderSnapshot | undefined, key: string
   return typeof value === 'string' ? value : '';
 }
 
-function providerInteractionSummary(provider: ProviderSnapshot | undefined) {
+function providerInteractionSummary(provider: ProviderSnapshot | undefined, locale: LocaleCode = 'zh-CN') {
   const bridge = providerFeatureText(provider, 'interaction_bridge');
   if (bridge === 'native') {
-    return '原生交互：Plan/选项/审批可在 AgentHub 内处理';
+    return pickLocale(locale, '原生交互：Plan/选项/审批可在 AgentHub 内处理', 'Native interaction: plans, choices, and approvals can be handled in AgentHub');
   }
   if (bridge === 'compatibility') {
-    return '兼容交互：计划后的选择可处理，运行中原生提问需本机或后续桥接';
+    return pickLocale(locale, '兼容交互：计划后的选择可处理，运行中原生提问需本机或后续桥接', 'Compatibility mode: plan choices are supported; live native prompts still need local access or a later bridge');
   }
-  return '交互能力未上报';
+  return pickLocale(locale, '交互能力未上报', 'Interaction capabilities not reported');
 }
 
 function optionText(value: unknown) {
@@ -954,18 +1143,18 @@ function matchingRequestUserInputPermission(permissions: AgentPermission[], ques
   );
 }
 
-function sandboxSummary(session?: AgentSession | null) {
-  if (!session) return '权限未选择';
+function sandboxSummary(session?: AgentSession | null, locale: LocaleCode = 'zh-CN') {
+  if (!session) return pickLocale(locale, '权限未选择', 'No permission selected');
   const controls = session.controls ?? {};
   const backend = session.backend.toLowerCase();
   const sandbox = optionText(controls.sandbox_mode) || 'default';
   const approval = optionText(controls.approval_mode) || 'default';
   const permission = optionText(controls.permission_mode) || approval;
   if (controls.yolo === true || sandbox === 'danger-full-access' || permission === 'bypassPermissions') {
-    return '全权限';
+    return pickLocale(locale, '全权限', 'Full access');
   }
-  if (backend === 'claude' && permission === 'plan') return 'Claude 计划模式';
-  if (backend === 'claude') return `权限 ${permission}`;
+  if (backend === 'claude' && permission === 'plan') return pickLocale(locale, 'Claude 计划模式', 'Claude plan mode');
+  if (backend === 'claude') return pickLocale(locale, `权限 ${permission}`, `Permission ${permission}`);
   if (backend === 'kimi') return controls.yolo === true ? 'Kimi yolo' : 'Kimi default';
   return `${sandbox} / ${approval}`;
 }
@@ -988,6 +1177,10 @@ function localResumeCommand(session: AgentSession) {
     const workDir = session.workspace_root?.trim() ? ` --work-dir ${quoteCliArg(session.workspace_root.trim())}` : '';
     return `kimi${workDir} -S ${sessionId}`;
   }
+  if (backend === 'opencode') {
+    const workDir = session.workspace_root?.trim() ? ` ${quoteCliArg(session.workspace_root.trim())}` : '';
+    return `opencode --session ${sessionId}${workDir}`;
+  }
   return `${backend} resume ${sessionId}`;
 }
 
@@ -998,14 +1191,16 @@ function localResumeHint(session: AgentSession) {
   return '在对应 worker 本机运行这条命令，打开同一个后端会话。';
 }
 
-function replyModeHint(mode: ReplyMode, session?: AgentSession | null, provider?: ProviderSnapshot) {
+function replyModeHint(mode: ReplyMode, session?: AgentSession | null, provider?: ProviderSnapshot, locale: LocaleCode = 'zh-CN') {
   if (mode === 'plan' && session?.backend.toLowerCase() === 'codex') {
-    return 'Codex 原生 Plan；沙箱按当前控制设置，需要选择时会弹出卡片';
+    return pickLocale(locale, 'Codex 原生 Plan；沙箱按当前控制设置，需要选择时会弹出卡片', 'Codex native Plan; sandbox follows current controls, and choices appear as cards');
   }
-  if (mode === 'plan') return `计划模式；${providerInteractionSummary(provider)}`;
+  if (mode === 'plan') return pickLocale(locale, `计划模式；${providerInteractionSummary(provider, locale)}`, `Plan mode; ${providerInteractionSummary(provider, locale)}`);
   const status = session?.status;
-  if (status === 'running' || status === 'queued') return '当前会话忙，发送后会排队到当前作业后执行';
-  return session ? `当前 ${sandboxSummary(session)}` : '';
+  if (status === 'running' || status === 'queued') {
+    return pickLocale(locale, '当前会话忙，发送后会排队到当前作业后执行', 'This session is busy; your message will run after the current job');
+  }
+  return session ? pickLocale(locale, `当前 ${sandboxSummary(session, locale)}`, `Current ${sandboxSummary(session, locale)}`) : '';
 }
 
 function errorName(error: unknown) {
@@ -1064,15 +1259,6 @@ function startNativeNotificationService() {
 function stopNativeNotificationService() {
   try {
     return window.AgentHubAndroid?.stopNotificationService?.() === true;
-  } catch {
-    return false;
-  }
-}
-
-function syncNativeServerBaseUrl() {
-  try {
-    if (typeof window === 'undefined') return false;
-    return window.AgentHubAndroid?.setServerBaseUrl?.(window.location.origin) === true;
   } catch {
     return false;
   }
@@ -1153,6 +1339,57 @@ function initialVoiceInputMode(): VoiceInputMode {
   }
 }
 
+function initialLocale(): LocaleCode {
+  try {
+    const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
+    return isLocaleCode(stored) ? stored : 'zh-CN';
+  } catch {
+    return 'zh-CN';
+  }
+}
+
+function defaultSettings(): AgentHubSettings {
+  return {
+    preferences: {
+      locale: 'zh-CN',
+      theme_mode: 'dark',
+      voice_mode: 'streaming',
+      voice_language: 'zh-CN',
+      quick_replies: ['继续', '不对，重新来', '等等', '收到，继续', '先停一下'],
+    },
+    worker_runtime_defaults: {
+      max_concurrent_jobs: 2,
+      job_poll_interval_seconds: 5,
+      heartbeat_interval_seconds: 30,
+    },
+    options: {
+      locales: [
+        { value: 'zh-CN', label: '简体中文' },
+        { value: 'zh-TW', label: '繁體中文' },
+        { value: 'en-US', label: 'English' },
+      ],
+      theme_modes: [
+        { value: 'dark', label: '深色' },
+        { value: 'light', label: '浅色' },
+      ],
+      voice_modes: [
+        { value: 'streaming', label: '流式' },
+        { value: 'standard', label: '标准' },
+      ],
+      voice_languages: [
+        { value: 'zh-CN', label: '中文' },
+        { value: 'zh-TW', label: '繁體中文' },
+        { value: 'en-US', label: 'English' },
+      ],
+    },
+    limits: {
+      max_session_attachments: 5,
+      max_session_attachment_bytes: 8 * 1024 * 1024,
+      max_voice_audio_bytes: MAX_VOICE_AUDIO_BYTES,
+    },
+  };
+}
+
 function readStoredNotificationIds() {
   try {
     const raw = localStorage.getItem(NOTIFICATION_READ_STORAGE_KEY);
@@ -1220,6 +1457,9 @@ function recorderSetupFailureNotice(error: unknown) {
 function voiceTranscribeFailureNotice(error: unknown) {
   const message = errorMessage(error);
   const normalized = message.toLowerCase();
+  if (normalized.includes('normal silence audio') || normalized.includes('no valid speech in audio')) {
+    return '这次录到的是静音、音量太小，或浏览器选错了麦克风输入设备。请对着麦克风重试；如果还是不行，先检查浏览器站点麦克风权限和系统默认输入设备。';
+  }
   if (
     message === '413' ||
     normalized.includes('too large') ||
@@ -1277,16 +1517,8 @@ function formatWhen(value?: string | null) {
   return parsed.toLocaleString();
 }
 
-function formatRelative(value?: string | null) {
-  const parsed = parseApiDate(value);
-  if (!parsed) return '';
-  const delta = Date.now() - parsed.getTime();
-  const minutes = Math.max(1, Math.round(delta / 60000));
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.round(hours / 24);
-  return `${days} 天前`;
+function formatRelative(value?: string | null, locale: LocaleCode = 'zh-CN') {
+  return formatRelativeTime(locale, value, parseApiDate);
 }
 
 function formatFileSize(value?: number | null) {
@@ -1300,20 +1532,8 @@ function sessionTimestamp(session: AgentSession) {
   return parseApiDate(session.last_activity_at ?? session.updated_at)?.getTime() ?? 0;
 }
 
-function statusLabel(status: string) {
-  const labels: Record<string, string> = {
-    ready: '空闲',
-    queued: '排队中',
-    running: '运行中',
-    needs_reply: '等待审批',
-    failed: '失败',
-    terminated: '已结束',
-    online: '在线',
-    degraded: '降级',
-    offline: '离线',
-    succeeded: '成功',
-  };
-  return labels[status] ?? status;
+function statusLabel(status: string, locale: LocaleCode = 'zh-CN') {
+  return statusText(locale, status);
 }
 
 function compactText(value?: string | null, limit = 180) {
@@ -1667,7 +1887,19 @@ function timelineTextState(text?: string | null) {
   };
 }
 
-function TimelineText({ text }: { text?: string | null }) {
+function preferredPreviewMode(kind: MessageRenderKind): 'plain' | 'markdown' | 'html' | 'runtime' {
+  if (kind === 'html') return 'html';
+  if (kind === 'markdown') return 'markdown';
+  return 'plain';
+}
+
+function TimelineText({
+  text,
+  allowRenderPreview = false,
+}: {
+  text?: string | null;
+  allowRenderPreview?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -1675,6 +1907,16 @@ function TimelineText({ text }: { text?: string | null }) {
   const shouldCollapse = value.length > 640 || value.split('\n').length > 8;
   const displayText = shouldCollapse && !expanded ? compactText(value, 640) : value;
   const hasText = Boolean(value.trim());
+  const detectedKind = allowRenderPreview ? detectMessageRenderKind(value) : 'plain';
+  const [viewerMode, setViewerMode] = useState<'plain' | 'markdown' | 'html' | 'runtime'>(preferredPreviewMode(detectedKind));
+  const canRenderMarkdown = allowRenderPreview && detectedKind !== 'plain';
+  const canRenderHtml = allowRenderPreview && detectedKind === 'html';
+  const markdownPreview = canRenderMarkdown ? renderMarkdownPreview(value) : '';
+  const htmlPreview = canRenderHtml ? buildSandboxedSrcDoc(sanitizeHtmlPreview(value)) : '';
+  const runtimeHtmlPreview = canRenderHtml ? buildSandboxedSrcDoc(sanitizeRunnableHtml(value), { allowScripts: true }) : '';
+  useEffect(() => {
+    setViewerMode(preferredPreviewMode(detectedKind));
+  }, [detectedKind, value]);
   const copyText = async () => {
     if (!hasText) return;
     if (await writeTextToClipboard(value)) {
@@ -1692,7 +1934,64 @@ function TimelineText({ text }: { text?: string | null }) {
           </button>
         </header>
         {wasTruncated && <span className="message-truncation-warning">内容已截断</span>}
-        <pre>{value || '暂无输出'}</pre>
+        {allowRenderPreview && detectedKind !== 'plain' ? (
+          <div className="viewer-tabs" role="tablist" aria-label="预览模式">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewerMode === 'plain'}
+              onClick={() => setViewerMode('plain')}
+            >
+              原文
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewerMode === 'markdown'}
+              onClick={() => setViewerMode('markdown')}
+            >
+              Markdown
+            </button>
+            {canRenderHtml ? (
+              <>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewerMode === 'html'}
+                  onClick={() => setViewerMode('html')}
+                >
+                  HTML
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={viewerMode === 'runtime'}
+                  onClick={() => setViewerMode('runtime')}
+                >
+                  运行
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {viewerMode === 'plain' ? <pre>{value || '暂无输出'}</pre> : null}
+        {viewerMode === 'markdown' ? (
+          <div className="rich-preview" dangerouslySetInnerHTML={{ __html: markdownPreview || '<p>暂无输出</p>' }} />
+        ) : null}
+        {viewerMode === 'html' && canRenderHtml ? (
+          <iframe className="html-preview-frame" sandbox="" srcDoc={htmlPreview} title="HTML 预览" />
+        ) : null}
+        {viewerMode === 'runtime' && canRenderHtml ? (
+          <>
+            <p className="preview-runtime-note">运行模式仅在沙箱 iframe 中执行脚本，不会接触 AgentHub 主界面。</p>
+            <iframe
+              className="html-preview-frame runtime"
+              sandbox="allow-scripts"
+              srcDoc={runtimeHtmlPreview}
+              title="HTML 运行"
+            />
+          </>
+        ) : null}
         <footer>
           <button className="message-action-button" type="button" onClick={copyText}>
             <Copy size={13} />
@@ -1929,6 +2228,9 @@ function jobStatusHint(job: Job) {
     }
     return '排队中：同一会话已有作业在运行，会在前一个作业结束或释放后执行';
   }
+  if (job.status === 'cancelled') {
+    return '这个输入作业已停止，不会继续投递到当前 session';
+  }
   return '';
 }
 
@@ -2003,7 +2305,10 @@ function App() {
   const [mobileSessionActionsOpen, setMobileSessionActionsOpen] = useState(false);
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => initialThemeMode());
+  const [locale, setLocale] = useState<LocaleCode>(() => initialLocale());
+  const [settings, setSettings] = useState<AgentHubSettings>(() => defaultSettings());
   const [voiceInputMode, setVoiceInputMode] = useState<VoiceInputMode>(() => initialVoiceInputMode());
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const [notificationPermission, setNotificationPermission] = useState<NotificationState>(() => notificationState());
@@ -2018,6 +2323,9 @@ function App() {
   const [controlsDraft, setControlsDraft] = useState<ControlsDraft>(emptyControls);
   const [isControlsDirty, setIsControlsDirty] = useState(false);
   const controlsDirtyRef = useRef(false);
+  const [workerRuntimeDraft, setWorkerRuntimeDraft] = useState<WorkerRuntimeSettingsDraft>(emptyWorkerRuntimeDraft);
+  const [isWorkerRuntimeDirty, setIsWorkerRuntimeDirty] = useState(false);
+  const workerRuntimeDirtyRef = useRef(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>('none');
   const [launchDraft, setLaunchDraft] = useState<SessionLaunchDraft>(() => emptyLaunchDraft());
   const [workerInstallOpen, setWorkerInstallOpen] = useState(false);
@@ -2025,8 +2333,12 @@ function App() {
     normalizeWorkerInstallDraft(window.location.origin, []),
   );
   const [workerEnrollment, setWorkerEnrollment] = useState<WorkerEnrollmentCreated | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteDraft, setInviteDraft] = useState<InviteDraft>(emptyInviteDraft);
+  const [createdInvite, setCreatedInvite] = useState<InviteCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
+  const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
   const notificationInboxOpenRef = useRef(false);
   const launchModeRef = useRef<LaunchMode>('none');
@@ -2070,6 +2382,33 @@ function App() {
     target_worker_id: '',
   });
   const [secretDraft, setSecretDraft] = useState<SecretDraft>(defaultSecretDraft);
+  const text = {
+    newSession: pickLocale(locale, '新建会话', 'New Session'),
+    syncing: pickLocale(locale, '同步中', 'Syncing'),
+    autosync: lastSyncedAt
+      ? `${t(locale, 'autosync')} ${formatRelative(lastSyncedAt, locale)}`
+      : t(locale, 'autosyncStarting'),
+    refreshing: pickLocale(locale, '刷新中', 'Refreshing'),
+    refresh: pickLocale(locale, '刷新', 'Refresh'),
+    notifications: pickLocale(locale, '通知', 'Notifications'),
+    logout: pickLocale(locale, '退出登录', 'Log out'),
+    sessionInbox: pickLocale(locale, '会话收件箱', 'Session Inbox'),
+    archivedSessions: pickLocale(locale, '会话归档', 'Archived Sessions'),
+    activeTab: pickLocale(locale, '收件箱', 'Inbox'),
+    archivedTab: pickLocale(locale, '归档', 'Archive'),
+    searchPlaceholder: pickLocale(locale, '搜索会话、项目或内容', 'Search sessions, projects, or content'),
+    searchLabel: pickLocale(locale, '搜索会话', 'Search sessions'),
+    clearSearch: pickLocale(locale, '清空搜索', 'Clear search'),
+    sortRecent: pickLocale(locale, '排序：最近活动', 'Sort: recent activity'),
+    mobileSessions: pickLocale(locale, '会话', 'Sessions'),
+    mobileThread: pickLocale(locale, '对话', 'Chat'),
+    mobileFiles: pickLocale(locale, '文件', 'Files'),
+    mobileWorkers: pickLocale(locale, '节点', 'Workers'),
+    mobileMe: pickLocale(locale, '我的', 'Me'),
+    controls: pickLocale(locale, '会话控制', 'Session Controls'),
+    preferences: pickLocale(locale, '界面与偏好', 'Interface & Preferences'),
+    workerRuntime: pickLocale(locale, 'Worker 默认参数', 'Worker Runtime Defaults'),
+  };
 
   const filteredSessions = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -2104,6 +2443,16 @@ function App() {
     controlsDirtyRef.current = true;
     setIsControlsDirty(true);
     setControlsDraft((current) => (typeof updater === 'function' ? updater(current) : updater));
+  }
+
+  function updateWorkerRuntimeDraft(
+    updater:
+      | WorkerRuntimeSettingsDraft
+      | ((current: WorkerRuntimeSettingsDraft) => WorkerRuntimeSettingsDraft),
+  ) {
+    workerRuntimeDirtyRef.current = true;
+    setIsWorkerRuntimeDirty(true);
+    setWorkerRuntimeDraft((current) => (typeof updater === 'function' ? updater(current) : updater));
   }
   const selectedProvider = useMemo(
     () =>
@@ -2142,8 +2491,8 @@ function App() {
   const canReply = Boolean(selectedSession && canOperate(user) && !replyBlockedReason);
   const canSendReply = canReply && !isTranscribing && !isPreparingAttachment;
   const visibleSlashCommands = useMemo(
-    () => (canReply && replyAttachments.length === 0 ? availableSlashCommands(reply, selectedSession) : []),
-    [canReply, reply, replyAttachments.length, selectedSession],
+    () => (canReply && replyAttachments.length === 0 ? availableSlashCommands(reply, selectedSession, selectedProvider) : []),
+    [canReply, reply, replyAttachments.length, selectedProvider, selectedSession],
   );
   const isRefreshNotice = notice.includes('后台刷新') || notice.startsWith('刷新失败');
   const visibleReplyStatus =
@@ -2153,6 +2502,7 @@ function App() {
         .filter((job) => job.target_session_id === selectedSession.session_id)
         .sort((left, right) => jobTime(right) - jobTime(left))
     : [];
+  const selectedCancelableJob = selectedSession ? cancellableSessionInputJob(selectedJobs) : null;
   const selectedTimelineWithJobs = useMemo(
     () => mergeTimelineItems(selectedTimeline, jobTimelineItems(selectedSession, selectedJobs, selectedTimeline)),
     [selectedSession, selectedJobs, selectedTimeline],
@@ -2176,15 +2526,44 @@ function App() {
       if (isFocusTimelineItem(item)) counts.focus += 1;
       counts[timelineFilterFor(item)] += 1;
     });
-    return (Object.keys(timelineFilterLabels) as TimelineFilter[])
-      .map((id) => ({ id, label: timelineFilterLabels[id], count: counts[id] }))
+    return (['focus', 'all', 'messages', 'tools', 'events'] as TimelineFilter[])
+      .map((id) => ({ id, label: timelineFilterLabel(locale, id), count: counts[id] }))
       .filter((filter) => filter.id === 'all' || filter.id === 'focus' || filter.count > 0);
-  }, [displayTimeline]);
+  }, [displayTimeline, locale]);
   const visibleTimeline = useMemo(
     () => displayTimeline.filter((item) => timelineMatchesFilter(item, timelineFilter)),
     [displayTimeline, timelineFilter],
   );
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
+  const quickReplies = settings.preferences.quick_replies?.filter((item) => item.trim()).slice(0, 12) ?? [];
+
+  function updateScrollToBottomState() {
+    const transcript = transcriptRef.current;
+    if (!transcript) {
+      setShowScrollToBottom(false);
+      return;
+    }
+    setShowScrollToBottom(transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight > 96);
+  }
+
+  function scrollTranscriptToBottom(behavior: ScrollBehavior = 'smooth') {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    transcript.scrollTop = transcript.scrollHeight;
+    transcript.scrollTo?.({ top: transcript.scrollHeight, behavior });
+    setShowScrollToBottom(false);
+  }
+
+  function handleTranscriptScroll() {
+    updateScrollToBottomState();
+  }
+
+  function insertQuickReply(value: string) {
+    const text = value.trim();
+    if (!text || !canReply) return;
+    handleReplyChange(reply.trim() ? `${reply.replace(/\s+$/, '')}\n${text}` : text);
+    window.setTimeout(() => replyTextareaRef.current?.focus(), 0);
+  }
 
   useLayoutEffect(() => {
     const sessionId = selectedSession?.session_id ?? null;
@@ -2211,6 +2590,7 @@ function App() {
         shouldScrollTranscriptToBottomRef.current = false;
       }
     }
+    updateScrollToBottomState();
   }, [selectedSession?.session_id, selectedPermissions.length, timelineFilter, visibleTimeline.length]);
 
   useEffect(() => {
@@ -2454,6 +2834,27 @@ function App() {
     }
   }
 
+  async function loadSettings() {
+    try {
+      const payload = await apiGet<AgentHubSettings>('/api/settings');
+      setSettings(payload);
+      setLocale(payload.preferences.locale);
+      setThemeMode(payload.preferences.theme_mode);
+      setVoiceInputMode(payload.preferences.voice_mode);
+      setWorkerInstallDraft((current) => ({
+        ...current,
+        max_concurrent_jobs: payload.worker_runtime_defaults.max_concurrent_jobs,
+        job_poll_interval_seconds: payload.worker_runtime_defaults.job_poll_interval_seconds,
+        heartbeat_interval_seconds: payload.worker_runtime_defaults.heartbeat_interval_seconds,
+      }));
+      return payload;
+    } catch {
+      const payload = defaultSettings();
+      setSettings(payload);
+      return payload;
+    }
+  }
+
   function mergeSessionList(current: AgentSession[], incoming: AgentSession[], removedSessionIds: string[]) {
     const next = new Map(current.map((session) => [session.session_id, session]));
     removedSessionIds.forEach((sessionId) => next.delete(sessionId));
@@ -2691,6 +3092,14 @@ function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    } catch {
+      // Ignore storage failures in embedded WebViews.
+    }
+  }, [locale]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(VOICE_INPUT_MODE_STORAGE_KEY, voiceInputMode);
     } catch {
       // Ignore storage failures in embedded WebViews.
@@ -2704,6 +3113,7 @@ function App() {
         if (!active) return;
         setUser(payload.user);
         setCsrfToken(payload.csrf_token);
+        await loadSettings();
         await loadData(payload.csrf_token, payload.user);
         if (active) setLoadState('ready');
       })
@@ -2743,6 +3153,25 @@ function App() {
     selectedSession?.session_id,
     titleDraft,
   ]);
+
+  useEffect(() => {
+    const nextWorkerId = selectedWorker?.worker_id ?? null;
+    const nextDraft = workerRuntimeDraftFromWorker(selectedWorker);
+    if (hydratedWorkerRuntimeIdRef.current !== nextWorkerId) {
+      hydratedWorkerRuntimeIdRef.current = nextWorkerId;
+      setWorkerRuntimeDraft(nextDraft);
+      workerRuntimeDirtyRef.current = false;
+      setIsWorkerRuntimeDirty(false);
+      return;
+    }
+    if (
+      !workerRuntimeDirtyRef.current &&
+      !isWorkerRuntimeDirty &&
+      !sameWorkerRuntimeDraft(workerRuntimeDraft, nextDraft)
+    ) {
+      setWorkerRuntimeDraft(nextDraft);
+    }
+  }, [isWorkerRuntimeDirty, selectedWorker, workerRuntimeDraft]);
 
   useEffect(() => {
     if (launchMode !== 'none') return;
@@ -2801,10 +3230,6 @@ function App() {
     target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
     setFocusedPermissionId(null);
   }, [focusedPermissionId, mobilePane, selectedSession?.session_id, selectedPermissions.length, visibleTimeline.length]);
-
-  useEffect(() => {
-    syncNativeServerBaseUrl();
-  }, []);
 
   useEffect(() => {
     if (loadState === 'ready') startNativeNotificationService();
@@ -2870,6 +3295,7 @@ function App() {
     });
     setUser(payload.user);
     setCsrfToken(payload.csrf_token);
+    await loadSettings();
     await loadData(payload.csrf_token);
     setLoadState('ready');
   }
@@ -2886,6 +3312,30 @@ function App() {
     } finally {
       setIsRefreshing(false);
     }
+  }
+
+  async function handleLocaleChange(nextLocale: LocaleCode) {
+    const preferences = await patchPreferences({ locale: nextLocale });
+    setNotice(pickLocale(preferences.locale, '语言已更新', 'Language updated'));
+  }
+
+  async function handleThemeModeChange(nextTheme: ThemeMode) {
+    setThemeMode(nextTheme);
+    try {
+      await patchPreferences({ theme_mode: nextTheme });
+    } catch (error) {
+      setNotice(`外观保存失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }
+
+  async function handleVoicePreferenceChange(values: Partial<UserPreferences>) {
+    await patchPreferences(values);
+    setNotice(locale === 'en-US' ? 'Voice defaults saved' : '语音默认项已保存');
+  }
+
+  async function handleWorkerRuntimeDefaultsChange(values: Partial<WorkerRuntimeDefaults>) {
+    await patchWorkerRuntimeDefaults(values);
+    setNotice(locale === 'en-US' ? 'Worker runtime defaults saved' : 'Worker 运行参数已保存');
   }
 
   async function switchSessionArchiveView(view: SessionArchiveView) {
@@ -2919,6 +3369,13 @@ function App() {
     pushMobileHistoryState({ workerInstallOpen: true, notificationInboxOpen: false, launchMode: 'none' });
   }
 
+  function openInviteDialog() {
+    if (!canAdmin(user)) return;
+    setInviteDraft(emptyInviteDraft);
+    setCreatedInvite(null);
+    setInviteOpen(true);
+  }
+
   function openForkSession() {
     if (!selectedSession) return;
     launchModeRef.current = 'fork';
@@ -2939,6 +3396,11 @@ function App() {
     workerInstallOpenRef.current = false;
     setWorkerInstallOpen(false);
     replaceMobileHistoryState({ workerInstallOpen: false });
+  }
+
+  function closeInviteDialog() {
+    setInviteOpen(false);
+    setCreatedInvite(null);
   }
 
   function closeNotificationInbox() {
@@ -3009,10 +3471,27 @@ function App() {
       );
       selectedIdRef.current = null;
       setSelectedId(null);
-      setNotice(archive ? '会话已归档' : '会话已恢复');
+      setNotice(archive ? t(locale, 'sessionArchived') : t(locale, 'sessionRestored'));
       await loadData(undefined, user, sessionArchiveView);
     } catch (error) {
-      setNotice(`${archive ? '归档' : '恢复'}失败：${error instanceof Error ? error.message : '未知错误'}`);
+      setNotice(
+        t(locale, 'archiveFailed', {
+          action: archive ? t(locale, 'archive') : t(locale, 'restore'),
+          message: error instanceof Error ? error.message : t(locale, 'unknownError'),
+        }),
+        );
+      }
+    }
+
+  async function handleCancelCurrentJob() {
+    if (!selectedSession || !selectedCancelableJob || !canOperate(user)) return;
+    try {
+      const payload = await apiPost<{ job: Job }>(`/api/jobs/${selectedCancelableJob.job_id}/cancel`, {}, csrfToken);
+      setJobs((current) => current.map((job) => (job.job_id === payload.job.job_id ? { ...job, ...payload.job } : job)));
+      setNotice('当前任务已停止');
+      await loadData();
+    } catch (error) {
+      setNotice(`停止失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
   }
 
@@ -3037,6 +3516,8 @@ function App() {
       return;
     }
     const payload = launchPayloadFromSession(selectedSession, normalizedPrompt);
+    setReply('');
+    setReplyAttachmentsSafely([]);
     if (mode === 'fork') {
       await apiPost<{ job: Job }>(`/api/sessions/${selectedSession.session_id}/fork`, payload, csrfToken);
       setNotice('Fork 已入队');
@@ -3044,15 +3525,14 @@ function App() {
       await apiPost<{ job: Job }>('/api/sessions/start', payload, csrfToken);
       setNotice('新建会话已入队');
     }
-    setReply('');
     await loadData();
   }
 
   function providerBackendFromSlashArgument(argument: string) {
     const backend = argument.trim().toLowerCase();
     if (!backend) return selectedSession?.backend ?? '';
-    if (['codex', 'claude', 'kimi'].includes(backend)) return backend;
-    setNotice('用法：/login、/logout，或指定 /login codex、/logout claude、/login kimi');
+    if (['codex', 'claude', 'kimi', 'opencode'].includes(backend)) return backend;
+    setNotice('用法：/login、/logout，或指定 /login codex、/logout claude、/login kimi、/login opencode');
     return '';
   }
 
@@ -3082,6 +3562,28 @@ function App() {
     );
     setWorkerEnrollment(enrollment);
     setNotice(`已生成 worker enrollment：${workerInstallSummary(workerInstallDraft)}`);
+  }
+
+  async function handleCreateInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canAdmin(user)) return;
+    const email = inviteDraft.email.trim();
+    if (!email) {
+      setNotice('请输入邀请邮箱');
+      return;
+    }
+    const expiresInHours = Math.max(1, Number.parseInt(inviteDraft.expires_in_hours, 10) || 24);
+    const invite = await apiPost<InviteCreated>(
+      '/api/invites',
+      {
+        email,
+        role: inviteDraft.role,
+        expires_in_hours: expiresInHours,
+      },
+      csrfToken,
+    );
+    setCreatedInvite(invite);
+    setNotice(`邀请已创建：${invite.email}`);
   }
 
   async function handleNotificationSetup() {
@@ -3145,6 +3647,31 @@ function App() {
       setApkUpdate({ status: 'failed', error: errorMessage(error) });
       setNotice(`检查 APK 失败：${errorMessage(error)}`);
     }
+  }
+
+  async function patchPreferences(values: Partial<UserPreferences>) {
+    const payload = await apiPatch<{ preferences: UserPreferences }>('/api/settings/preferences', values, csrfToken);
+    setSettings((current) => ({ ...current, preferences: payload.preferences }));
+    setLocale(payload.preferences.locale);
+    setThemeMode(payload.preferences.theme_mode);
+    setVoiceInputMode(payload.preferences.voice_mode);
+    return payload.preferences;
+  }
+
+  async function patchWorkerRuntimeDefaults(values: Partial<WorkerRuntimeDefaults>) {
+    const payload = await apiPatch<{ worker_runtime_defaults: WorkerRuntimeDefaults }>(
+      '/api/settings/worker-runtime',
+      values,
+      csrfToken,
+    );
+    setSettings((current) => ({ ...current, worker_runtime_defaults: payload.worker_runtime_defaults }));
+    setWorkerInstallDraft((current) => ({
+      ...current,
+      max_concurrent_jobs: payload.worker_runtime_defaults.max_concurrent_jobs,
+      job_poll_interval_seconds: payload.worker_runtime_defaults.job_poll_interval_seconds,
+      heartbeat_interval_seconds: payload.worker_runtime_defaults.heartbeat_interval_seconds,
+    }));
+    return payload.worker_runtime_defaults;
   }
 
   function handleDownloadLatestApk() {
@@ -3261,6 +3788,12 @@ function App() {
   function patchSession(nextSession: AgentSession) {
     setSessions((current) =>
       current.map((session) => (session.session_id === nextSession.session_id ? nextSession : session)),
+    );
+  }
+
+  function patchWorker(nextWorker: Worker) {
+    setWorkers((current) =>
+      current.map((worker) => (worker.worker_id === nextWorker.worker_id ? nextWorker : worker)),
     );
   }
 
@@ -3397,8 +3930,26 @@ function App() {
     setNotice(options?.pasted ? '正在处理粘贴图片…' : hasOnlyImages ? '正在处理图片…' : '正在处理附件…');
     try {
       const nextAttachments = await Promise.all(selectedFiles.map((file) => fileToReplyAttachment(file)));
-      setReplyAttachmentsSafely([...current, ...nextAttachments]);
-      setNotice(options?.pasted ? `已粘贴 ${nextAttachments.length} 张图片` : `已附加 ${nextAttachments.length} 个文件`);
+      const seenContent = new Set(current.map(replyAttachmentContentKey));
+      const uniqueNextAttachments = nextAttachments.filter((attachment) => {
+        const key = replyAttachmentContentKey(attachment);
+        if (seenContent.has(key)) {
+          if (attachment.preview_url) URL.revokeObjectURL(attachment.preview_url);
+          return false;
+        }
+        seenContent.add(key);
+        return true;
+      });
+      if (uniqueNextAttachments.length === 0) {
+        setNotice(options?.pasted ? '这张图片已经在待发送附件里' : '这些附件已经在待发送列表里');
+        return;
+      }
+      setReplyAttachmentsSafely([...current, ...uniqueNextAttachments]);
+      setNotice(
+        options?.pasted
+          ? `已粘贴 ${uniqueNextAttachments.length} 张图片`
+          : `已附加 ${uniqueNextAttachments.length} 个文件`,
+      );
     } catch (error) {
       setNotice(`附件上传失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
@@ -3514,9 +4065,9 @@ function App() {
           filename: contentType.includes('mp4') ? 'voice.m4a' : 'voice.webm',
           content_type: audioBlob.type || 'audio/webm',
           data_base64: arrayBufferToBase64(await audioBlob.arrayBuffer()),
-          language: 'zh-CN',
           duration_ms: durationMs,
           chunk_count: chunks.length,
+          language: settings.preferences.voice_language || 'zh-CN',
         },
         csrfToken,
       );
@@ -3571,7 +4122,7 @@ function App() {
     }
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia(VOICE_MEDIA_CONSTRAINTS);
     } catch (error) {
       setIsRecording(false);
       setNotice(recordingFailureNotice(error, nativeMicrophonePermissionState()));
@@ -3627,6 +4178,9 @@ function App() {
           const normalized = String(text || '').trim();
           applyStreamingVoicePartial(normalized);
           if (normalized) setNotice('正在流式识别语音');
+        },
+        onRecovering: (attempt) => {
+          setNotice(`流式语音连接中断，正在第 ${attempt} 次重连…`);
         },
         onClose: () => {
           finalizeStreamingVoice();
@@ -3767,6 +4321,15 @@ function App() {
       await loadData();
       return;
     }
+    if (slashCommand?.command === '/stop') {
+      if (!selectedCancelableJob) {
+        setNotice('当前没有可停止的输入作业');
+        return;
+      }
+      await handleCancelCurrentJob();
+      setReply('');
+      return;
+    }
     if (slashCommand?.command === '/login') {
       await runProviderAuthSlashCommand('login', slashCommand.argument);
       return;
@@ -3881,19 +4444,19 @@ function App() {
         { path },
         csrfToken,
       );
-      setNotice(path === '.' ? '正在同步 workspace 文件列表' : `正在打开 ${path}`);
+      setNotice(path === '.' ? t(locale, 'syncingWorkspaceFiles') : t(locale, 'openingPath', { path }));
       const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id);
       if (finished?.status === 'failed') {
-        setNotice(`文件列表失败：${finished.error_text || '未知错误'}`);
+        setNotice(pickLocale(locale, `文件列表失败：${finished.error_text || '未知错误'}`, `File list failed: ${finished.error_text || 'Unknown error'}`));
         return;
       }
       if (!finished || ['queued', 'running'].includes(finished.status)) {
-        setNotice('文件列表已入队，稍后自动同步');
+        setNotice(pickLocale(locale, '文件列表已入队，稍后自动同步', 'File list queued and will sync shortly'));
         return;
       }
-      setNotice(path === '.' ? 'workspace 文件列表已更新' : `${path} 已展开`);
+      setNotice(path === '.' ? t(locale, 'workspaceFilesUpdated') : t(locale, 'pathExpanded', { path }));
     } catch (error) {
-      setNotice(`文件列表失败：${error instanceof Error ? error.message : '未知错误'}`);
+      setNotice(pickLocale(locale, `文件列表失败：${error instanceof Error ? error.message : '未知错误'}`, `File list failed: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   }
 
@@ -3991,6 +4554,27 @@ function App() {
     controlsDirtyRef.current = false;
     setIsControlsDirty(false);
     setNotice('控制已保存');
+  }
+
+  async function handleWorkerRuntimeSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedWorker || !canAdmin(user)) return;
+    const payload = {
+      max_concurrent_jobs: Number(workerRuntimeDraft.max_concurrent_jobs),
+      job_poll_interval_seconds: Number(workerRuntimeDraft.job_poll_interval_seconds),
+      heartbeat_interval_seconds: Number(workerRuntimeDraft.heartbeat_interval_seconds),
+    };
+    const response = await apiPatch<{ worker: Worker }>(
+      `/api/workers/${selectedWorker.worker_id}/runtime-settings`,
+      payload,
+      csrfToken,
+    );
+    patchWorker(response.worker);
+    hydratedWorkerRuntimeIdRef.current = response.worker.worker_id;
+    setWorkerRuntimeDraft(workerRuntimeDraftFromWorker(response.worker));
+    workerRuntimeDirtyRef.current = false;
+    setIsWorkerRuntimeDirty(false);
+    setNotice(`Worker 运行参数已保存：${response.worker.worker_id}`);
   }
 
   async function handleSecretSubmit(event: FormEvent<HTMLFormElement>) {
@@ -4149,8 +4733,8 @@ function App() {
           <button
             className="icon-button mobile-only topbar-menu-button"
             type="button"
-            aria-label="打开会话列表"
-            title="打开会话列表"
+            aria-label={t(locale, 'openSessionList')}
+            title={t(locale, 'openSessionList')}
             onClick={handleOpenSessionList}
           >
             <Menu size={20} />
@@ -4160,47 +4744,47 @@ function App() {
         </div>
         <div className="mobile-worker-signal">
           <span className="status-dot status-good" />
-          节点 {onlineWorkers}/{workers.length} · 自动同步
+          {t(locale, 'workerSignal', { online: onlineWorkers, total: workers.length })}
         </div>
         <div className="topbar-actions">
           <button className="icon-button primary-top-action" type="button" onClick={openStartSession} disabled={!canOperate(user)}>
             <Plus size={17} />
-            <span>新建会话</span>
+            <span>{text.newSession}</span>
           </button>
           <span className="sync-chip">
-            {isRefreshing ? '同步中' : `自动同步 ${lastSyncedAt ? formatRelative(lastSyncedAt) : '准备中'}`}
+            {isRefreshing ? text.syncing : text.autosync}
           </span>
           {user && <span className="role-chip">{user.role}</span>}
           <button
             className="icon-button theme-switch-button"
             type="button"
-            title={themeMode === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
-            aria-label={themeMode === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
+            title={themeMode === 'dark' ? t(locale, 'switchToLight') : t(locale, 'switchToDark')}
+            aria-label={themeMode === 'dark' ? t(locale, 'switchToLight') : t(locale, 'switchToDark')}
             onClick={() => setThemeMode((current) => (current === 'dark' ? 'light' : 'dark'))}
           >
             {themeMode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-            <span>{themeMode === 'dark' ? '浅色' : '深色'}</span>
+            <span>{themeMode === 'dark' ? t(locale, 'light') : t(locale, 'dark')}</span>
           </button>
           <button
             className={`icon-button refresh-button ${isRefreshing ? 'refreshing' : ''}`}
             type="button"
             title="Refresh"
-            aria-label={isRefreshing ? '刷新中' : '刷新'}
+            aria-label={isRefreshing ? text.refreshing : text.refresh}
             aria-busy={isRefreshing}
             onClick={handleRefresh}
             disabled={isRefreshing}
           >
             <RefreshCw className={isRefreshing ? 'spin-icon' : ''} size={17} />
-            <span>{isRefreshing ? '刷新中' : '刷新'}</span>
+            <span>{isRefreshing ? text.refreshing : text.refresh}</span>
           </button>
           <button
             className={`icon-button notification-button ${unreadNotificationCount > 0 ? 'has-alert' : ''}`}
-            title="通知"
+            title={text.notifications}
             type="button"
             aria-label={
               notificationItems.length > 0
-                ? `打开待处理通知 inbox，${unreadNotificationCount} 条未读`
-                : `通知${notificationPermission === 'granted' ? '已开启' : ''}`
+                ? t(locale, 'notificationBell', { count: unreadNotificationCount })
+                : `${text.notifications}${notificationPermission === 'granted' ? pickLocale(locale, '已开启', ' enabled') : ''}`
             }
             onClick={handleTopbarBellClick}
           >
@@ -4209,7 +4793,7 @@ function App() {
           </button>
           <button className="icon-button" type="button" onClick={handleLogout}>
             <LogOut size={17} />
-            退出登录
+            {text.logout}
           </button>
         </div>
       </header>
@@ -4218,6 +4802,7 @@ function App() {
         <NotificationInbox
           items={notificationItems}
           readIds={readNotificationIds}
+          locale={locale}
           onOpenItem={handleOpenNotificationItem}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onClose={closeNotificationInbox}
@@ -4225,7 +4810,7 @@ function App() {
       )}
 
       {visiblePendingPermission && (
-        <div className="notification-toast" role="group" aria-label="审批待处理通知">
+        <div className="notification-toast" role="group" aria-label={t(locale, 'approvalToast')}>
           <button
             type="button"
             className="notification-toast-main"
@@ -4260,50 +4845,50 @@ function App() {
       )}
 
       <section className={`workspace mobile-pane-${mobilePane}`}>
-        <aside className="session-list" aria-label="Sessions">
+        <aside className="session-list" aria-label={text.mobileSessions}>
           <div className="section-heading">
             <h1>
-              {sessionArchiveView === 'archived' ? '会话归档' : '会话收件箱'}
-              <span className="session-count-inline">{filteredSessions.length} 个</span>
+              {sessionArchiveView === 'archived' ? text.archivedSessions : text.sessionInbox}
+              <span className="session-count-inline">{pickLocale(locale, `${filteredSessions.length} 个`, `${filteredSessions.length}`)}</span>
             </h1>
           </div>
-          <div className="session-view-tabs" role="group" aria-label="会话视图">
+          <div className="session-view-tabs" role="group" aria-label={t(locale, 'sessionView')}>
             <button
               type="button"
               className={sessionArchiveView === 'active' ? 'selected' : ''}
               onClick={() => void switchSessionArchiveView('active')}
             >
-              收件箱
+              {text.activeTab}
             </button>
             <button
               type="button"
               className={sessionArchiveView === 'archived' ? 'selected' : ''}
               onClick={() => void switchSessionArchiveView('archived')}
             >
-              归档
+              {text.archivedTab}
             </button>
           </div>
           <label className="search-box">
             <Search size={15} />
             <input
-              aria-label="搜索会话"
+              aria-label={text.searchLabel}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索会话、项目或内容"
+              placeholder={text.searchPlaceholder}
             />
             {query && (
               <button
                 type="button"
                 className="search-clear-button"
-                aria-label="清空搜索"
+                aria-label={text.clearSearch}
                 onClick={() => setQuery('')}
               >
                 <X size={14} />
               </button>
             )}
           </label>
-          <div className="provider-filter" aria-label="Provider filters">
-            {providerFilters.map((filter) => (
+          <div className="provider-filter" aria-label={pickLocale(locale, 'Provider 筛选', 'Provider filters')}>
+            {providerFilters(locale).map((filter) => (
               <button
                 key={filter.id}
                 type="button"
@@ -4315,11 +4900,11 @@ function App() {
             ))}
           </div>
           <div className="sort-row">
-            <span>排序：最近活动</span>
+            <span>{text.sortRecent}</span>
             <SlidersHorizontal size={15} />
           </div>
           {filteredSessions.length === 0 && (
-            <p className="empty">{sessionArchiveView === 'archived' ? '暂无归档会话。' : '暂无会话。'}</p>
+            <p className="empty">{sessionArchiveView === 'archived' ? t(locale, 'noArchivedSessions') : t(locale, 'noSessions')}</p>
           )}
           {filteredSessions.map((session) => (
             <button
@@ -4331,7 +4916,7 @@ function App() {
               <span className="session-row-body">
                 <span className="session-row-top">
                   <strong>{sessionTitle(session)}</strong>
-                  <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status)}</span>
+                  <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status, locale)}</span>
                 </span>
                 <span className="session-row-meta">
                   <span className="backend-mark">
@@ -4339,7 +4924,7 @@ function App() {
                     {backendLabel(session.backend)}
                   </span>
                   <span>{session.project_name} / {session.namespace}</span>
-                  <small>{formatRelative(session.last_activity_at) || formatWhen(session.last_activity_at)}</small>
+                  <small>{formatRelative(session.last_activity_at, locale) || formatWhen(session.last_activity_at)}</small>
                 </span>
                 <span className="session-row-bottom">
                   <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
@@ -4360,16 +4945,16 @@ function App() {
                   <button
                     type="button"
                     className={`thread-status-strip ${statusDetailsOpen ? 'expanded' : ''}`}
-                    aria-label={statusDetailsOpen ? '收起会话状态' : '展开会话状态'}
+                    aria-label={pickLocale(locale, statusDetailsOpen ? '收起会话状态' : '展开会话状态', statusDetailsOpen ? 'Collapse session status' : 'Expand session status')}
                     aria-expanded={statusDetailsOpen}
                     onClick={() => setStatusDetailsOpen((open) => !open)}
                   >
                     <span className={`state-pill ${statusClass(selectedSession.status)}`}>
-                      {statusLabel(selectedSession.status)}
+                      {statusLabel(selectedSession.status, locale)}
                     </span>
                     <span>{backendLabel(selectedSession.backend)}</span>
                     <span>{selectedSession.worker_id}</span>
-                    <span>{sandboxSummary(selectedSession)}</span>
+                    <span>{sandboxSummary(selectedSession, locale)}</span>
                     <span>{formatWhen(selectedSession.last_activity_at) || selectedSession.project_name}</span>
                     <ChevronDown className="thread-status-expander" size={14} />
                   </button>
@@ -4381,7 +4966,16 @@ function App() {
                     onClick={() => navigateMobilePane('controls')}
                   >
                     <SlidersHorizontal size={16} />
-                    控制
+                    {pickLocale(locale, '控制', 'Controls')}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-button desktop-session-action"
+                    onClick={() => void handleCancelCurrentJob()}
+                    disabled={!selectedCancelableJob || !canOperate(user)}
+                  >
+                    <Square size={16} />
+                    {pickLocale(locale, '停止当前任务', 'Stop Current Task')}
                   </button>
                   <button
                     type="button"
@@ -4395,13 +4989,13 @@ function App() {
                   <button
                     type="button"
                     className="icon-button desktop-session-action"
-                    aria-label={sessionArchiveView === 'archived' ? '恢复会话' : '归档会话'}
-                    title={sessionArchiveView === 'archived' ? '恢复会话' : '归档会话'}
+                    aria-label={sessionArchiveView === 'archived' ? t(locale, 'restoreSession') : t(locale, 'archiveSession')}
+                    title={sessionArchiveView === 'archived' ? t(locale, 'restoreSession') : t(locale, 'archiveSession')}
                     onClick={() => void handleArchiveSession(sessionArchiveView !== 'archived')}
                     disabled={!canOperate(user)}
                   >
                     {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
-                    {sessionArchiveView === 'archived' ? '恢复' : '归档'}
+                    {sessionArchiveView === 'archived' ? t(locale, 'restore') : t(locale, 'archive')}
                   </button>
                   <div className="mobile-session-menu">
                     <button
@@ -4415,6 +5009,18 @@ function App() {
                     </button>
                     {mobileSessionActionsOpen && (
                       <div className="mobile-session-menu-popover" role="menu" aria-label="更多会话操作">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMobileSessionActionsOpen(false);
+                            void handleCancelCurrentJob();
+                          }}
+                          disabled={!selectedCancelableJob || !canOperate(user)}
+                        >
+                          <Square size={16} />
+                          {pickLocale(locale, '停止当前任务', 'Stop Current Task')}
+                        </button>
                         <button
                           type="button"
                           role="menuitem"
@@ -4437,7 +5043,7 @@ function App() {
                           disabled={!canOperate(user)}
                         >
                           {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
-                          {sessionArchiveView === 'archived' ? '恢复' : '归档'}
+                          {sessionArchiveView === 'archived' ? t(locale, 'restore') : t(locale, 'archive')}
                         </button>
                       </div>
                     )}
@@ -4445,7 +5051,7 @@ function App() {
                 </div>
               </div>
 
-              <section className="message-block" aria-label="Transcript" ref={transcriptRef}>
+              <section className="message-block" aria-label="Transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
                 {selectedPermissions.length > 0 && (
                   <section className="permission-stack thread-interactions" aria-label="当前待处理交互">
                     {selectedPermissions.map((permission) => (
@@ -4519,7 +5125,7 @@ function App() {
                             </details>
                           ) : (
                             <>
-                              <TimelineText text={message.text} />
+                              <TimelineText text={message.text} allowRenderPreview={message.item_type === 'assistant_message'} />
                               {attachments.length > 0 && (
                                 <div className="timeline-attachments" aria-label="消息附件">
                                   {attachments.map((attachment, index) => (
@@ -4545,14 +5151,25 @@ function App() {
                 )}
 
               </section>
+              {showScrollToBottom && (
+                <button
+                  type="button"
+                  className="scroll-to-bottom-button"
+                  aria-label="滚动到最新消息"
+                  title="滚动到最新消息"
+                  onClick={() => scrollTranscriptToBottom()}
+                >
+                  <ArrowDown size={16} />
+                </button>
+              )}
 
               <form
                 className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''}`}
                 onSubmit={handleReply}
               >
-                <label className="reply-title" htmlFor="reply">回复当前会话</label>
-                <div className="reply-mode-tabs" role="group" aria-label="回复模式">
-                  {(Object.keys(replyModeLabels) as ReplyMode[]).map((mode) => (
+                <label className="reply-title" htmlFor="reply">{pickLocale(locale, '回复当前会话', 'Reply to this session')}</label>
+                <div className="reply-mode-tabs" role="group" aria-label={pickLocale(locale, '回复模式', 'Reply mode')}>
+                  {(['direct', 'plan'] as ReplyMode[]).map((mode) => (
                     <button
                       key={mode}
                       type="button"
@@ -4560,15 +5177,15 @@ function App() {
                       aria-pressed={replyMode === mode}
                       onClick={() => setReplyMode(mode)}
                     >
-                      {replyModeLabels[mode]}
+                      {replyModeLabel(locale, mode)}
                     </button>
                   ))}
-                  <span className="reply-mode-hint">{replyModeHint(replyMode, selectedSession, selectedProvider)}</span>
+                  <span className="reply-mode-hint">{replyModeHint(replyMode, selectedSession, selectedProvider, locale)}</span>
                 </div>
                 <textarea
                   id="reply"
               ref={replyTextareaRef}
-              aria-label="回复当前会话"
+              aria-label={pickLocale(locale, '回复当前会话', 'Reply to this session')}
               value={reply}
               onChange={(event) => handleReplyChange(event.target.value)}
               onKeyDown={handleReplyKeyDown}
@@ -4592,7 +5209,7 @@ function App() {
                         <code>{option.command}</code>
                         <span>
                           <strong>{option.title}</strong>
-                          <small>{option.description}</small>
+                          <small>{slashCommandDescription(option, selectedProvider, locale)}</small>
                         </span>
                       </button>
                     ))}
@@ -4641,7 +5258,23 @@ function App() {
                     标准
                   </button>
                 </div>
-                <div className="reply-actions">
+                <div className="reply-footer">
+                  {quickReplies.length > 0 && (
+                    <div className="quick-reply-strip" aria-label="快捷回复">
+                      {quickReplies.map((quickReply) => (
+                        <button
+                          key={quickReply}
+                          type="button"
+                          className="quick-reply-chip"
+                          onClick={() => insertQuickReply(quickReply)}
+                          disabled={!canReply}
+                        >
+                          {quickReply}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="reply-actions">
                   <input
                     id="reply-attachment"
                     className="reply-file-input"
@@ -4689,6 +5322,7 @@ function App() {
                   <button className="reply-send-button" type="submit" aria-label="发送" title="发送" disabled={!canSendReply}>
                     <Send size={17} />
                   </button>
+                  </div>
                 </div>
               </form>
             </>
@@ -4698,12 +5332,31 @@ function App() {
         </section>
 
         <aside className="ops-rail" aria-label="Controls">
-          <h2 className="rail-title">会话控制</h2>
+          <h2 className="rail-title">{text.controls}</h2>
+          <Panel title={text.preferences} icon={<Smartphone size={16} />} defaultOpen={false}>
+            <PreferencesEditor
+              locale={locale}
+              preferences={settings.preferences}
+              options={settings.options}
+              onSave={handleVoicePreferenceChange}
+              onLocaleChange={handleLocaleChange}
+              onThemeModeChange={handleThemeModeChange}
+            />
+          </Panel>
+          {canAdmin(user) && (
+            <Panel title={text.workerRuntime} icon={<Cpu size={16} />} defaultOpen={false}>
+              <WorkerRuntimeDefaultsEditor
+                locale={locale}
+                runtime={settings.worker_runtime_defaults}
+                onSave={handleWorkerRuntimeDefaultsChange}
+              />
+            </Panel>
+          )}
           {selectedSession && (
             <>
-              <section className="inspector-overview" aria-label="当前会话概览">
+              <section className="inspector-overview" aria-label={pickLocale(locale, '当前会话概览', 'Current session overview')}>
                 <span className={`state-pill ${statusClass(selectedSession.status)}`}>
-                  {statusLabel(selectedSession.status)}
+                  {statusLabel(selectedSession.status, locale)}
                 </span>
                 <div>
                   <strong>{agentOpsTaskHeadline(selectedSession)}</strong>
@@ -4711,7 +5364,7 @@ function App() {
                 </div>
               </section>
 
-              <Panel title="本机恢复" icon={<TerminalSquare size={16} />} defaultOpen={false}>
+              <Panel title={pickLocale(locale, '本机恢复', 'Local Resume')} icon={<TerminalSquare size={16} />} defaultOpen={false}>
                 <div className="local-resume-panel">
                   <p>{localResumeHint(selectedSession)}</p>
                   <code>{localResumeCommand(selectedSession)}</code>
@@ -4721,12 +5374,83 @@ function App() {
                 </div>
               </Panel>
 
-              <Panel title="模型与工具" icon={<Bot size={16} />} defaultOpen={false}>
+              {selectedWorker && canAdmin(user) && (
+                <Panel title={pickLocale(locale, 'Worker 运行参数', 'Worker Runtime')} icon={<Cpu size={16} />} defaultOpen={false}>
+                  <form className="editor-panel" onSubmit={handleWorkerRuntimeSettings}>
+                    <div className="control-summary">
+                      <span>
+                        <Cpu size={15} />
+                        {selectedWorker.worker_id} · {selectedWorker.machine_name}
+                      </span>
+                      <small>{selectedWorker.os} · {statusLabel(selectedWorker.status, locale)}</small>
+                    </div>
+                    <div className="control-fields">
+                      <label>
+                        {t(locale, 'maxConcurrentJobs')}
+                        <input
+                          aria-label={pickLocale(locale, 'Worker 最大并发', 'Worker max concurrent jobs')}
+                          type="number"
+                          min={1}
+                          max={32}
+                          value={workerRuntimeDraft.max_concurrent_jobs}
+                          onChange={(event) =>
+                            updateWorkerRuntimeDraft((current) => ({
+                              ...current,
+                              max_concurrent_jobs: event.target.value,
+                            }))
+                          }
+                          disabled={!canAdmin(user)}
+                        />
+                      </label>
+                      <label>
+                        {pickLocale(locale, 'Job 轮询秒数', 'Job Poll Interval (s)')}
+                        <input
+                          aria-label={pickLocale(locale, 'Worker job 轮询秒数', 'Worker job poll interval')}
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={workerRuntimeDraft.job_poll_interval_seconds}
+                          onChange={(event) =>
+                            updateWorkerRuntimeDraft((current) => ({
+                              ...current,
+                              job_poll_interval_seconds: event.target.value,
+                            }))
+                          }
+                          disabled={!canAdmin(user)}
+                        />
+                      </label>
+                      <label>
+                        {pickLocale(locale, '心跳秒数', 'Heartbeat Interval (s)')}
+                        <input
+                          aria-label={pickLocale(locale, 'Worker 心跳秒数', 'Worker heartbeat interval')}
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={workerRuntimeDraft.heartbeat_interval_seconds}
+                          onChange={(event) =>
+                            updateWorkerRuntimeDraft((current) => ({
+                              ...current,
+                              heartbeat_interval_seconds: event.target.value,
+                            }))
+                          }
+                          disabled={!canAdmin(user)}
+                        />
+                      </label>
+                    </div>
+                    <button type="submit" disabled={!canAdmin(user)}>
+                      <Check size={16} />
+                      {pickLocale(locale, '保存 Worker 参数', 'Save Worker Runtime')}
+                    </button>
+                  </form>
+                </Panel>
+              )}
+
+              <Panel title={pickLocale(locale, '模型与工具', 'Models & Tools')} icon={<Bot size={16} />} defaultOpen={false}>
                 <form className="editor-panel" onSubmit={handleControls}>
                   <div className="control-summary">
                     <span>
                       <Shield size={15} />
-                      当前权限：{sandboxSummary(selectedSession)}
+                      {pickLocale(locale, '当前权限：', 'Current permission: ')}{sandboxSummary(selectedSession, locale)}
                     </span>
                     <button
                       type="button"
@@ -4734,14 +5458,14 @@ function App() {
                       onClick={handleApplyFullAccessControls}
                       disabled={!canOperate(user)}
                     >
-                      应用全权限
+                      {pickLocale(locale, '应用全权限', 'Apply Full Access')}
                     </button>
                   </div>
                   <div className="control-fields">
                     <label>
-                      模型
+                      {pickLocale(locale, '模型', 'Model')}
                       <select
-                        aria-label="模型"
+                        aria-label={pickLocale(locale, '模型', 'Model')}
                         value={controlsDraft.model}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, model: event.target.value }))}
                         disabled={!canOperate(user)}
@@ -4759,9 +5483,9 @@ function App() {
                       </select>
                     </label>
                     <label>
-                      沙箱
+                      {pickLocale(locale, '沙箱', 'Sandbox')}
                       <select
-                        aria-label="沙箱"
+                        aria-label={pickLocale(locale, '沙箱', 'Sandbox')}
                         value={controlsDraft.sandbox_mode}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, sandbox_mode: event.target.value }))}
                         disabled={!canOperate(user)}
@@ -4779,9 +5503,9 @@ function App() {
                       </select>
                     </label>
                     <label>
-                      审批
+                      {pickLocale(locale, '审批', 'Approval')}
                       <select
-                        aria-label="审批"
+                        aria-label={pickLocale(locale, '审批', 'Approval')}
                         value={controlsDraft.approval_mode}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
                         disabled={!canOperate(user)}
@@ -4797,9 +5521,9 @@ function App() {
                       </select>
                     </label>
                     <label>
-                      权限策略
+                      {pickLocale(locale, '权限策略', 'Permission Policy')}
                       <select
-                        aria-label="权限策略"
+                        aria-label={pickLocale(locale, '权限策略', 'Permission Policy')}
                         value={controlsDraft.permission_mode}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, permission_mode: event.target.value }))}
                         disabled={!canOperate(user)}
@@ -4819,9 +5543,9 @@ function App() {
                       </select>
                     </label>
                     <label>
-                      执行器
+                      {pickLocale(locale, '执行器', 'Executor')}
                       <input
-                        aria-label="执行器"
+                        aria-label={pickLocale(locale, '执行器', 'Executor')}
                         value={controlsDraft.agent}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, agent: event.target.value }))}
                         placeholder="codex exec / kimi -p"
@@ -4829,9 +5553,9 @@ function App() {
                       />
                     </label>
                     <label>
-                      思考
+                      {pickLocale(locale, '思考', 'Thinking')}
                       <select
-                        aria-label="思考"
+                        aria-label={pickLocale(locale, '思考', 'Thinking')}
                         value={controlsDraft.thinking}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, thinking: event.target.value }))}
                         disabled={!canOperate(user)}
@@ -4842,9 +5566,9 @@ function App() {
                       </select>
                     </label>
                     <label>
-                      Secret 环境
+                      {pickLocale(locale, 'Secret 环境', 'Secret Environment')}
                       <input
-                        aria-label="Secret 环境"
+                        aria-label={pickLocale(locale, 'Secret 环境', 'Secret Environment')}
                         value={controlsDraft.secret_environment}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_environment: event.target.value }))}
                         placeholder="default / test / prod"
@@ -4852,9 +5576,9 @@ function App() {
                       />
                     </label>
                     <label>
-                      Secret 命名空间
+                      {pickLocale(locale, 'Secret 命名空间', 'Secret Namespace')}
                       <input
-                        aria-label="Secret 命名空间"
+                        aria-label={pickLocale(locale, 'Secret 命名空间', 'Secret Namespace')}
                         value={controlsDraft.secret_namespace}
                         onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_namespace: event.target.value }))}
                         placeholder="default"
@@ -4863,9 +5587,9 @@ function App() {
                     </label>
                   </div>
                   <label className="secret-ref-field">
-                    Secret 引用
+                    {pickLocale(locale, 'Secret 引用', 'Secret References')}
                     <textarea
-                      aria-label="Secret 引用"
+                      aria-label={pickLocale(locale, 'Secret 引用', 'Secret References')}
                       value={controlsDraft.secret_refs}
                       onChange={(event) => updateControlsDraft((current) => ({ ...current, secret_refs: event.target.value }))}
                       placeholder="OPENAI_API_KEY&#10;KIMI_API_KEY"
@@ -4881,21 +5605,21 @@ function App() {
                       onChange={(event) => updateControlsDraft((current) => ({ ...current, yolo: event.target.checked }))}
                       disabled={!canOperate(user)}
                     />
-                    自动确认 <small>YOLO</small>
+                    {pickLocale(locale, '自动确认', 'Auto confirm')} <small>YOLO</small>
                   </label>
                   <button type="submit" disabled={!canOperate(user)}>
                     <Check size={16} />
-                    保存控制
+                    {pickLocale(locale, '保存控制', 'Save Controls')}
                   </button>
                 </form>
               </Panel>
 
-              <Panel title="重命名" icon={<Save size={16} />} defaultOpen={false}>
+              <Panel title={pickLocale(locale, '重命名', 'Rename')} icon={<Save size={16} />} defaultOpen={false}>
                 <form className="editor-panel" onSubmit={handleRename}>
                   <label>
-                    会话标题
+                    {pickLocale(locale, '会话标题', 'Session Title')}
                     <input
-                      aria-label="会话标题"
+                      aria-label={pickLocale(locale, '会话标题', 'Session Title')}
                       name="custom_title"
                       value={titleDraft}
                       onChange={(event) => {
@@ -4907,38 +5631,38 @@ function App() {
                   </label>
                   <button type="submit" disabled={!canOperate(user)}>
                     <Check size={16} />
-                    保存标题
+                    {pickLocale(locale, '保存标题', 'Save Title')}
                   </button>
                 </form>
               </Panel>
             </>
           )}
 
-          <Panel title="Provider 状态" icon={<TerminalSquare size={16} />} defaultOpen={false}>
+          <Panel title={pickLocale(locale, 'Provider 状态', 'Provider Status')} icon={<TerminalSquare size={16} />} defaultOpen={false}>
             {providers.length > 0 ? (
               providers.map((provider) => (
                 <div className="provider-row" key={`${provider.worker_id}-${provider.backend}`}>
                   <div>
                     <strong>{backendLabel(provider.backend)}</strong>
                     <small>
-                      {provider.worker_id} · {statusLabel(provider.status)} · {provider.auth_status ?? 'unknown'}
+                      {provider.worker_id} · {statusLabel(provider.status, locale)} · {provider.auth_status ?? 'unknown'}
                     </small>
-                    <span className="provider-interaction">{providerInteractionSummary(provider)}</span>
+                    <span className="provider-interaction">{providerInteractionSummary(provider, locale)}</span>
                   </div>
                   {canAdmin(user) && (
                     <div className="provider-actions">
                       <button type="button" onClick={() => handleProviderAuth(provider.worker_id, provider.backend, 'login')}>
-                        登录
+                        {pickLocale(locale, '登录', 'Log in')}
                       </button>
                       <button type="button" onClick={() => handleProviderAuth(provider.worker_id, provider.backend, 'logout')}>
-                        {backendLabel(provider.backend)} 退出
+                        {backendLabel(provider.backend)} {pickLocale(locale, '退出', 'Log out')}
                       </button>
                     </div>
                   )}
                 </div>
               ))
             ) : (
-              <p className="empty">暂无 Provider 快照。</p>
+              <p className="empty">{pickLocale(locale, '暂无 Provider 快照。', 'No provider snapshots.')}</p>
             )}
           </Panel>
 
@@ -4947,36 +5671,36 @@ function App() {
               <form className="secret-form" onSubmit={handleSecretSubmit}>
                 <div className="control-fields">
                   <label>
-                    Secret 名称
+                    {pickLocale(locale, 'Secret 名称', 'Secret Name')}
                     <input
-                      aria-label="Secret 名称"
+                      aria-label={pickLocale(locale, 'Secret 名称', 'Secret Name')}
                       value={secretDraft.name}
                       onChange={(event) => setSecretDraft((current) => ({ ...current, name: event.target.value }))}
                       placeholder="OPENAI_API_KEY"
                     />
                   </label>
                   <label>
-                    Secret 环境配置
+                    {pickLocale(locale, 'Secret 环境配置', 'Secret Environment')}
                     <input
-                      aria-label="Secret 环境配置"
+                      aria-label={pickLocale(locale, 'Secret 环境配置', 'Secret Environment')}
                       value={secretDraft.environment}
                       onChange={(event) => setSecretDraft((current) => ({ ...current, environment: event.target.value }))}
                       placeholder="default / test / prod"
                     />
                   </label>
                   <label>
-                    Secret 命名空间配置
+                    {pickLocale(locale, 'Secret 命名空间配置', 'Secret Namespace')}
                     <input
-                      aria-label="Secret 命名空间配置"
+                      aria-label={pickLocale(locale, 'Secret 命名空间配置', 'Secret Namespace')}
                       value={secretDraft.namespace}
                       onChange={(event) => setSecretDraft((current) => ({ ...current, namespace: event.target.value }))}
                       placeholder="default"
                     />
                   </label>
                   <label>
-                    Secret 值
+                    {pickLocale(locale, 'Secret 值', 'Secret Value')}
                     <input
-                      aria-label="Secret 值"
+                      aria-label={pickLocale(locale, 'Secret 值', 'Secret Value')}
                       type="password"
                       value={secretDraft.value}
                       onChange={(event) => setSecretDraft((current) => ({ ...current, value: event.target.value }))}
@@ -4985,18 +5709,18 @@ function App() {
                   </label>
                 </div>
                 <label className="secret-ref-field">
-                  描述
+                  {pickLocale(locale, '描述', 'Description')}
                   <input
-                    aria-label="Secret 描述"
+                    aria-label={pickLocale(locale, 'Secret 描述', 'Secret Description')}
                     value={secretDraft.description}
                     onChange={(event) => setSecretDraft((current) => ({ ...current, description: event.target.value }))}
                     placeholder="例如：prod OpenAI-compatible key"
                   />
                 </label>
-                <button type="submit">保存 Secret</button>
+                <button type="submit">{pickLocale(locale, '保存 Secret', 'Save Secret')}</button>
               </form>
               <div className="secret-list" aria-label="Secrets list">
-                {secrets.length === 0 && <p className="empty">暂无 Secret。保存后在会话控制里引用名称。</p>}
+                {secrets.length === 0 && <p className="empty">{pickLocale(locale, '暂无 Secret。保存后在会话控制里引用名称。', 'No secrets yet. Save one, then reference its name in session controls.')}</p>}
                 {secrets.slice(0, 8).map((secret) => (
                   <div className="secret-row" key={secret.secret_id}>
                     <strong>{secret.name}</strong>
@@ -5008,23 +5732,23 @@ function App() {
             </Panel>
           )}
 
-          <Panel title="节点健康" icon={<Activity size={16} />} defaultOpen={false}>
+          <Panel title={pickLocale(locale, '节点健康', 'Worker Health')} icon={<Activity size={16} />} defaultOpen={false}>
             {(selectedWorker ? [selectedWorker] : workers).map((worker) => (
               <div className="rail-row" key={worker.worker_id}>
                 <span className={`status-dot ${statusClass(worker.status)}`} />
                 <span>{worker.worker_id}</span>
-                <small>{statusLabel(worker.status)}</small>
+                <small>{statusLabel(worker.status, locale)}</small>
               </div>
             ))}
-            {workers.length === 0 && <p className="empty">暂无在线节点。</p>}
+            {workers.length === 0 && <p className="empty">{pickLocale(locale, '暂无在线节点。', 'No online workers.')}</p>}
             {canAdmin(user) && (
               <button type="button" onClick={openWorkerInstall}>
-                添加 Worker
+                {t(locale, 'addWorker')}
               </button>
             )}
           </Panel>
           {selectedJobs.length > 0 && (
-            <Panel title="当前作业" icon={<TerminalSquare size={16} />}>
+            <Panel title={pickLocale(locale, '当前作业', 'Current Jobs')} icon={<TerminalSquare size={16} />}>
               {selectedJobs.slice(0, 4).map((job) => {
                 const hint = jobStatusHint(job);
                 return (
@@ -5032,7 +5756,7 @@ function App() {
                     <summary>
                       <span className={`status-dot ${statusClass(job.status)}`} />
                       <span>{job.kind}</span>
-                      <small>{statusLabel(job.status)}</small>
+                      <small>{statusLabel(job.status, locale)}</small>
                     </summary>
                     {hint && <p className="job-hint">{hint}</p>}
                     {job.error_text ? (
@@ -5040,11 +5764,11 @@ function App() {
                     ) : job.result_text ? (
                       <p className="job-result">{jobResultSummary(job.result_text)}</p>
                     ) : (
-                      <p className="empty">等待 worker 处理。</p>
+                      <p className="empty">{pickLocale(locale, '等待 worker 处理。', 'Waiting for worker.')}</p>
                     )}
                     {(job.error_text || job.result_text) && (
                       <details className="raw-detail">
-                        <summary>原始输出</summary>
+                        <summary>{pickLocale(locale, '原始输出', 'Raw Output')}</summary>
                         <code>{job.error_text || job.result_text}</code>
                       </details>
                     )}
@@ -5054,14 +5778,14 @@ function App() {
             </Panel>
           )}
           {schedules.length > 0 || canAdmin(user) ? (
-          <Panel title="计划任务" icon={<CalendarClock size={16} />} defaultOpen={false}>
+          <Panel title={pickLocale(locale, '计划任务', 'Schedules')} icon={<CalendarClock size={16} />} defaultOpen={false}>
             {schedules.slice(0, 6).map((schedule) => (
               <div className="event-row" key={schedule.schedule_id}>
                 <span>{schedule.name}</span>
                 <small>{schedule.enabled ? 'enabled' : 'disabled'} · {schedule.job_kind}</small>
               </div>
             ))}
-            {schedules.length === 0 && <p className="empty">暂无计划任务。</p>}
+            {schedules.length === 0 && <p className="empty">{pickLocale(locale, '暂无计划任务。', 'No schedules.')}</p>}
             {canAdmin(user) && (
               <form className="schedule-form" onSubmit={handleCreateSchedule}>
                 <input
@@ -5101,13 +5825,13 @@ function App() {
                     </option>
                   ))}
                 </select>
-                <button type="submit">创建计划</button>
+                <button type="submit">{pickLocale(locale, '创建计划', 'Create Schedule')}</button>
               </form>
             )}
           </Panel>
           ) : null}
           {events.length > 0 && (
-          <Panel title="审计事件" icon={<Lock size={16} />} defaultOpen={false}>
+          <Panel title={pickLocale(locale, '审计事件', 'Audit Events')} icon={<Lock size={16} />} defaultOpen={false}>
             {events.slice(0, 6).map((event) => (
               <div className="event-row" key={event.event_id}>
                 <span>{event.event_type}</span>
@@ -5116,7 +5840,11 @@ function App() {
             ))}
           </Panel>
           )}
-          {canAdmin(user) && <button className="invite-button">邀请用户</button>}
+          {canAdmin(user) && (
+            <button type="button" className="invite-button" onClick={openInviteDialog}>
+              {pickLocale(locale, '邀请用户', 'Invite User')}
+            </button>
+          )}
         </aside>
 
         {mobilePane === 'files' && (
@@ -5124,6 +5852,7 @@ function App() {
             session={selectedSession}
             jobs={selectedJobs}
             attachments={replyAttachments}
+            locale={locale}
             onCopyPath={(value) => void copyTextToClipboard(value, 'file path 已复制')}
             onCopyText={(value) => void copyTextToClipboard(value, '文件内容已复制')}
             onDownload={handleDownloadWorkspaceFile}
@@ -5136,6 +5865,7 @@ function App() {
             workers={workers}
             jobs={jobs}
             providers={providers}
+            locale={locale}
             canAdmin={canAdmin(user)}
             onAddWorker={openWorkerInstall}
           />
@@ -5151,8 +5881,16 @@ function App() {
             nativeVersion={nativeVersion}
             apkUpdate={apkUpdate}
             apkUrl={apkDownloadUrl()}
+            locale={locale}
+            preferences={settings.preferences}
+            options={settings.options}
+            workerRuntimeDefaults={settings.worker_runtime_defaults}
             themeMode={themeMode}
-            onThemeModeChange={setThemeMode}
+            canAdmin={canAdmin(user)}
+            onLocaleChange={handleLocaleChange}
+            onThemeModeChange={handleThemeModeChange}
+            onVoicePreferenceChange={handleVoicePreferenceChange}
+            onWorkerRuntimeDefaultsChange={handleWorkerRuntimeDefaultsChange}
             onNotificationSetup={() => void handleNotificationSetup()}
             onRestartNotificationGuard={handleRestartNotificationGuard}
             onCheckApkUpdate={() => void handleCheckApkUpdate()}
@@ -5187,23 +5925,33 @@ function App() {
           onSubmit={handleCreateWorkerEnrollment}
         />
       )}
+      {inviteOpen && (
+        <InviteUserDialog
+          draft={inviteDraft}
+          created={createdInvite}
+          onChange={setInviteDraft}
+          onClose={closeInviteDialog}
+          onCopy={(value, message) => void copyTextToClipboard(value, message)}
+          onSubmit={handleCreateInvite}
+        />
+      )}
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <button type="button" className={mobilePane === 'sessions' ? 'selected' : ''} onClick={showSessionList}>
           <MessageCircle size={18} />
-          会话
+          {text.mobileSessions}
         </button>
         <button type="button" className={mobilePane === 'thread' ? 'selected' : ''} onClick={() => navigateMobilePane('thread')}>
           <Play size={18} />
-          对话
+          {text.mobileThread}
         </button>
         <button type="button" className={mobilePane === 'files' ? 'selected' : ''} onClick={() => navigateMobilePane('files')}>
           <Folder size={18} />
-          文件
+          {text.mobileFiles}
         </button>
         <button type="button" className={mobilePane === 'workers' ? 'selected' : ''} onClick={() => navigateMobilePane('workers')}>
           <Cpu size={18} />
-          节点
+          {text.mobileWorkers}
         </button>
         <button
           type="button"
@@ -5211,7 +5959,7 @@ function App() {
           onClick={() => navigateMobilePane('me')}
         >
           <UserCircle size={18} />
-          我的
+          {text.mobileMe}
         </button>
       </nav>
     </main>
@@ -5221,36 +5969,38 @@ function App() {
 function NotificationInbox({
   items,
   readIds,
+  locale,
   onOpenItem,
   onMarkAllRead,
   onClose,
 }: {
   items: NotificationInboxItem[];
   readIds: Set<string>;
+  locale: LocaleCode;
   onOpenItem: (item: NotificationInboxItem) => void;
   onMarkAllRead: () => void;
   onClose: () => void;
 }) {
   const unreadCount = items.filter((item) => !readIds.has(item.id)).length;
   return (
-    <section className="notification-inbox" role="dialog" aria-label="通知 inbox">
+    <section className="notification-inbox" role="dialog" aria-label={t(locale, 'notificationInbox')}>
       <header>
         <div>
-          <p>{unreadCount > 0 ? `${unreadCount} 条未读` : '全部已读'}</p>
-          <h2>通知</h2>
+          <p>{unreadCount > 0 ? t(locale, 'unreadCount', { count: unreadCount }) : t(locale, 'allRead')}</p>
+          <h2>{t(locale, 'notifications')}</h2>
         </div>
-        <button type="button" className="native-icon-button" aria-label="关闭通知 inbox" onClick={onClose}>
+        <button type="button" className="native-icon-button" aria-label={t(locale, 'closeNotificationInbox')} onClick={onClose}>
           <X size={16} />
         </button>
       </header>
       <div className="notification-inbox-actions">
         <button type="button" className="message-action-button" onClick={onMarkAllRead} disabled={items.length === 0}>
           <Check size={13} />
-          全部标为已读
+          {t(locale, 'markAllRead')}
         </button>
       </div>
       <div className="notification-inbox-list">
-        {items.length === 0 && <p className="empty">暂无通知。需要审批、选择或作业失败时会出现在这里。</p>}
+        {items.length === 0 && <p className="empty">{t(locale, 'emptyNotifications')}</p>}
         {items.map((item) => {
           const unread = !readIds.has(item.id);
           return (
@@ -5265,7 +6015,7 @@ function NotificationInbox({
                 <strong>{item.title}</strong>
                 <small>{item.body}</small>
               </span>
-              <em>{unread ? '未读' : '已读'}</em>
+              <em>{unread ? t(locale, 'unread') : t(locale, 'read')}</em>
             </button>
           );
         })}
@@ -5278,6 +6028,7 @@ function MobileFilesPane({
   session,
   jobs,
   attachments,
+  locale,
   onCopyPath,
   onCopyText,
   onDownload,
@@ -5287,6 +6038,7 @@ function MobileFilesPane({
   session?: AgentSession | null;
   jobs: Job[];
   attachments?: ReplyAttachment[];
+  locale: LocaleCode;
   onCopyPath: (value: string) => void;
   onCopyText: (value: string) => void;
   onDownload: (file: WorkspaceFileReadResult) => void;
@@ -5309,87 +6061,97 @@ function MobileFilesPane({
   const previewSummary = previewLines.find((line) => line !== previewHeadline) ?? '';
   const imagePreviewUrl = readResult?.preview_kind === 'image' ? workspaceFileDataUrl(readResult) : null;
   return (
-    <section className="mobile-panel files-pane" aria-label="文件">
+    <section className="mobile-panel files-pane" aria-label={t(locale, 'filePane')}>
       <div className="mobile-panel-head">
         <div>
-          <p>{session ? sessionTitle(session) : '当前没有会话'}</p>
-          <h2>文件浏览器</h2>
+          <p>{session ? sessionTitle(session) : t(locale, 'currentNoSession')}</p>
+          <h2>{t(locale, 'fileBrowser')}</h2>
         </div>
         <button type="button" className={`native-icon-button ${busy ? 'loading' : ''}`} disabled={!session} onClick={() => onList(currentPath)}>
           <RefreshCw size={18} />
         </button>
       </div>
       <div className="file-context-card">
-        <span>Workspace</span>
-        <code>{workspaceRoot || '未绑定 workspace'}</code>
+        <span>{t(locale, 'workspace')}</span>
+        <code>{workspaceRoot || t(locale, 'workspaceUnbound')}</code>
         <div className="file-toolbar">
           <button
             type="button"
             className="message-action-button"
-            aria-label="复制 file path"
+            aria-label={t(locale, 'copyFilePath')}
             disabled={!workspaceRoot}
             onClick={() => onCopyPath(workspaceRoot)}
           >
             <Copy size={13} />
-            复制路径
+            {t(locale, 'copyPath')}
           </button>
           <button type="button" className="message-action-button" disabled={!session} onClick={() => onList('.')}>
             <Folder size={13} />
-            浏览 workspace
+            {t(locale, 'browseWorkspace')}
           </button>
         </div>
       </div>
       <div className="file-browser-card">
         <div className="file-browser-title">
-          <span>{currentPath === '.' ? 'Workspace root' : currentPath}</span>
-          {busy && <small>同步中</small>}
+          <span>{currentPath === '.' ? t(locale, 'workspaceRoot') : currentPath}</span>
+          {busy && <small>{t(locale, 'syncing')}</small>}
         </div>
+        <p className="file-note">{t(locale, 'fileBrowserNote')}</p>
         {parentPath && (
           <button type="button" className="message-action-button" onClick={() => onList(parentPath)}>
             <RotateCcw size={13} />
-            返回上一级
+            {t(locale, 'goParent')}
           </button>
         )}
-        {!listResult && <p className="empty">点“浏览 workspace”后，worker 会返回只读文件列表。</p>}
-        {listResult && listResult.entries.length === 0 && <p className="empty">这个目录是空的。</p>}
+        {!listResult && <p className="empty">{t(locale, 'browseWorkspaceEmpty')}</p>}
+        {listResult && listResult.entries.length === 0 && <p className="empty">{t(locale, 'emptyDirectory')}</p>}
         {listResult?.entries.map((entry) => (
           <div className="file-row" key={entry.path}>
             <button
               type="button"
               className="file-row-main"
-              aria-label={entry.kind === 'directory' ? `进入 ${entry.name}` : `预览 ${entry.name}`}
+              aria-label={entry.kind === 'directory' ? t(locale, 'enterDirectory', { name: entry.name }) : t(locale, 'previewFile', { name: entry.name })}
               onClick={() => (entry.kind === 'directory' ? onList(entry.path) : onRead(entry.path))}
             >
               {entry.kind === 'directory' ? <Folder size={17} /> : <FileText size={17} />}
               <span>
                 <strong>{entry.name}</strong>
-                <small>{entry.kind === 'directory' ? '目录' : `${formatFileSize(entry.size_bytes)} · ${formatWhen(entry.modified_at) || entry.path}`}</small>
+                <small>{entry.kind === 'directory' ? t(locale, 'directory') : `${formatFileSize(entry.size_bytes)} · ${formatWhen(entry.modified_at) || entry.path}`}</small>
               </span>
             </button>
-            <button type="button" className="native-icon-button small" aria-label={`复制 ${entry.name} 路径`} onClick={() => onCopyPath(entry.path)}>
+            <button type="button" className="native-icon-button small" aria-label={t(locale, 'copyEntryPath', { name: entry.name })} onClick={() => onCopyPath(entry.path)}>
               <Copy size={14} />
             </button>
           </div>
         ))}
-        {listResult?.truncated && <p className="file-note">已显示前 300 项，请进入更深目录继续浏览。</p>}
+        {listResult?.truncated && <p className="file-note">{t(locale, 'fileListTruncated')}</p>}
       </div>
       {readResult && (
         <div className="file-preview-card">
           <div className="file-preview-head">
             <span>
               <strong>{readResult.filename || readResult.path}</strong>
-              <small>{formatFileSize(readResult.size_bytes)}{readResult.truncated ? ' · 已截断' : ''}</small>
+              <small>
+                {readResult.preview_kind === 'image'
+                  ? t(locale, 'imagePreview')
+                  : readResult.preview_kind === 'text'
+                    ? t(locale, 'textPreview')
+                    : t(locale, 'downloadPreview')}
+                {' · '}
+                {formatFileSize(readResult.size_bytes)}
+                {readResult.truncated ? ` · ${t(locale, 'truncated')}` : ''}
+              </small>
             </span>
             <div className="file-toolbar">
               {readResult.preview_kind === 'text' && (
-                <button type="button" className="native-icon-button small" aria-label="复制文件内容" onClick={() => onCopyText(readResult.text || '')}>
+                <button type="button" className="native-icon-button small" aria-label={t(locale, 'copyFileContent')} onClick={() => onCopyText(readResult.text || '')}>
                   <Copy size={14} />
                 </button>
               )}
               {readResult.downloadable && (
                 <button type="button" className="message-action-button" onClick={() => onDownload(readResult)}>
                   <Download size={13} />
-                  下载文件
+                  {readResult.preview_kind === 'image' ? t(locale, 'downloadOriginal') : t(locale, 'downloadFile')}
                 </button>
               )}
             </div>
@@ -5402,12 +6164,12 @@ function MobileFilesPane({
               <pre>{readResult.text}</pre>
             </>
           )}
-          {readResult.preview_kind === 'download' && <p className="empty">这个文件不是纯文本，先下载到本地查看更稳。</p>}
+          {readResult.preview_kind === 'download' && <p className="empty">{t(locale, 'nonTextDownload')}</p>}
         </div>
       )}
       {attachments && attachments.length > 0 && (
         <div className="mobile-panel-card attached-file-card">
-          <strong>待发送附件</strong>
+          <strong>{t(locale, 'pendingAttachments')}</strong>
           {attachments.map((attachment, index) => (
             <span key={`${attachment.filename}-${index}`}>
               {attachment.filename}
@@ -5424,27 +6186,29 @@ function MobileWorkersPane({
   workers,
   jobs,
   providers,
+  locale,
   canAdmin,
   onAddWorker,
 }: {
   workers: Worker[];
   jobs: Job[];
   providers: ProviderSnapshot[];
+  locale: LocaleCode;
   canAdmin: boolean;
   onAddWorker: () => void;
 }) {
   const queuedJobs = jobs.filter((job) => job.status === 'queued').length;
   const runningJobs = jobs.filter((job) => job.status === 'running').length;
   return (
-    <section className="mobile-panel workers-pane" aria-label="节点">
+    <section className="mobile-panel workers-pane" aria-label={t(locale, 'workersPane')}>
       <div className="mobile-panel-head">
         <div>
-          <p>在线 {workers.filter((worker) => worker.status === 'online').length}/{workers.length} · 排队 {queuedJobs} · 运行 {runningJobs}</p>
-          <h2>节点诊断</h2>
+          <p>{t(locale, 'workersSummary', { online: workers.filter((worker) => worker.status === 'online').length, total: workers.length, queued: queuedJobs, running: runningJobs })}</p>
+          <h2>{t(locale, 'workerDiagnostics')}</h2>
         </div>
         <Cpu size={22} />
       </div>
-      {workers.length === 0 && <p className="empty">暂无节点。先添加本机或远端 worker。</p>}
+      {workers.length === 0 && <p className="empty">{t(locale, 'noWorkers')}</p>}
       {workers.map((worker) => {
         const workerProviders = providers.filter((provider) => provider.worker_id === worker.worker_id);
         return (
@@ -5452,16 +6216,16 @@ function MobileWorkersPane({
             <div className="worker-diagnostic-top">
               <span className={`status-dot ${statusClass(worker.status)}`} />
               <strong>{worker.worker_id}</strong>
-              <small>{statusLabel(worker.status)}</small>
+              <small>{statusLabel(worker.status, locale)}</small>
             </div>
             <p>{worker.machine_name || worker.os} · {worker.connection_mode || 'private'} · {worker.transport_state || 'polling'}</p>
-            <p>版本 {worker.worker_version || 'unknown'}</p>
-            <p>Backend：{worker.reachable_backends.length > 0 ? worker.reachable_backends.map(backendLabel).join(' / ') : '未发现'}</p>
+            <p>{t(locale, 'version', { version: worker.worker_version || 'unknown' })}</p>
+            <p>{t(locale, 'backendPrefix')}{worker.reachable_backends.length > 0 ? worker.reachable_backends.map(backendLabel).join(' / ') : t(locale, 'backendMissing')}</p>
             {workerProviders.length > 0 && (
               <div className="worker-provider-strip">
                 {workerProviders.map((provider) => (
                   <span key={`${provider.worker_id}-${provider.backend}`}>
-                    {backendLabel(provider.backend)} · {statusLabel(provider.status)} · {provider.auth_status}
+                    {backendLabel(provider.backend)} · {statusLabel(provider.status, locale)} · {provider.auth_status}
                   </span>
                 ))}
               </div>
@@ -5471,10 +6235,227 @@ function MobileWorkersPane({
       })}
       {canAdmin && (
         <button type="button" className="invite-button" onClick={onAddWorker}>
-          添加 Worker
+          {t(locale, 'addWorker')}
         </button>
       )}
     </section>
+  );
+}
+
+function PreferencesEditor({
+  locale,
+  preferences,
+  options,
+  onSave,
+  onLocaleChange,
+  onThemeModeChange,
+}: {
+  locale: LocaleCode;
+  preferences: UserPreferences;
+  options: AgentHubSettings['options'];
+  onSave: (values: Partial<UserPreferences>) => Promise<void>;
+  onLocaleChange: (value: LocaleCode) => Promise<void>;
+  onThemeModeChange: (value: ThemeMode) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<UserPreferences>(preferences);
+  const [quickReplyText, setQuickReplyText] = useState(preferences.quick_replies.join('\n'));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(preferences);
+    setQuickReplyText(preferences.quick_replies.join('\n'));
+  }, [preferences]);
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({
+        voice_mode: draft.voice_mode,
+        voice_language: draft.voice_language,
+        quick_replies: quickReplyText
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, 12),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="editor-panel" onSubmit={handleSave}>
+      <div className="control-fields">
+        <label>
+          {t(locale, 'language')}
+          <select
+            aria-label={t(locale, 'language')}
+            value={draft.locale}
+            onChange={(event) => {
+              const nextLocale = event.target.value as LocaleCode;
+              setDraft((current) => ({ ...current, locale: nextLocale }));
+              void onLocaleChange(nextLocale);
+            }}
+          >
+            {options.locales.map((option) => (
+              <option value={option.value} key={option.value}>
+                {localeLabel(locale, option.value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t(locale, 'theme')}
+          <select
+            aria-label={t(locale, 'theme')}
+            value={draft.theme_mode}
+            onChange={(event) => {
+              const nextTheme = event.target.value as ThemeMode;
+              setDraft((current) => ({ ...current, theme_mode: nextTheme }));
+              void onThemeModeChange(nextTheme);
+            }}
+          >
+            {options.theme_modes.map((option) => (
+              <option value={option.value} key={option.value}>
+                {themeModeLabel(locale, option.value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t(locale, 'voiceMode')}
+          <select
+            aria-label={t(locale, 'voiceMode')}
+            value={draft.voice_mode}
+            onChange={(event) => setDraft((current) => ({ ...current, voice_mode: event.target.value as VoiceMode }))}
+          >
+            {options.voice_modes.map((option) => (
+              <option value={option.value} key={option.value}>
+                {voiceModeLabel(locale, option.value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          {t(locale, 'recognitionLanguage')}
+          <select
+            aria-label={t(locale, 'recognitionLanguage')}
+            value={draft.voice_language}
+            onChange={(event) => setDraft((current) => ({ ...current, voice_language: event.target.value }))}
+          >
+            {options.voice_languages.map((option) => (
+              <option value={option.value} key={option.value}>
+                {voiceLanguageLabel(locale, option.value)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="full-width-field">
+          {t(locale, 'quickReplies')}
+          <textarea
+            aria-label={t(locale, 'quickRepliesList')}
+            rows={5}
+            value={quickReplyText}
+            onChange={(event) => setQuickReplyText(event.target.value)}
+          />
+        </label>
+      </div>
+      <small>{t(locale, 'preferencesCopy')}</small>
+      <button type="submit" disabled={saving}>
+        <Check size={16} />
+        {saving ? t(locale, 'saving') : t(locale, 'savePreferences')}
+      </button>
+    </form>
+  );
+}
+
+function WorkerRuntimeDefaultsEditor({
+  locale,
+  runtime,
+  onSave,
+}: {
+  locale: LocaleCode;
+  runtime: WorkerRuntimeDefaults;
+  onSave: (values: Partial<WorkerRuntimeDefaults>) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<WorkerRuntimeDefaults>(runtime);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(runtime);
+  }, [runtime]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await onSave(draft);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="editor-panel" onSubmit={handleSubmit}>
+      <div className="control-fields">
+        <label>
+          {t(locale, 'maxConcurrentJobs')}
+          <input
+            aria-label={t(locale, 'maxConcurrentJobs')}
+            type="number"
+            min={1}
+            max={32}
+            value={draft.max_concurrent_jobs}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                max_concurrent_jobs: Math.max(1, Number(event.target.value) || 1),
+              }))
+            }
+          />
+        </label>
+        <label>
+          {t(locale, 'pollIntervalSeconds')}
+          <input
+            aria-label={t(locale, 'pollIntervalSeconds')}
+            type="number"
+            min={1}
+            max={300}
+            step={1}
+            value={draft.job_poll_interval_seconds}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                job_poll_interval_seconds: Math.max(1, Number(event.target.value) || 1),
+              }))
+            }
+          />
+        </label>
+        <label>
+          {t(locale, 'heartbeatIntervalSeconds')}
+          <input
+            aria-label={t(locale, 'heartbeatIntervalSeconds')}
+            type="number"
+            min={1}
+            max={300}
+            step={1}
+            value={draft.heartbeat_interval_seconds}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                heartbeat_interval_seconds: Math.max(1, Number(event.target.value) || 1),
+              }))
+            }
+          />
+        </label>
+      </div>
+      <small>{t(locale, 'workerRuntimeCopy')}</small>
+      <button type="submit" disabled={saving}>
+        <Check size={16} />
+        {saving ? t(locale, 'saving') : t(locale, 'saveWorkerDefaults')}
+      </button>
+    </form>
   );
 }
 
@@ -5488,8 +6469,16 @@ function MobileMePane({
   nativeVersion,
   apkUpdate,
   apkUrl,
+  locale,
+  preferences,
+  options,
+  workerRuntimeDefaults,
   themeMode,
+  canAdmin,
+  onLocaleChange,
   onThemeModeChange,
+  onVoicePreferenceChange,
+  onWorkerRuntimeDefaultsChange,
   onNotificationSetup,
   onRestartNotificationGuard,
   onCheckApkUpdate,
@@ -5506,8 +6495,16 @@ function MobileMePane({
   nativeVersion: NativeAppVersion | null;
   apkUpdate: ApkUpdateState;
   apkUrl: string;
+  locale: LocaleCode;
+  preferences: UserPreferences;
+  options: AgentHubSettings['options'];
+  workerRuntimeDefaults: WorkerRuntimeDefaults;
   themeMode: ThemeMode;
-  onThemeModeChange: (mode: ThemeMode) => void;
+  canAdmin: boolean;
+  onLocaleChange: (value: LocaleCode) => Promise<void>;
+  onThemeModeChange: (mode: ThemeMode) => void | Promise<void>;
+  onVoicePreferenceChange: (values: Partial<UserPreferences>) => Promise<void>;
+  onWorkerRuntimeDefaultsChange: (values: Partial<WorkerRuntimeDefaults>) => Promise<void>;
   onNotificationSetup: () => void;
   onRestartNotificationGuard: () => void;
   onCheckApkUpdate: () => void;
@@ -5516,25 +6513,25 @@ function MobileMePane({
   onLogout: () => void;
 }) {
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
-  const workerSummary = workers.length > 0 ? `${onlineWorkers}/${workers.length} 在线` : '暂无节点';
-  const notificationLabel = notificationPermission === 'granted' ? '已开启' : notificationPermission === 'denied' ? '已拒绝' : '未开启';
+  const workerSummary = workers.length > 0 ? pickLocale(locale, `${onlineWorkers}/${workers.length} 在线`, `${onlineWorkers}/${workers.length} online`) : t(locale, 'noWorkers');
+  const notificationLabel = notificationPermission === 'granted' ? t(locale, 'notificationGranted') : notificationPermission === 'denied' ? t(locale, 'notificationDenied') : t(locale, 'notificationUnknown');
   const nativeVersionLabel = nativeVersion
-    ? `当前 APK：${nativeVersion.name}${nativeVersion.code ? ` (${nativeVersion.code})` : ''}`
-    : '当前环境：Web 控制台';
+    ? t(locale, 'nativeVersion', { version: `${nativeVersion.name}${nativeVersion.code ? ` (${nativeVersion.code})` : ''}` })
+    : t(locale, 'webConsoleEnv');
   const updateLabel =
     apkUpdate.status === 'checking'
-      ? '线上 APK：检查中'
+      ? t(locale, 'onlineApkChecking')
       : apkUpdate.status === 'ready'
-        ? `线上 APK：${formatFileSize(apkUpdate.sizeBytes)}${apkUpdate.lastModified ? ` · ${formatWhen(apkUpdate.lastModified)}` : ''}`
+        ? t(locale, 'onlineApkReady', { detail: `${formatFileSize(apkUpdate.sizeBytes)}${apkUpdate.lastModified ? ` · ${formatWhen(apkUpdate.lastModified)}` : ''}` })
         : apkUpdate.status === 'failed'
-          ? `线上 APK：检查失败 ${apkUpdate.error ?? ''}`.trim()
-          : '线上 APK：尚未检查';
+          ? t(locale, 'onlineApkFailed', { error: apkUpdate.error ?? '' }).trim()
+          : t(locale, 'onlineApkIdle');
   return (
-    <section className="mobile-panel me-pane" aria-label="我的">
+    <section className="mobile-panel me-pane" aria-label={t(locale, 'mePane')}>
       <div className="mobile-panel-head">
         <div>
-          <p>{user?.role ?? 'anonymous'} · AgentHub</p>
-          <h2>设备与更新</h2>
+          <p>{user?.role ?? t(locale, 'anonymous')} · AgentHub</p>
+          <h2>{t(locale, 'deviceUpdates')}</h2>
         </div>
         <Smartphone size={22} />
       </div>
@@ -5548,15 +6545,15 @@ function MobileMePane({
         <div className="me-action-row">
           <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdate.status === 'checking'}>
             <RefreshCw size={13} />
-            {apkUpdate.status === 'checking' ? '检查中' : '检查更新'}
+            {apkUpdate.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
           </button>
           <button type="button" className="message-action-button primary-inline-action" onClick={onDownloadLatestApk}>
             <Download size={13} />
-            下载最新 APK
+            {t(locale, 'downloadLatestApk')}
           </button>
           <button type="button" className="message-action-button" onClick={onCopyApkUrl}>
             <Copy size={13} />
-            复制地址
+            {t(locale, 'copyAddress')}
           </button>
         </div>
       </div>
@@ -5565,26 +6562,26 @@ function MobileMePane({
         <div className="me-account-head">
           <UserCircle size={28} />
           <div>
-            <strong>{user?.email ?? '未登录'}</strong>
-            <p>通知：{notificationLabel} · 待处理 {pendingCount}</p>
+            <strong>{user?.email ?? t(locale, 'notLoggedIn')}</strong>
+            <p>{t(locale, 'notificationStatus', { status: notificationLabel, count: pendingCount })}</p>
           </div>
         </div>
         <div className="me-action-row">
           <button type="button" className="message-action-button" onClick={onNotificationSetup}>
             <Bell size={13} />
-            开启通知
+            {t(locale, 'enableNotifications')}
           </button>
           <button type="button" className="message-action-button" onClick={onRestartNotificationGuard}>
             <Activity size={13} />
-            重启守护
+            {t(locale, 'restartGuard')}
           </button>
         </div>
       </div>
 
       <div className="mobile-panel-card me-theme-card">
-        <strong>外观</strong>
-        <p>手机端可以在深色和浅色之间切换，设置会保存在当前设备。</p>
-        <div className="theme-toggle" role="group" aria-label="外观模式">
+        <strong>{t(locale, 'appearance')}</strong>
+        <p>{t(locale, 'appearanceCopy')}</p>
+        <div className="theme-toggle" role="group" aria-label={t(locale, 'appearanceMode')}>
           {(['dark', 'light'] as ThemeMode[]).map((mode) => (
             <button
               key={mode}
@@ -5593,37 +6590,57 @@ function MobileMePane({
               aria-pressed={themeMode === mode}
               onClick={() => onThemeModeChange(mode)}
             >
-              {mode === 'dark' ? '深色' : '浅色'}
+              {themeModeLabel(locale, mode)}
             </button>
           ))}
         </div>
+        <PreferencesEditor
+          locale={locale}
+          preferences={preferences}
+          options={options}
+          onSave={onVoicePreferenceChange}
+          onLocaleChange={onLocaleChange}
+          onThemeModeChange={async (mode) => onThemeModeChange(mode)}
+        />
       </div>
+
+      {canAdmin && (
+        <div className="mobile-panel-card me-theme-card">
+          <strong>{t(locale, 'workerDefaultsTitle')}</strong>
+          <p>{t(locale, 'workerDefaultsCopy')}</p>
+          <WorkerRuntimeDefaultsEditor
+            locale={locale}
+            runtime={workerRuntimeDefaults}
+            onSave={onWorkerRuntimeDefaultsChange}
+          />
+        </div>
+      )}
 
       <div className="me-status-grid">
         <div className="mobile-panel-card me-metric-card">
-          <small>节点</small>
-          <strong>节点：{workerSummary}</strong>
-          <p>{workers.length > 0 ? workers.map((worker) => worker.machine_name || worker.worker_id).slice(0, 2).join(' / ') : '先在电脑安装本地 worker'}</p>
+          <small>{t(locale, 'workersMetric')}</small>
+          <strong>{t(locale, 'workerMetricValue', { summary: workerSummary })}</strong>
+          <p>{workers.length > 0 ? workers.map((worker) => worker.machine_name || worker.worker_id).slice(0, 2).join(' / ') : t(locale, 'noWorkerInstall')}</p>
         </div>
         <div className="mobile-panel-card me-metric-card">
           <small>Secrets</small>
-          <strong>{secrets.length} 个</strong>
-          <p>{secrets.length > 0 ? '会话控制里可引用，值不会显示在聊天里' : 'API key 应放到 Secrets，不要直接发进聊天'}</p>
+          <strong>{pickLocale(locale, `${secrets.length} 个`, `${secrets.length}`)}</strong>
+          <p>{secrets.length > 0 ? t(locale, 'secretsMetricCopy') : t(locale, 'secretsEmptyCopy')}</p>
         </div>
         <div className="mobile-panel-card me-metric-card">
           <small>API</small>
-          <strong>已连接</strong>
-          <p>{lastSyncedAt ? `同步：${formatRelative(lastSyncedAt)}` : '等待首次同步'}</p>
+          <strong>{t(locale, 'connected')}</strong>
+          <p>{lastSyncedAt ? `${t(locale, 'syncing')}：${formatRelative(lastSyncedAt, locale)}` : t(locale, 'waitingFirstSync')}</p>
         </div>
         <div className="mobile-panel-card me-metric-card">
-          <small>审批</small>
-          <strong>{pendingCount} 条</strong>
-          <p>{pendingCount > 0 ? '回到 Chat 处理用户选择和审批' : '暂无等待你处理的请求'}</p>
+          <small>{t(locale, 'approvalsMetric')}</small>
+          <strong>{t(locale, 'countItems', { count: pendingCount })}</strong>
+          <p>{pendingCount > 0 ? t(locale, 'handleRequestsInChat') : t(locale, 'noPendingRequests')}</p>
         </div>
       </div>
 
       <button type="button" className="invite-button" onClick={onLogout}>
-        退出登录
+        {t(locale, 'logout')}
       </button>
     </section>
   );
@@ -6161,16 +7178,132 @@ function Panel({
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <details className="rail-panel" open={isOpen} onToggle={(event) => setIsOpen(event.currentTarget.open)}>
-      <summary aria-expanded={isOpen}>
+    <section className={`rail-panel ${isOpen ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="rail-panel-summary"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((open) => !open)}
+      >
         <span>
           {icon}
           {title}
         </span>
         <ChevronDown size={15} />
-      </summary>
-      <div className="rail-panel-body">{children}</div>
-    </details>
+      </button>
+      <div className="rail-panel-body">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function InviteUserDialog({
+  draft,
+  created,
+  onChange,
+  onClose,
+  onCopy,
+  onSubmit,
+}: {
+  draft: InviteDraft;
+  created: InviteCreated | null;
+  onChange: Dispatch<SetStateAction<InviteDraft>>;
+  onClose: () => void;
+  onCopy: (value: string, message: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const inviteLink = created
+    ? `${window.location.origin}/invite?token=${encodeURIComponent(created.invite_token)}`
+    : '';
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <form
+        className="launch-dialog invite-user-dialog"
+        role="dialog"
+        aria-label="邀请用户"
+        aria-modal="true"
+        onSubmit={onSubmit}
+      >
+        <div className="dialog-head">
+          <div>
+            <p>创建一次性邀请 token，用户接受后进入当前空间</p>
+            <h2>邀请用户</h2>
+          </div>
+          <button type="button" className="icon-button" aria-label="关闭" onClick={onClose}>
+            <X size={17} />
+          </button>
+        </div>
+        <div className="launch-grid">
+          <label>
+            邀请邮箱
+            <input
+              aria-label="邀请邮箱"
+              type="email"
+              value={draft.email}
+              autoFocus
+              onChange={(event) => onChange((current) => ({ ...current, email: event.target.value }))}
+              placeholder="teammate@example.com"
+              required
+            />
+          </label>
+          <label>
+            邀请角色
+            <select
+              aria-label="邀请角色"
+              value={draft.role}
+              onChange={(event) =>
+                onChange((current) => ({ ...current, role: event.target.value as InviteRole }))
+              }
+            >
+              <option value="operator">operator</option>
+              <option value="admin">admin</option>
+              <option value="viewer">viewer</option>
+            </select>
+          </label>
+          <label>
+            有效期小时
+            <input
+              aria-label="有效期小时"
+              type="number"
+              min="1"
+              value={draft.expires_in_hours}
+              onChange={(event) =>
+                onChange((current) => ({ ...current, expires_in_hours: event.target.value }))
+              }
+            />
+          </label>
+        </div>
+        {created && (
+          <div className="invite-result">
+            <strong>{created.email}</strong>
+            <small>
+              {created.role} · 过期时间 {formatWhen(created.expires_at)}
+            </small>
+            <code>{created.invite_token}</code>
+            <div className="invite-result-actions">
+              <button type="button" className="secondary-action" onClick={() => onCopy(created.invite_token, '邀请 token 已复制')}>
+                <Copy size={15} />
+                复制 token
+              </button>
+              <button type="button" className="secondary-action" onClick={() => onCopy(inviteLink, '邀请链接已复制')}>
+                <Users size={15} />
+                复制链接
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="dialog-actions">
+          <button type="button" className="secondary-action" onClick={onClose}>
+            关闭
+          </button>
+          <button type="submit" className="primary-top-action">
+            创建邀请
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -6293,12 +7426,12 @@ function WorkerInstallDialog({
               rows={3}
               value={draft.session_roots}
               onChange={(event) => onChange((current) => ({ ...current, session_roots: event.target.value }))}
-              placeholder="可选。默认会自动扫描 .codex/.claude/.kimi"
+              placeholder="可选。默认会自动扫描 .codex/.claude/.kimi/.local/share/opencode"
             />
           </label>
         </div>
         <div className="launch-options worker-backend-options">
-          {(['codex', 'claude', 'kimi'] as const).map((backend) => (
+          {(['codex', 'claude', 'kimi', 'opencode'] as const).map((backend) => (
             <label className="toggle-row" key={backend}>
               <input
                 type="checkbox"

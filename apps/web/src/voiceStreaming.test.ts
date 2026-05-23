@@ -29,6 +29,15 @@ const sdkState = vi.hoisted(() => {
     getConnect() {
       return connect;
     },
+    emitError() {
+      (handlers.onError as (() => void) | undefined)?.();
+    },
+    emitClose() {
+      (handlers.onClose as (() => void) | undefined)?.();
+    },
+    getStartRecord() {
+      return startRecord;
+    },
     labAsr(params: Record<string, unknown>) {
       handlers = params as typeof handlers;
       return {
@@ -56,10 +65,11 @@ describe('voiceStreaming', () => {
   it('force-finishes stop when the SDK never emits close', async () => {
     const stopTrack = vi.fn();
     const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: {
-        getUserMedia: vi.fn().mockResolvedValue(stream),
+        getUserMedia,
       },
     });
     sdkState.setNoCloseStop();
@@ -85,6 +95,14 @@ describe('voiceStreaming', () => {
 
     controller.stop();
     expect(sdkState.getStopRecord()).toHaveBeenCalledTimes(1);
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     expect(onClose).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1500);
@@ -127,6 +145,59 @@ describe('voiceStreaming', () => {
     vi.advanceTimersByTime(1500);
 
     expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconnects after a transient SDK error without ending the active recording', async () => {
+    const stopTrack = vi.fn();
+    const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const onRecovering = vi.fn();
+
+    const controller = await startStreamingVoice({
+      auth: {
+        url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+        auth: {
+          api_resource_id: 'volc.bigasr.sauc.duration',
+          api_app_key: 'app-key',
+          api_access_key: 'Jwt; token-123',
+        },
+        config: {
+          user: { uid: 'user-1' },
+          audio: { format: 'pcm', rate: 16000, bits: 16, channel: 1 },
+          request: { model_name: 'bigmodel' },
+        },
+        expires_in_seconds: 300,
+      },
+      onClose,
+      onError,
+      onRecovering,
+      maxReconnectAttempts: 1,
+    });
+
+    expect(sdkState.getStartRecord()).toHaveBeenCalledTimes(1);
+    sdkState.emitError();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onRecovering).toHaveBeenCalledWith(1);
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(450);
+
+    expect(sdkState.getConnect()).toHaveBeenCalledTimes(2);
+    expect(sdkState.getStartRecord()).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+
+    controller.stop();
+    vi.advanceTimersByTime(1500);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

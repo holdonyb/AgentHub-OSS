@@ -7,7 +7,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from conftest import auth_headers, bootstrap_owner, login
-from app.services import DoubaoAsrFacade, doubao_asr, voice_asr
+from app.services import DoubaoAsrFacade, doubao_asr
 
 
 def test_voice_transcribe_accepts_base64_audio_and_returns_text(
@@ -71,7 +71,6 @@ def test_voice_transcribe_returns_recording_diagnostics(
     assert response.json() == {
         "text": "带诊断的语音",
         "diagnostics": {
-            "provider": "doubao",
             "filename": "voice.wav",
             "content_type": "audio/wav",
             "input_format": "wav",
@@ -169,7 +168,6 @@ def test_voice_transcribe_reports_provider_http_errors_without_500(
             ),
             "code": "VOICE_ASR_FAILED",
             "diagnostics": {
-                "provider": "doubao",
                 "filename": "voice.wav",
                 "content_type": "audio/wav",
                 "input_format": "wav",
@@ -212,7 +210,6 @@ def test_voice_transcribe_reports_provider_timeout_without_500(
             "message": "Doubao ASR timed out",
             "code": "VOICE_ASR_TIMEOUT",
             "diagnostics": {
-                "provider": "doubao",
                 "filename": "voice.wav",
                 "content_type": "audio/wav",
                 "input_format": "wav",
@@ -259,54 +256,6 @@ def test_voice_stream_auth_returns_streaming_config(client: TestClient, monkeypa
     assert payload["config"]["request"]["model_name"] == "bigmodel"
     assert payload["expires_in_seconds"] == 300
     assert calls["uid"]
-
-
-def test_voice_transcribe_uses_configured_openai_provider(client: TestClient, monkeypatch) -> None:
-    bootstrap_owner(client)
-    owner_login = login(client)
-    calls: dict[str, object] = {}
-
-    async def fake_transcribe_audio_bytes(audio_bytes: bytes, *, audio_format: str, language: str | None = None) -> str:
-        calls["audio_bytes"] = audio_bytes
-        calls["audio_format"] = audio_format
-        calls["language"] = language
-        return "openai whisper transcript"
-
-    monkeypatch.setattr(voice_asr, "diagnostics_provider", lambda: "openai")
-    monkeypatch.setattr(voice_asr, "provider_label", lambda: "OpenAI ASR")
-    monkeypatch.setattr(voice_asr, "transcribe_audio_bytes", fake_transcribe_audio_bytes)
-
-    response = client.post(
-        "/api/voice/transcribe",
-        json={
-            "filename": "voice.webm",
-            "content_type": "audio/webm",
-            "data_base64": base64.b64encode(b"fake-audio").decode("ascii"),
-            "language": "en",
-        },
-        headers=auth_headers(owner_login),
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["text"] == "openai whisper transcript"
-    assert response.json()["diagnostics"]["provider"] in {"openai", "openai-compatible"}
-    assert calls == {"audio_bytes": b"fake-audio", "audio_format": "webm", "language": "en"}
-
-
-def test_voice_stream_auth_rejects_non_streaming_provider(client: TestClient, monkeypatch) -> None:
-    bootstrap_owner(client)
-    owner_login = login(client)
-
-    async def fake_issue_stream_auth(*, uid: str) -> dict[str, object]:
-        raise RuntimeError("Configured voice ASR provider does not support streaming auth")
-
-    monkeypatch.setattr(voice_asr, "issue_stream_auth", fake_issue_stream_auth)
-
-    response = client.post("/api/voice/stream-auth", headers=auth_headers(owner_login))
-
-    assert response.status_code == 503, response.text
-    assert response.json()["detail"]["code"] == "VOICE_STREAM_UNAVAILABLE"
-    assert "does not support streaming auth" in response.json()["detail"]["message"]
 
 
 def test_voice_stream_auth_reports_missing_credentials_without_500(client: TestClient, monkeypatch) -> None:

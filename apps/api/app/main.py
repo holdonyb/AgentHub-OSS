@@ -10,7 +10,24 @@ from app.core.config import Settings
 from app.core.database import create_db_engine, create_session_local, init_database
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.security import generate_token
-from app.routers import auth, events, internal, jobs, memory, permissions, providers, schedules, secrets, sessions, sync, timeline, voice, worker_relay, workers
+from app.routers import (
+    auth,
+    events,
+    internal,
+    jobs,
+    memory,
+    permissions,
+    providers,
+    schedules,
+    secrets,
+    sessions,
+    settings as settings_router,
+    sync,
+    timeline,
+    voice,
+    worker_relay,
+    workers,
+)
 
 logger = logging.getLogger("agenthub")
 
@@ -48,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memory.router)
     app.include_router(schedules.router)
     app.include_router(secrets.router)
+    app.include_router(settings_router.router)
     app.include_router(permissions.router)
     app.include_router(providers.router)
     app.include_router(sync.router)

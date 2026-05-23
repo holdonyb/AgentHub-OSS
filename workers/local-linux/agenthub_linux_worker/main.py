@@ -157,13 +157,16 @@ def main() -> None:
     if not worker_token:
         raise SystemExit("AGENTHUB_WORKER_TOKEN is required after registration or enrollment")
     client = AgentHubClient(args.api_url, args.worker_id, worker_token, mode=args.connection_mode)
+    def discover_worker_sessions(search_roots: list[Path]) -> list[dict]:
+        return discover_sessions(search_roots, opencode_roots=workspace_roots)
+
     runtime = WorkerRuntime(
         client=client,
         worker_id=args.worker_id,
         workspace_roots=workspace_roots,
         session_roots=_session_roots(),
         discover_capabilities=discover_capabilities,
-        discover_sessions=discover_sessions,
+        discover_sessions=discover_worker_sessions,
         background_jobs=not args.once,
         max_concurrent_jobs=args.max_concurrent_jobs,
         job_poll_interval_seconds=args.job_poll_interval_seconds,

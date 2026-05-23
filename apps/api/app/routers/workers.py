@@ -8,13 +8,37 @@ from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role, require_worker
 from app.core.json import dumps_json
 from app.core.security import generate_token, hash_token
+from app.core.settings_store import default_worker_runtime_defaults, get_worker_runtime_defaults
 from app.core.spaces import ensure_default_space
 from app.models import Worker, WorkerEnrollment, utcnow
 from app.routers.internal import _recover_orphaned_running_jobs, _recover_stale_running_jobs
-from app.schemas import WorkerEnrollmentCreateIn, WorkerHeartbeatIn, WorkerRegisterIn
+from app.schemas import WorkerEnrollmentCreateIn, WorkerHeartbeatIn, WorkerRegisterIn, WorkerRuntimeSettingsPatchIn
 from app.services import worker_out
 
 router = APIRouter()
+
+
+def _refresh_worker_runtime_from_space_defaults(worker: Worker, runtime_defaults: dict[str, float | int]) -> bool:
+    baseline = default_worker_runtime_defaults()
+    updated = False
+    baseline_max = int(baseline["max_concurrent_jobs"])
+    baseline_job_poll = int(baseline["job_poll_interval_seconds"])
+    baseline_heartbeat = int(baseline["heartbeat_interval_seconds"])
+    desired_max = int(runtime_defaults["max_concurrent_jobs"])
+    desired_job_poll = int(runtime_defaults["job_poll_interval_seconds"])
+    desired_heartbeat = int(runtime_defaults["heartbeat_interval_seconds"])
+    if worker.max_concurrent_jobs == baseline_max and desired_max != baseline_max:
+        worker.max_concurrent_jobs = desired_max
+        updated = True
+    if worker.job_poll_interval_seconds == baseline_job_poll and desired_job_poll != baseline_job_poll:
+        worker.job_poll_interval_seconds = desired_job_poll
+        updated = True
+    if worker.heartbeat_interval_seconds == baseline_heartbeat and desired_heartbeat != baseline_heartbeat:
+        worker.heartbeat_interval_seconds = desired_heartbeat
+        updated = True
+    if updated:
+        worker.updated_at = utcnow()
+    return updated
 
 
 def _bearer(request: Request) -> str:
@@ -37,6 +61,7 @@ def _upsert_worker(
         .one_or_none()
     )
     issued_token: str | None = None
+    runtime_defaults = get_worker_runtime_defaults(db, space_id=space_id)
     if existing:
         existing.machine_name = payload.machine_name
         existing.os = payload.os
@@ -49,6 +74,7 @@ def _upsert_worker(
         existing.status = "online"
         existing.last_heartbeat_at = utcnow()
         existing.updated_at = utcnow()
+        _refresh_worker_runtime_from_space_defaults(existing, runtime_defaults)
         if worker_token:
             existing.token_hash = hash_token(worker_token)
         return existing, None
@@ -65,6 +91,9 @@ def _upsert_worker(
         reachable_backends_json=dumps_json(payload.reachable_backends),
         workspace_roots_json=dumps_json(payload.workspace_roots),
         capabilities_json=dumps_json(payload.capabilities),
+        max_concurrent_jobs=int(runtime_defaults["max_concurrent_jobs"]),
+        job_poll_interval_seconds=int(runtime_defaults["job_poll_interval_seconds"]),
+        heartbeat_interval_seconds=int(runtime_defaults["heartbeat_interval_seconds"]),
         status="online",
         last_heartbeat_at=utcnow(),
     )
@@ -92,7 +121,11 @@ def register_worker(payload: WorkerRegisterIn, request: Request, db: DbSession):
         payload={"idempotent": worker.id is not None, "connection_mode": worker.connection_mode, "os": worker.os},
     )
     db.commit()
-    return {"worker": worker_out(worker), "worker_token": issued_token}
+    return {
+        "worker": worker_out(worker),
+        "worker_token": issued_token,
+        "runtime_settings": get_worker_runtime_defaults(db, space_id=space.space_id),
+    }
 
 
 @router.post("/api/workers/{worker_id}/heartbeat")
@@ -119,6 +152,11 @@ def heartbeat_worker(
         worker.workspace_roots_json = dumps_json(payload.workspace_roots)
     if payload.capabilities is not None:
         worker.capabilities_json = dumps_json(payload.capabilities)
+    runtime_defaults = get_worker_runtime_defaults(
+        db,
+        space_id=worker.space_id or actor.space_id or ensure_default_space(db).space_id,
+    )
+    _refresh_worker_runtime_from_space_defaults(worker, runtime_defaults)
     if payload.active_job_ids is not None:
         _recover_orphaned_running_jobs(db, worker.worker_id, worker.space_id, payload.active_job_ids)
     _recover_stale_running_jobs(db, worker.worker_id, worker.space_id)
@@ -133,7 +171,7 @@ def heartbeat_worker(
         payload={"status": worker.status, "transport_state": worker.transport_state},
     )
     db.commit()
-    return {"worker": worker_out(worker)}
+    return {"worker": worker_out(worker), "runtime_settings": runtime_defaults}
 
 
 @router.get("/api/workers")
@@ -145,6 +183,40 @@ def list_workers(db: DbSession, actor: Actor = Depends(require_min_role("viewer"
         .all()
     )
     return {"items": [worker_out(worker) for worker in workers]}
+
+
+@router.patch("/api/workers/{worker_id}/runtime-settings")
+def patch_worker_runtime_settings(
+    worker_id: str,
+    payload: WorkerRuntimeSettingsPatchIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("admin")),
+):
+    worker = (
+        db.query(Worker)
+        .filter(Worker.space_id == actor.space_id, Worker.worker_id == worker_id)
+        .one_or_none()
+    )
+    if worker is None:
+        raise HTTPException(status_code=404, detail={"message": "Worker not found", "code": "WORKER_NOT_FOUND"})
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail={"message": "No runtime settings supplied", "code": "WORKER_RUNTIME_SETTINGS_EMPTY"})
+    for key, value in updates.items():
+        setattr(worker, key, int(value))
+    worker.updated_at = utcnow()
+    write_event(
+        db,
+        space_id=worker.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="worker",
+        source_id=worker.worker_id,
+        event_type="worker.runtime_settings_update",
+        payload=updates,
+    )
+    db.commit()
+    return {"worker": worker_out(worker)}
 
 
 @router.get("/api/worker-enrollments")

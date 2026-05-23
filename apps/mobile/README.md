@@ -8,7 +8,7 @@ The APK loads:
 https://agenthub.example.com
 ```
 
-Example hosted APK path:
+Example hosted APK:
 
 ```text
 https://agenthub.example.com/downloads/agenthub-debug.apk
@@ -39,3 +39,15 @@ AGENTHUB_ANDROID_KEY_PASSWORD
 ```
 
 GitHub Actions reads the same values from repository secrets, with the keystore stored as `AGENTHUB_ANDROID_KEYSTORE_BASE64`.
+
+For a generic self-host build, point the wrapper at your own server before packaging:
+
+```text
+apps/mobile/capacitor.config.json
+```
+
+Publish your signed debug APK to your own download path:
+
+```powershell
+npm run mobile:build:debug
+```

@@ -24,11 +24,13 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(workflow).toContain('AGENTHUB_ANDROID_KEYSTORE_BASE64');
     expect(workflow).toContain('base64 --decode');
     expect(workflow).toContain('npm run mobile:build:release');
-    expect(workflow).toContain('app-debug.apk');
+    expect(workflow).toContain('Build signed debug APK');
+    expect(workflow).toContain('Upload signed APKs');
+    expect(workflow).toContain('apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk');
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
-    expect(buildGradle).toContain('versionCode 10');
-    expect(buildGradle).toContain('versionName "1.9"');
+    expect(buildGradle).toContain('versionCode 13');
+    expect(buildGradle).toContain('versionName "1.12"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);
@@ -77,7 +79,6 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(mainActivity).toContain('requestMicrophonePermission');
     expect(mainActivity).toContain('startNotificationService');
     expect(mainActivity).toContain('stopNotificationService');
-    expect(mainActivity).toContain('setServerBaseUrl');
     expect(mainActivity).toContain('appVersionName');
     expect(mainActivity).toContain('appVersionCode');
     expect(mainActivity).toContain('downloadLatestApk');
@@ -100,8 +101,6 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(service).toContain('startForeground');
     expect(service).toContain('/api/sync/permissions');
     expect(service).toContain('/api/sync/inbox');
-    expect(service).toContain('serverBaseUrl()');
-    expect(service).toContain('agenthub-app-config');
     expect(service).toContain('pendingPermissionSessionsById');
     expect(service).toContain('withCursor');
     expect(service).toContain('CookieManager.getInstance().getCookie');
@@ -111,38 +110,13 @@ describe('Android APK GitHub Actions workflow', () => {
   });
 });
 
-describe('OSS packaging workflow', () => {
-  it('builds workspace packages through npm workspaces so release builds find root binaries', () => {
+describe('Production deploy workflow', () => {
+  it('builds workspace packages through npm workspaces so remote builds find root binaries', () => {
     const packageJson = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),
     );
 
     expect(packageJson.scripts['web:build']).toContain('--workspace @agenthub/web');
     expect(packageJson.scripts['mobile:build:release']).toContain('--workspace @agenthub/mobile');
-  });
-
-  it('keeps public release automation and self-host smoke checked in', () => {
-    const releaseWorkflow = readFileSync(
-      new URL('../../.github/workflows/release.yml', import.meta.url),
-      'utf-8',
-    );
-    const smokeWorkflow = readFileSync(
-      new URL('../../.github/workflows/selfhost-smoke.yml', import.meta.url),
-      'utf-8',
-    );
-    const smokeScript = readFileSync(
-      new URL('../../scripts/smoke-selfhost-vm.sh', import.meta.url),
-      'utf-8',
-    );
-
-    expect(releaseWorkflow).toContain('workflow_dispatch');
-    expect(releaseWorkflow).toContain('agenthub-android-apk');
-    expect(releaseWorkflow).toContain('actions/upload-artifact@v4');
-    expect(releaseWorkflow).toContain('agenthub-android-release.apk');
-    expect(releaseWorkflow).toContain('softprops/action-gh-release@v2');
-    expect(smokeWorkflow).toContain('SELFHOST_SMOKE_OK');
-    expect(smokeWorkflow).toContain('run_worker_smoke');
-    expect(smokeScript).toContain('scripts/install-selfhost-linux.sh');
-    expect(smokeScript).toContain('scripts/check-selfhost.sh');
   });
 });

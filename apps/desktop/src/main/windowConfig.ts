@@ -29,7 +29,7 @@ export function createWindowOptions({
   kind,
   preloadPath,
 }: {
-  kind: 'main' | 'island';
+  kind: 'main' | 'island' | 'setup';
   preloadPath: string;
 }): BrowserWindowConstructorOptions {
   const common: BrowserWindowConstructorOptions = {
@@ -55,6 +55,18 @@ export function createWindowOptions({
       frame: true,
       alwaysOnTop: true,
       skipTaskbar: true,
+    };
+  }
+
+  if (kind === 'setup') {
+    return {
+      ...common,
+      width: 520,
+      height: 420,
+      minWidth: 420,
+      minHeight: 360,
+      title: 'AgentHub Setup',
+      resizable: true,
     };
   }
 

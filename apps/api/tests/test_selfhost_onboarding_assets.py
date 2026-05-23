@@ -18,6 +18,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "docs/DEPLOYMENT_BRIEF.example.json",
         "docs/OSS_RELEASE.md",
         "docs/CONFIGURATION_REFERENCE.md",
+        "docs/LOCAL_SERVER_MODE.md",
+        "docs/OPEN_SOURCE_LAUNCH.md",
         "docs/SELF_HOST_QUICKSTART.md",
         "docs/TAILSCALE_PRIVATE_MODE.md",
         "docs/SELF_HOST_TROUBLESHOOTING.md",
@@ -39,10 +41,13 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "Self-Host Public Relay" in readme
     assert "Tailscale Private Mode" in readme
+    assert "Local server mode" in readme
     assert "docs/CONFIGURATION_REFERENCE.md" in readme
+    assert "docs/LOCAL_SERVER_MODE.md" in readme
     assert "docs/AI_DEPLOYMENT_RUNBOOK.md" in readme
     assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
     assert "docs/OSS_RELEASE.md" in readme
+    assert "docs/OPEN_SOURCE_LAUNCH.md" in readme
     assert "docs/SELF_HOST_QUICKSTART.md" in readme
     assert "docs/TAILSCALE_PRIVATE_MODE.md" in readme
     assert "Android APK client" in readme
@@ -56,6 +61,8 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     ai_runbook = (REPO_ROOT / "docs" / "AI_DEPLOYMENT_RUNBOOK.md").read_text(encoding="utf-8")
     deployment_brief = (REPO_ROOT / "docs" / "DEPLOYMENT_BRIEF.example.json").read_text(encoding="utf-8")
     config_reference = (REPO_ROOT / "docs" / "CONFIGURATION_REFERENCE.md").read_text(encoding="utf-8")
+    local_server = (REPO_ROOT / "docs" / "LOCAL_SERVER_MODE.md").read_text(encoding="utf-8")
+    open_source_launch = (REPO_ROOT / "docs" / "OPEN_SOURCE_LAUNCH.md").read_text(encoding="utf-8")
     quickstart = (REPO_ROOT / "docs" / "SELF_HOST_QUICKSTART.md").read_text(encoding="utf-8")
     tailscale = (REPO_ROOT / "docs" / "TAILSCALE_PRIVATE_MODE.md").read_text(encoding="utf-8")
     troubleshooting = (REPO_ROOT / "docs" / "SELF_HOST_TROUBLESHOOTING.md").read_text(encoding="utf-8")
@@ -89,6 +96,26 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "AGENTHUB_OPENAI_ASR_MODEL",
     ]:
         assert expected in config_reference
+
+    for expected in [
+        "You do not need a VM",
+        "Windows",
+        "macOS",
+        "Linux",
+        "Tailscale",
+        "CONFIGURATION_REFERENCE.md",
+    ]:
+        assert expected in local_server
+
+    for expected in [
+        "self-hosted",
+        "Tailscale-first",
+        "local machine can be the server",
+        "Android APK",
+        "Windows desktop",
+        "Hacker News",
+    ]:
+        assert expected in open_source_launch
 
     for expected in [
         "Ubuntu 22.04",

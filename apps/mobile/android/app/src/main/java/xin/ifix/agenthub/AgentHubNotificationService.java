@@ -37,8 +37,7 @@ public class AgentHubNotificationService extends Service {
     private static final String ALERT_CHANNEL_ID = "agenthub-approvals-v2";
     private static final String SERVICE_CHANNEL_ID = "agenthub-background-v1";
     private static final String PREFS_NAME = "agenthub-notifications";
-    private static final String APP_CONFIG_PREFS_NAME = "agenthub-app-config";
-    private static final String PREF_SERVER_BASE_URL = "server_base_url";
+    private static final String PREF_SERVER_URL = "server_url";
     private static final String PREF_NOTIFIED_PERMISSIONS = "notified_permissions";
     private static final String PREF_NOTIFIED_SESSIONS = "notified_sessions";
     private static final int FOREGROUND_NOTIFICATION_ID = 4401;
@@ -105,7 +104,7 @@ public class AgentHubNotificationService extends Service {
     }
 
     private void pollAgentHub() throws Exception {
-        String baseUrl = serverBaseUrl();
+        String baseUrl = loadBaseUrl();
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie == null || cookie.trim().isEmpty()) return;
 
@@ -122,13 +121,11 @@ public class AgentHubNotificationService extends Service {
         }
     }
 
-    private String serverBaseUrl() {
-        SharedPreferences prefs = getSharedPreferences(APP_CONFIG_PREFS_NAME, MODE_PRIVATE);
-        String stored = prefs.getString(PREF_SERVER_BASE_URL, "");
-        if (stored == null) return DEFAULT_BASE_URL;
-        String normalized = stored.trim();
-        while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
-        return normalized.isEmpty() ? DEFAULT_BASE_URL : normalized;
+    private String loadBaseUrl() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String stored = prefs.getString(PREF_SERVER_URL, DEFAULT_BASE_URL);
+        if (stored == null || stored.trim().isEmpty()) return DEFAULT_BASE_URL;
+        return stored.trim().replaceAll("/$", "");
     }
 
     private JSONObject getJson(String baseUrl, String path, String cookie) throws Exception {

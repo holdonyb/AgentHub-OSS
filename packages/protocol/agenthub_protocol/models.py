@@ -54,9 +54,15 @@ class WorkerRegistration(BaseModel):
     capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkerRuntimeSettings(BaseModel):
+    max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
+    job_poll_interval_seconds: float = Field(default=5.0, ge=1.0, le=300.0)
+    heartbeat_interval_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+
+
 class SessionSnapshot(BaseModel):
     session_id: str
-    backend: Literal["codex", "claude", "kimi"]
+    backend: Literal["codex", "claude", "kimi", "opencode"]
     worker_id: str = ""
     workspace_root: str
     project_name: str

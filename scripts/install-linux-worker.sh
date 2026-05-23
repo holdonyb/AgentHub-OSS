@@ -11,6 +11,7 @@ service_name="${AGENTHUB_LINUX_WORKER_SERVICE:-agenthub-linux-worker.service}"
 service_dir="${AGENTHUB_LINUX_WORKER_SERVICE_DIR:-/etc/systemd/system}"
 job_poll_seconds="5"
 heartbeat_seconds="30"
+max_concurrent_jobs="2"
 worker_bundle_url=""
 worker_manifest_url=""
 worker_auto_update="true"
@@ -32,6 +33,7 @@ Options:
   --session-root PATH            repeatable
   --job-poll-seconds VALUE
   --heartbeat-seconds VALUE
+  --max-concurrent-jobs VALUE
   --worker-bundle-url URL
   --worker-manifest-url URL
   --disable-auto-update
@@ -103,6 +105,11 @@ while [[ $# -gt 0 ]]; do
     --heartbeat-seconds)
       require_value "$1" "${2:-}"
       heartbeat_seconds="$2"
+      shift 2
+      ;;
+    --max-concurrent-jobs)
+      require_value "$1" "${2:-}"
+      max_concurrent_jobs="$2"
       shift 2
       ;;
     --worker-bundle-url)
@@ -259,6 +266,7 @@ AGENTHUB_CONNECTION_MODE=$connection_mode
 AGENTHUB_ENROLLMENT_TOKEN=$enrollment_token
 AGENTHUB_WORKER_ID=$worker_id
 AGENTHUB_WORKER_JOB_POLL_SECONDS=$job_poll_seconds
+AGENTHUB_WORKER_MAX_CONCURRENT_JOBS=$max_concurrent_jobs
 AGENTHUB_WORKER_HEARTBEAT_SECONDS=$heartbeat_seconds
 AGENTHUB_WORKER_AUTO_UPDATE=$worker_auto_update
 AGENTHUB_WORKER_BUNDLE_URL=$worker_bundle_url

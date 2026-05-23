@@ -9,7 +9,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
@@ -33,8 +32,6 @@ import java.util.Arrays;
 public class MainActivity extends BridgeActivity {
     private static final int WEBVIEW_AUDIO_PERMISSION_REQUEST = 8701;
     private static final String APPROVAL_NOTIFICATION_CHANNEL_ID = "agenthub-approvals-v2";
-    private static final String APP_CONFIG_PREFS_NAME = "agenthub-app-config";
-    private static final String PREF_SERVER_BASE_URL = "server_base_url";
     private PermissionRequest pendingAudioPermissionRequest;
 
     @Override
@@ -105,20 +102,6 @@ public class MainActivity extends BridgeActivity {
     private boolean stopNotificationService() {
         stopService(new Intent(this, AgentHubNotificationService.class));
         return true;
-    }
-
-    private boolean setServerBaseUrl(String url) {
-        try {
-            String normalized = url == null ? "" : url.trim();
-            while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
-            if (normalized.isEmpty()) return false;
-            if (!normalized.startsWith("https://") && !normalized.startsWith("http://")) return false;
-            SharedPreferences prefs = getSharedPreferences(APP_CONFIG_PREFS_NAME, MODE_PRIVATE);
-            prefs.edit().putString(PREF_SERVER_BASE_URL, normalized).apply();
-            return true;
-        } catch (Exception error) {
-            return false;
-        }
     }
 
     private String appVersionName() {
@@ -266,11 +249,6 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public boolean stopNotificationService() {
             return activity.stopNotificationService();
-        }
-
-        @JavascriptInterface
-        public boolean setServerBaseUrl(String url) {
-            return activity.setServerBaseUrl(url);
         }
 
         @JavascriptInterface

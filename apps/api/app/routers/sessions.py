@@ -13,7 +13,7 @@ from app.core.deps import Actor, DbSession, require_min_role
 from app.core.config import get_settings
 from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Worker, utcnow
+from app.models import AgentPermission, AgentSession, AgentTimeline, Job, ProviderSnapshot, Worker, utcnow
 from app.schemas import (
     SessionBtwIn,
     SessionControlsIn,
@@ -252,6 +252,26 @@ def _plan_prompt(raw_prompt: str, backend: str) -> str:
     )
 
 
+def _is_goal_command(prompt: str) -> bool:
+    text = prompt.lstrip()
+    if not text.lower().startswith("/goal"):
+        return False
+    return len(text) == 5 or text[5].isspace()
+
+
+def _goal_prompt(raw_prompt: str, backend: str) -> str:
+    goal_text = raw_prompt.lstrip()[5:].strip()
+    backend_label = backend.strip() or "agent"
+    if not goal_text:
+        return raw_prompt
+    return (
+        f"进入 AgentHub 目标推进模式。你正在控制 {backend_label} session。\n"
+        "要求：围绕下面这个目标持续推进，优先自己完成，只有在确实缺少信息、权限或需要用户决策时再停下来。\n"
+        "如果需要用户决策，明确列出你需要的选择；如果可以直接做，就直接开始做并持续推进。\n\n"
+        f"目标：{goal_text}"
+    )
+
+
 def _controls_for_reply_mode(backend: str, controls: dict[str, object], reply_mode: str) -> dict[str, object]:
     next_controls = dict(controls)
     if reply_mode != "plan":
@@ -262,19 +282,48 @@ def _controls_for_reply_mode(backend: str, controls: dict[str, object], reply_mo
     next_controls.pop("yolo", None)
     if backend_name == "claude":
         next_controls["permission_mode"] = "plan"
+    if backend_name == "opencode":
+        next_controls["agent"] = "plan"
     return next_controls
 
+NATIVE_GOAL_BACKENDS = {"codex"}
 
-NATIVE_GOAL_BACKENDS = {"codex", "claude"}
+
+def _provider_native_goal_command(
+    db: DbSession,
+    *,
+    space_id: str | None,
+    worker_id: str,
+    backend: str,
+) -> bool | None:
+    snapshot = (
+        db.query(ProviderSnapshot)
+        .filter(
+            ProviderSnapshot.space_id == space_id,
+            ProviderSnapshot.worker_id == worker_id,
+            ProviderSnapshot.backend == backend.strip().lower(),
+        )
+        .one_or_none()
+    )
+    if snapshot is None:
+        return None
+    features = loads_json(snapshot.features_json, {})
+    value = features.get("native_goal_command") if isinstance(features, dict) else None
+    return value if isinstance(value, bool) else None
 
 
-def _is_native_goal_command(backend: str, prompt: str) -> bool:
-    if backend.strip().lower() not in NATIVE_GOAL_BACKENDS:
+def _is_native_goal_command(db: DbSession, session: AgentSession, prompt: str) -> bool:
+    if not _is_goal_command(prompt):
         return False
-    text = prompt.lstrip()
-    if not text.lower().startswith("/goal"):
-        return False
-    return len(text) == 5 or text[5].isspace()
+    runtime_value = _provider_native_goal_command(
+        db,
+        space_id=session.space_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+    )
+    if runtime_value is not None:
+        return runtime_value
+    return session.backend.strip().lower() in NATIVE_GOAL_BACKENDS
 
 
 def _normalize_controls(value: dict[str, object] | None) -> dict[str, object]:
@@ -782,10 +831,16 @@ def send_session_input(
     reply_mode = payload.reply_mode
     backend_name = session.backend.strip().lower()
     native_plan_mode = reply_mode == "plan" and backend_name == "codex"
-    native_goal_command = _is_native_goal_command(session.backend, raw_prompt)
+    goal_command = _is_goal_command(raw_prompt)
+    native_goal_command = _is_native_goal_command(db, session, raw_prompt)
     native_default_turn = backend_name == "codex" and reply_mode == "direct" and not attachments
     native_turn_mode = "default" if native_default_turn or (backend_name == "codex" and native_goal_command) else None
-    job_prompt = raw_prompt if native_plan_mode or reply_mode != "plan" else _plan_prompt(raw_prompt, session.backend)
+    if native_goal_command:
+        job_prompt = raw_prompt
+    elif goal_command and reply_mode != "plan":
+        job_prompt = _goal_prompt(raw_prompt, session.backend)
+    else:
+        job_prompt = raw_prompt if native_plan_mode or reply_mode != "plan" else _plan_prompt(raw_prompt, session.backend)
     controls = _controls_for_reply_mode(session.backend, loads_json(session.controls_json, {}), reply_mode)
     job_payload = {
         "prompt": job_prompt,

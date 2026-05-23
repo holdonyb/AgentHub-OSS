@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 Role = Literal["owner", "admin", "operator", "viewer"]
@@ -160,6 +160,18 @@ class WorkerHeartbeatIn(BaseModel):
     active_job_ids: list[str] | None = None
 
 
+class WorkerRuntimeSettings(BaseModel):
+    max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
+    job_poll_interval_seconds: int = Field(default=5, ge=1, le=300)
+    heartbeat_interval_seconds: int = Field(default=30, ge=1, le=300)
+
+
+class WorkerRuntimeSettingsPatchIn(BaseModel):
+    max_concurrent_jobs: int | None = Field(default=None, ge=1, le=32)
+    job_poll_interval_seconds: int | None = Field(default=None, ge=1, le=300)
+    heartbeat_interval_seconds: int | None = Field(default=None, ge=1, le=300)
+
+
 class WorkerOut(BaseModel):
     space_id: str | None
     worker_id: str
@@ -173,11 +185,66 @@ class WorkerOut(BaseModel):
     capabilities: dict[str, Any]
     status: str
     last_heartbeat_at: datetime | None
+    runtime_settings: WorkerRuntimeSettings
+
+
+class WorkerRuntimeSettingsOut(BaseModel):
+    max_concurrent_jobs: int = Field(ge=1, le=32)
+    job_poll_interval_seconds: float = Field(ge=1, le=300)
+    heartbeat_interval_seconds: float = Field(ge=1, le=300)
+
+
+class UserPreferencesOut(BaseModel):
+    locale: Literal["zh-CN", "zh-TW", "en-US"]
+    theme_mode: Literal["dark", "light"]
+    voice_mode: Literal["streaming", "standard"]
+    voice_language: str = Field(min_length=2, max_length=20)
+    quick_replies: list[str] = Field(default_factory=list, max_length=12)
+
+
+class UserPreferencesIn(BaseModel):
+    locale: Literal["zh-CN", "zh-TW", "en-US"] | None = None
+    theme_mode: Literal["dark", "light"] | None = None
+    voice_mode: Literal["streaming", "standard"] | None = None
+    voice_language: str | None = Field(default=None, min_length=2, max_length=20)
+    quick_replies: list[str] | None = Field(default=None, max_length=12)
+
+    @field_validator("quick_replies")
+    @classmethod
+    def normalize_quick_replies(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            text = item.strip()
+            if not text:
+                raise ValueError("quick replies cannot be empty")
+            if len(text) > 80:
+                raise ValueError("quick replies must be 80 characters or fewer")
+            if text not in seen:
+                normalized.append(text)
+                seen.add(text)
+        return normalized
+
+
+class WorkerRuntimeSettingsIn(BaseModel):
+    max_concurrent_jobs: int | None = Field(default=None, ge=1, le=32)
+    job_poll_interval_seconds: float | None = Field(default=None, ge=1, le=300)
+    heartbeat_interval_seconds: float | None = Field(default=None, ge=1, le=300)
+
+
+class SettingsOut(BaseModel):
+    preferences: UserPreferencesOut
+    worker_runtime_defaults: WorkerRuntimeSettingsOut
+    options: dict[str, Any] = Field(default_factory=dict)
+    limits: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkerRegisterOut(BaseModel):
     worker: WorkerOut
     worker_token: str | None = None
+    runtime_settings: WorkerRuntimeSettingsOut | None = None
 
 
 class SessionCreateIn(BaseModel):
@@ -340,7 +407,6 @@ class VoiceTranscribeIn(BaseModel):
 
 
 class VoiceTranscribeDiagnostics(BaseModel):
-    provider: str
     filename: str
     content_type: str
     input_format: str

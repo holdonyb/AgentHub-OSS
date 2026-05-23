@@ -65,14 +65,10 @@ class WorkerRuntime:
     heartbeat_interval_seconds: float = 30.0
 
     def __post_init__(self) -> None:
-        self.max_concurrent_jobs = max(1, int(self.max_concurrent_jobs or 1))
-        self.job_poll_interval_seconds = max(1.0, float(self.job_poll_interval_seconds or 1.0))
-        self.heartbeat_interval_seconds = max(1.0, float(self.heartbeat_interval_seconds or 1.0))
-        self._executor: ThreadPoolExecutor | None = (
-            ThreadPoolExecutor(max_workers=self.max_concurrent_jobs, thread_name_prefix="agenthub-job")
-            if self.background_jobs
-            else None
-        )
+        self.max_concurrent_jobs = self._normalize_max_concurrent_jobs(self.max_concurrent_jobs)
+        self.job_poll_interval_seconds = self._normalize_interval_seconds(self.job_poll_interval_seconds)
+        self.heartbeat_interval_seconds = self._normalize_interval_seconds(self.heartbeat_interval_seconds)
+        self._executor: ThreadPoolExecutor | None = self._build_executor() if self.background_jobs else None
         self._active_jobs: dict[Future[None], str] = {}
         self._active_jobs_lock = threading.Lock()
         self._job_poller_stop: threading.Event | None = None
@@ -80,6 +76,39 @@ class WorkerRuntime:
         self._heartbeat_poller_stop: threading.Event | None = None
         self._heartbeat_poller_thread: threading.Thread | None = None
         self._published_timeline_digests: dict[str, str] = {}
+        self._pending_max_concurrent_jobs: int | None = None
+
+    @staticmethod
+    def _normalize_max_concurrent_jobs(value: Any) -> int:
+        return max(1, int(value or 1))
+
+    @staticmethod
+    def _normalize_interval_seconds(value: Any) -> float:
+        return max(1.0, float(value or 1.0))
+
+    def _build_executor(self) -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=self.max_concurrent_jobs, thread_name_prefix="agenthub-job")
+
+    def _rebuild_executor(self) -> None:
+        previous = self._executor
+        self._executor = self._build_executor()
+        if previous is not None:
+            previous.shutdown(wait=False)
+
+    def _apply_runtime_settings(self, settings: dict[str, Any] | None) -> None:
+        if not isinstance(settings, dict):
+            return
+        next_max = self._normalize_max_concurrent_jobs(settings.get("max_concurrent_jobs", self.max_concurrent_jobs))
+        next_job_poll = self._normalize_interval_seconds(
+            settings.get("job_poll_interval_seconds", self.job_poll_interval_seconds)
+        )
+        next_heartbeat = self._normalize_interval_seconds(
+            settings.get("heartbeat_interval_seconds", self.heartbeat_interval_seconds)
+        )
+        if next_max != self.max_concurrent_jobs:
+            self._set_max_concurrent_jobs(next_max)
+        self.job_poll_interval_seconds = next_job_poll
+        self.heartbeat_interval_seconds = next_heartbeat
 
     def _drain_jobs(self) -> None:
         if self.background_jobs:
@@ -118,6 +147,8 @@ class WorkerRuntime:
                 future.result()
             except Exception as exc:  # noqa: BLE001 - _run_job_and_report should catch, this is defensive
                 print(f"AgentHub worker job task crashed for {job_id}: {exc}", file=sys.stderr)
+        if not self._active_jobs and self._pending_max_concurrent_jobs is not None:
+            self._swap_executor_locked(self._pending_max_concurrent_jobs)
 
     def _active_job_ids_snapshot(self) -> list[str]:
         if not self.background_jobs:
@@ -168,7 +199,7 @@ class WorkerRuntime:
         capabilities = self.discover_capabilities()
         workspace_roots = [normalize_workspace_root(str(root)) for root in self.workspace_roots]
         reachable_backends = [name for name, available in capabilities.items() if available]
-        self.client.heartbeat(
+        response = self.client.heartbeat(
             {
                 "status": "online" if reachable_backends else "degraded",
                 "reachable_backends": reachable_backends,
@@ -177,7 +208,38 @@ class WorkerRuntime:
                 "active_job_ids": self._active_job_ids_snapshot(),
             }
         )
+        runtime_settings = None
+        if isinstance(response, dict):
+            if isinstance(response.get("runtime_settings"), dict):
+                runtime_settings = response.get("runtime_settings")
+            else:
+                worker_payload = response.get("worker")
+                if isinstance(worker_payload, dict) and isinstance(worker_payload.get("runtime_settings"), dict):
+                    runtime_settings = worker_payload.get("runtime_settings")
+        self._apply_runtime_settings(runtime_settings)
         return capabilities
+
+    def _set_max_concurrent_jobs(self, desired: int) -> None:
+        if not self.background_jobs:
+            self.max_concurrent_jobs = desired
+            return
+        with self._active_jobs_lock:
+            self._collect_finished_jobs()
+            if self._active_jobs:
+                self._pending_max_concurrent_jobs = desired
+                return
+            self._swap_executor_locked(desired)
+
+    def _swap_executor_locked(self, desired: int) -> None:
+        previous = self._executor
+        self._executor = ThreadPoolExecutor(
+            max_workers=desired,
+            thread_name_prefix="agenthub-job",
+        )
+        self.max_concurrent_jobs = desired
+        self._pending_max_concurrent_jobs = None
+        if previous is not None:
+            previous.shutdown(wait=False)
 
     def start_heartbeat_poller(self) -> None:
         if self._heartbeat_poller_thread is not None and self._heartbeat_poller_thread.is_alive():

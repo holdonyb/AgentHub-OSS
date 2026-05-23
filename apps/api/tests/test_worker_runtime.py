@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from concurrent.futures import Future
 import subprocess
@@ -11,13 +12,22 @@ import pytest
 
 import agenthub_worker.providers as providers_module
 import agenthub_worker.runtime as runtime_module
+import agenthub_worker.discovery as discovery_module
 from agenthub_worker.providers import AgentProvider
 from agenthub_worker.runtime import WorkerRuntime
 
 
 class FakeClient:
-    def __init__(self, jobs: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        jobs: list[dict[str, Any]] | None = None,
+        *,
+        heartbeat_worker: dict[str, Any] | None = None,
+        runtime_settings: dict[str, Any] | None = None,
+    ) -> None:
         self.jobs = jobs or []
+        self.heartbeat_worker = heartbeat_worker or {"worker_id": "test-worker"}
+        self.runtime_settings = runtime_settings
         self.heartbeats: list[dict[str, Any]] = []
         self.published_sessions: list[list[dict[str, Any]]] = []
         self.published_timelines: list[tuple[str, list[dict[str, Any]], bool]] = []
@@ -27,7 +37,11 @@ class FakeClient:
 
     def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.heartbeats.append(payload)
-        return {"worker": {"worker_id": "test-worker"}}
+        worker_payload = dict(self.heartbeat_worker)
+        response: dict[str, Any] = {"worker": worker_payload}
+        if self.runtime_settings is not None and "runtime_settings" not in worker_payload:
+            response["runtime_settings"] = self.runtime_settings
+        return response
 
     def publish_sessions(self, sessions: list[dict[str, Any]]) -> None:
         self.published_sessions.append(sessions)
@@ -88,6 +102,40 @@ def test_worker_runtime_heartbeats_and_publishes_discovered_sessions() -> None:
     assert client.published_providers[0][0]["status"] == "ready"
 
 
+def test_worker_runtime_applies_runtime_settings_from_nested_heartbeat_worker_payload() -> None:
+    client = FakeClient(
+        heartbeat_worker={
+            "worker_id": "test-worker",
+            "runtime_settings": {
+                "max_concurrent_jobs": 4,
+                "job_poll_interval_seconds": 9,
+                "heartbeat_interval_seconds": 45,
+            },
+        }
+    )
+    runtime = WorkerRuntime(
+        client=client,
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda roots: [],
+        background_jobs=True,
+        max_concurrent_jobs=1,
+        job_poll_interval_seconds=5,
+        heartbeat_interval_seconds=30,
+    )
+
+    try:
+        runtime.heartbeat_once()
+        assert runtime.max_concurrent_jobs == 4
+        assert runtime.job_poll_interval_seconds == 9
+        assert runtime.heartbeat_interval_seconds == 45
+        assert runtime._executor is not None
+        assert runtime._executor._max_workers == 4
+    finally:
+        runtime.shutdown(wait=False)
+
+
 def test_worker_runtime_reports_active_background_jobs_in_heartbeat() -> None:
     client = FakeClient()
     runtime = WorkerRuntime(
@@ -111,9 +159,76 @@ def test_worker_runtime_reports_active_background_jobs_in_heartbeat() -> None:
     assert client.heartbeats[-1]["active_job_ids"] == ["job-active-1"]
 
 
+def test_worker_runtime_applies_top_level_runtime_settings_from_heartbeat() -> None:
+    client = FakeClient(
+        runtime_settings={
+            "max_concurrent_jobs": 4,
+            "job_poll_interval_seconds": 9,
+            "heartbeat_interval_seconds": 45,
+        }
+    )
+    runtime = WorkerRuntime(
+        client=client,
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda roots: [],
+        background_jobs=True,
+    )
+
+    try:
+        runtime.heartbeat_once()
+    finally:
+        runtime.shutdown(wait=False)
+
+    assert runtime.max_concurrent_jobs == 4
+    assert runtime.job_poll_interval_seconds == 9
+    assert runtime.heartbeat_interval_seconds == 45
+
+
+def test_worker_runtime_prefers_top_level_runtime_settings_over_stale_nested_worker_payload() -> None:
+    class ConflictingHeartbeatClient(FakeClient):
+        def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.heartbeats.append(payload)
+            return {
+                "worker": {
+                    "worker_id": "test-worker",
+                    "runtime_settings": {
+                        "max_concurrent_jobs": 2,
+                        "job_poll_interval_seconds": 5,
+                        "heartbeat_interval_seconds": 30,
+                    },
+                },
+                "runtime_settings": {
+                    "max_concurrent_jobs": 6,
+                    "job_poll_interval_seconds": 11,
+                    "heartbeat_interval_seconds": 44,
+                },
+            }
+
+    client = ConflictingHeartbeatClient()
+    runtime = WorkerRuntime(
+        client=client,
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda roots: [],
+        background_jobs=True,
+    )
+
+    try:
+        runtime.heartbeat_once()
+    finally:
+        runtime.shutdown(wait=False)
+
+    assert runtime.max_concurrent_jobs == 6
+    assert runtime.job_poll_interval_seconds == 11
+    assert runtime.heartbeat_interval_seconds == 44
+
+
 def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
     snapshots = providers_module.provider_snapshots_from_capabilities(
-        {"codex": True, "claude": True, "kimi": True},
+        {"codex": True, "claude": True, "kimi": True, "opencode": True},
     )
     by_backend = {snapshot["backend"]: snapshot for snapshot in snapshots}
 
@@ -122,6 +237,7 @@ def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
     assert codex_features["request_user_input"] is True
     assert codex_features["plan_exit"] is True
     assert codex_features["goal"] is True
+    assert codex_features["native_goal_command"] is True
 
     claude_features = by_backend["claude"]["features"]
     assert claude_features["interaction_bridge"] == "compatibility"
@@ -134,6 +250,15 @@ def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
     assert kimi_features["plan_result_choices"] is True
     assert kimi_features["native_runtime_prompts"] is False
     assert kimi_features["structured_protocols"] == ["acp", "wire"]
+
+    opencode_features = by_backend["opencode"]["features"]
+    assert opencode_features["interaction_bridge"] == "compatibility"
+    assert opencode_features["plan_result_choices"] is True
+    assert opencode_features["plan_exit"] is True
+    assert opencode_features["goal"] is True
+    assert opencode_features["native_runtime_prompts"] is False
+    assert opencode_features["attachments"] is True
+    assert opencode_features["agent"] is True
 
 
 def test_worker_runtime_uses_separate_session_roots_for_discovery() -> None:
@@ -175,6 +300,171 @@ def test_kimi_provider_marks_auth_ready_from_local_credentials(tmp_path: Path, m
 
     assert snapshot["auth_status"] == "ready"
     assert snapshot["diagnostics"]["auth_status"] == "ready"
+
+
+def test_claude_provider_uses_auth_status_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["claude", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, stdout='{"loggedIn": true}', stderr="")
+        if args[:2] == ["claude", "agents"]:
+            return subprocess.CompletedProcess(args, 0, stdout="Built-in agents:\n  Plan · inherit\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="claude 1.0.0", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="claude", executable="claude").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert snapshot["diagnostics"]["auth_status"] == "ready"
+    assert snapshot["features"]["native_goal_command"] is False
+    assert snapshot["features"]["native_plan_command"] is False
+    assert snapshot["features"]["plan_agent"] is True
+
+
+def test_codex_provider_uses_feature_list_probe_for_native_goal_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["codex", "features", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="goals stable false\n", stderr="")
+        if args[:3] == ["codex", "login", "status"]:
+            return subprocess.CompletedProcess(args, 0, stdout="Logged in", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="codex-cli 0.133.0", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="codex", executable="codex").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert snapshot["diagnostics"]["auth_status"] == "ready"
+    assert snapshot["features"]["native_goal_command"] is False
+
+
+def test_opencode_provider_uses_credentials_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["opencode", "providers", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="1 credentials", stderr="")
+        if args[:3] == ["opencode", "agent", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="plan (primary)\npermission: plan_exit\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="opencode 1.15.7", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="opencode", executable="opencode").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert snapshot["diagnostics"]["auth_status"] == "ready"
+    assert snapshot["features"]["native_goal_command"] is False
+    assert snapshot["features"]["native_plan_command"] is False
+    assert snapshot["features"]["plan_agent"] is True
+
+
+def test_opencode_provider_accepts_resolved_config_api_key_without_saved_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["opencode", "providers", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="0 credentials", stderr="")
+        if args[:3] == ["opencode", "debug", "config"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps(
+                    {
+                        "model": "anthropic/claude-sonnet-4-5",
+                        "provider": {
+                            "anthropic": {
+                                "options": {
+                                    "apiKey": "env-backed-key",
+                                }
+                            }
+                        },
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="opencode 1.15.7", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="opencode", executable="opencode").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert snapshot["diagnostics"]["auth_status"] == "ready"
+
+
+def test_opencode_provider_accepts_enabled_provider_env_key_without_saved_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["opencode", "providers", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="0 credentials", stderr="")
+        if args[:3] == ["opencode", "debug", "config"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps(
+                    {
+                        "model": "anthropic/claude-sonnet-4-5",
+                        "enabled_providers": ["anthropic"],
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(args, 0, stdout="opencode 1.15.7", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="opencode", executable="opencode").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert snapshot["diagnostics"]["auth_status"] == "ready"
+
+
+def test_provider_probes_use_resolved_windows_executable_without_rewriting_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        providers_module.shutil,
+        "which",
+        lambda executable: f"C:/Users/test/AppData/Roaming/npm/{executable}.CMD",
+    )
+    captured: list[tuple[list[str], str | None]] = []
+
+    def fake_run(args: list[str], *_rest: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured.append((list(args), kwargs.get("executable")))
+        if args[:3] == ["opencode", "providers", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="1 credentials", stderr="")
+        if args[:3] == ["opencode", "agent", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="plan (primary)\npermission: plan_exit\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="opencode 1.15.7", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="opencode", executable="opencode").snapshot(available=True)
+
+    assert snapshot["auth_status"] == "ready"
+    assert captured[0] == (
+        ["opencode", "--version"],
+        "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
+    )
+    assert captured[1] == (
+        ["opencode", "providers", "list"],
+        "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
+    )
+    assert captured[2] == (
+        ["opencode", "agent", "list"],
+        "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
+    )
 
 
 def test_worker_runtime_batches_and_trims_large_session_discovery_payloads() -> None:
@@ -631,3 +921,93 @@ def test_run_forever_backs_off_after_transient_runtime_errors(monkeypatch: pytes
 
     assert broken.calls == 1
     assert sleeps == [7]
+
+
+def test_discover_opencode_sessions_uses_cli_json_and_workspace_filter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "AgentHub"
+    other_workspace = tmp_path / "OtherRepo"
+    workspace.mkdir()
+    other_workspace.mkdir()
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = json.dumps(
+            [
+                {
+                    "id": "open-1",
+                    "title": "OpenCode planning",
+                    "path": str(workspace),
+                    "updatedAt": "2026-05-22T14:00:00Z",
+                    "summary": "梳理 OpenCode provider 接入",
+                },
+                {
+                    "id": "open-2",
+                    "title": "Other repo",
+                    "path": str(other_workspace),
+                    "updatedAt": "2026-05-22T13:00:00Z",
+                },
+            ]
+        )
+
+    monkeypatch.setattr(discovery_module.shutil, "which", lambda _: "C:/mock/opencode.cmd")
+    monkeypatch.setattr(discovery_module.subprocess, "run", lambda *args, **kwargs: FakeCompleted())
+
+    sessions = discovery_module.discover_opencode_sessions([workspace])
+
+    assert len(sessions) == 1
+    assert sessions[0].backend == "opencode"
+    assert sessions[0].session_id == "open-1"
+    assert sessions[0].workspace_root == discovery_module.normalize_workspace_root(str(workspace))
+    assert sessions[0].display_title == "OpenCode planning"
+
+
+def test_discover_opencode_sessions_accepts_current_cli_directory_schema(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, Any]] = []
+    workspace = tmp_path / "AgentHub"
+    workspace.mkdir()
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = json.dumps(
+            [
+                {
+                    "id": "ses_1ad4977c4ffe1sNEEleKcTSJKK",
+                    "title": "New session",
+                    "directory": str(workspace),
+                    "updated": 1779504156927,
+                    "created": 1779504154684,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(discovery_module.shutil, "which", lambda _: "C:/mock/opencode.cmd")
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeCompleted:
+        calls.append({"args": args, "kwargs": kwargs})
+        return FakeCompleted()
+
+    monkeypatch.setattr(discovery_module.subprocess, "run", fake_run)
+
+    sessions = discovery_module.discover_opencode_sessions([workspace])
+
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "ses_1ad4977c4ffe1sNEEleKcTSJKK"
+    assert sessions[0].workspace_root == discovery_module.normalize_workspace_root(str(workspace))
+    assert sessions[0].last_activity_at.year == 2026
+    assert calls[0]["kwargs"]["executable"] == "C:/mock/opencode.cmd"
+
+
+def test_discover_opencode_sessions_skips_agent_store_roots(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(discovery_module.shutil, "which", lambda _: "C:/mock/opencode.cmd")
+    monkeypatch.setattr(discovery_module.subprocess, "run", lambda *args, **kwargs: calls.append({"args": args, "kwargs": kwargs}))
+
+    sessions = discovery_module.discover_opencode_sessions([Path("C:/Users/me/.local/share/opencode")])
+
+    assert sessions == []
+    assert calls == []

@@ -8,7 +8,7 @@ AgentHub supports two worker connection shapes:
 Private mode remains the default for personal deployments. Public relay mode exists for multi-tenant and non-Tailscale worker onboarding.
 Worker enrollment tokens are now the preferred bootstrap path for both modes. The legacy VM-wide `AGENTHUB_WORKER_REGISTRATION_TOKEN` stays available for compatibility, but new installs should use per-space enrollment.
 
-For a fresh VM install, start with [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md). For private-network deployments, use [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md). For common failures, use [SELF_HOST_TROUBLESHOOTING.md](SELF_HOST_TROUBLESHOOTING.md).
+For a fresh VM install, start with [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md). For private-network deployments, use [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md). For running AgentHub directly on your own Windows, macOS, or Linux machine, use [LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md). For common failures, use [SELF_HOST_TROUBLESHOOTING.md](SELF_HOST_TROUBLESHOOTING.md).
 
 ## Local Dev
 
@@ -95,22 +95,28 @@ $env:AGENTHUB_ANDROID_KEY_PASSWORD="replace-me"
 npm run mobile:build:debug
 ```
 
-## Release Automation
+## Public Release Build Path
 
-The OSS repo intentionally documents self-host installation, worker onboarding, and downloadable client builds.
-Private production deploy wrappers and host-specific automation are not part of the public release surface.
+The public repo treats deployment as a source-based self-host workflow, not as a hard-coded production VM pipeline.
 
-For repeatable self-host verification, use:
+Recommended paths:
 
-```bash
-bash scripts/check-selfhost.sh --base-url https://agenthub.example.com --expect-public-relay
+- local machine as the server: [LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md)
+- public VM with HTTPS: [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md)
+- private tailnet deployment: [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md)
+
+For repeatable public release assets, use:
+
+```powershell
+npm ci
+.\.venv\Scripts\python.exe scripts\audit-public-export.py
+npm run web:build
+npm run mobile:build:release
+npm run desktop:package:win
+.\.venv\Scripts\python.exe scripts\build-worker-bundle.py --output-root dist/release/workers
 ```
 
-For VM smoke verification, use:
-
-```bash
-bash scripts/smoke-selfhost-vm.sh --help
-```
+Keep `AGENTHUB_SECRET_ENCRYPTION_KEY` stable across restarts and redeploys. Rotating it without a migration makes previously stored secret values unreadable.
 
 ## VM Traffic Monitoring
 
@@ -136,7 +142,7 @@ sudo bash scripts/install-vm-traffic-monitor.sh
 bash scripts/report-vm-traffic.sh
 ```
 
-This is intentionally VM-level network accounting, not an in-app estimate. It catches Web, Android background sync, worker polling, deployment traffic, and any accidental full-refresh regressions on the public relay.
+This is intentionally VM-level network accounting, not an in-app estimate. It catches Web, Android background sync, worker polling, release downloads, and any accidental full-refresh regressions on the public relay.
 
 ## Tailscale-First Topology
 

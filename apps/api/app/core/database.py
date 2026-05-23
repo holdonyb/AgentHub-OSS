@@ -35,7 +35,15 @@ def _ensure_compatible_columns(engine: Engine) -> None:
     if "agent_sessions" not in table_names:
         return
     space_columns = {
-        "workers": {"space_id": "VARCHAR(64)", "connection_mode": "VARCHAR(32) NOT NULL DEFAULT 'private'", "transport_state": "VARCHAR(64) NOT NULL DEFAULT 'polling'", "worker_version": "VARCHAR(64)"},
+        "workers": {
+            "space_id": "VARCHAR(64)",
+            "connection_mode": "VARCHAR(32) NOT NULL DEFAULT 'private'",
+            "transport_state": "VARCHAR(64) NOT NULL DEFAULT 'polling'",
+            "worker_version": "VARCHAR(64)",
+            "max_concurrent_jobs": "INTEGER NOT NULL DEFAULT 2",
+            "job_poll_interval_seconds": "INTEGER NOT NULL DEFAULT 5",
+            "heartbeat_interval_seconds": "INTEGER NOT NULL DEFAULT 30",
+        },
         "agent_sessions": {"space_id": "VARCHAR(64)"},
         "agent_timeline": {"space_id": "VARCHAR(64)"},
         "agent_permissions": {"space_id": "VARCHAR(64)"},
@@ -76,7 +84,7 @@ def _ensure_compatible_columns(engine: Engine) -> None:
 
 
 def _bootstrap_default_space(engine: Engine) -> None:
-    from app.models import AccessToken, AgentPermission, AgentSession, AgentTimeline, Event, Invite, Job, Memory, ProviderSnapshot, Schedule, Space, SpaceMembership, User, Worker, WorkerEnrollment
+    from app.models import AccessToken, AgentPermission, AgentSession, AgentTimeline, Event, Invite, Job, Memory, ProviderSnapshot, Schedule, SettingEntry, Space, SpaceMembership, User, Worker, WorkerEnrollment
 
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
     with SessionLocal() as db:
@@ -122,6 +130,7 @@ def _bootstrap_default_space(engine: Engine) -> None:
             Invite,
             AccessToken,
             WorkerEnrollment,
+            SettingEntry,
         )
         for model in business_tables:
             if hasattr(model, "space_id"):

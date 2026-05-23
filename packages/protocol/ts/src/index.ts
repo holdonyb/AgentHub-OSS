@@ -35,6 +35,13 @@ export interface Worker {
   capabilities: Record<string, unknown>;
   status: 'registered' | 'online' | 'degraded' | 'offline';
   last_heartbeat_at: string | null;
+  runtime_settings: WorkerRuntimeSettings;
+}
+
+export interface WorkerRuntimeSettings {
+  max_concurrent_jobs: number;
+  job_poll_interval_seconds: number;
+  heartbeat_interval_seconds: number;
 }
 
 export interface AgentSession {

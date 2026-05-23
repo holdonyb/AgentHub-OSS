@@ -87,7 +87,7 @@ def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer")),
 
 
 @router.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: str, db: DbSession, actor: Actor = Depends(require_min_role("admin"))):
+def cancel_job(job_id: str, db: DbSession, actor: Actor = Depends(require_min_role("operator"))):
     job = db.query(Job).filter(Job.space_id == actor.space_id, Job.job_id == job_id).one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail={"message": "Job not found", "code": "JOB_NOT_FOUND"})

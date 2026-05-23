@@ -10,6 +10,7 @@ param(
     [string]$InstallRoot = "",
     [string[]]$WorkspaceRoot = @("C:/Work"),
     [string[]]$SessionRoot = @(),
+    [int]$MaxConcurrentJobs = 2,
     [int]$JobPollSeconds = 5,
     [int]$HeartbeatSeconds = 30,
     [string]$WorkerBundleUrl = "",
@@ -177,6 +178,7 @@ $envValues = @{
     AGENTHUB_WORKER_HEARTBEAT_SECONDS = [string]$HeartbeatSeconds
     AGENTHUB_WORKER_ID                = $WorkerId.Trim()
     AGENTHUB_WORKER_JOB_POLL_SECONDS  = [string]$JobPollSeconds
+    AGENTHUB_WORKER_MAX_CONCURRENT_JOBS = [string]$MaxConcurrentJobs
     AGENTHUB_WORKER_MANIFEST_URL      = $WorkerManifestUrl.Trim()
     AGENTHUB_WORKER_TOKEN_PATH        = $tokenPath
     AGENTHUB_WORKSPACE_ROOTS          = Convert-ToEnvValue -Values $WorkspaceRoot

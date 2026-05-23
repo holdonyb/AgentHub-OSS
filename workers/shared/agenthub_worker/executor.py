@@ -15,7 +15,13 @@ import tempfile
 from typing import Any
 
 from agenthub_worker.codex_app_server import resolve_codex_executable, run_codex_plan_turn, run_codex_turn
-from agenthub_worker.discovery import parse_claude_jsonl, parse_codex_jsonl, parse_kimi_session, recent_session_files
+from agenthub_worker.discovery import (
+    discover_opencode_sessions,
+    parse_claude_jsonl,
+    parse_codex_jsonl,
+    parse_kimi_session,
+    recent_session_files,
+)
 from agenthub_worker.paths import default_agent_session_roots, normalize_workspace_root, project_name_from_root
 
 
@@ -189,6 +195,18 @@ def _controls(job: dict[str, Any]) -> dict[str, Any]:
     return controls if isinstance(controls, dict) else {}
 
 
+def _model_for_backend(backend: str, controls: dict[str, Any]) -> str:
+    model = str(controls.get("model") or "").strip()
+    if model:
+        return model
+    env_prefix = backend.replace("-", "_").upper()
+    for name in (f"AGENTHUB_{env_prefix}_MODEL", f"AGENTHUB_{env_prefix}_DEFAULT_MODEL"):
+        configured = os.getenv(name, "").strip()
+        if configured:
+            return configured
+    return ""
+
+
 def _append_common_workspace(args: list[str], controls: dict[str, Any]) -> None:
     extra_dirs = controls.get("extra_workspace_dirs")
     if isinstance(extra_dirs, list):
@@ -231,7 +249,7 @@ def build_backend_command(
     workspace_root = str(job.get("workspace_root") or ".").strip() or "."
     prompt = _prompt(job)
     controls = _controls(job)
-    model = str(controls.get("model") or "").strip()
+    model = _model_for_backend(backend, controls)
 
     if not session_id:
         raise ValueError("session_input target_session_id is required")
@@ -273,6 +291,22 @@ def build_backend_command(
         args.extend(["-p", prompt])
         return args
 
+    if backend == "opencode":
+        args = ["opencode", "run", "--dir", workspace_root, "--session", session_id]
+        if model:
+            args.extend(["--model", model])
+        if controls.get("yolo"):
+            args.append("--dangerously-skip-permissions")
+        agent = str(controls.get("agent") or "").strip()
+        if agent:
+            args.extend(["--agent", agent])
+        if output_file:
+            args.extend(["--format", "json"])
+        for path in attachment_paths or []:
+            args.extend(["--file", path])
+        args.append(prompt)
+        return args
+
     raise ValueError(f"Unsupported backend: {backend or 'unknown'}")
 
 
@@ -290,7 +324,7 @@ def build_session_start_command(
     if not prompt:
         raise ValueError("session_start prompt cannot be empty")
     controls = _controls(job)
-    model = str(controls.get("model") or "").strip()
+    model = _model_for_backend(backend, controls)
 
     if backend == "codex":
         args = _codex_base_args(workspace_root, controls)
@@ -326,6 +360,20 @@ def build_session_start_command(
             args.extend(["--agent", agent])
         _append_common_workspace(args, controls)
         args.extend(["-p", prompt])
+        return args
+
+    if backend == "opencode":
+        args = ["opencode", "run", "--dir", workspace_root]
+        if model:
+            args.extend(["--model", model])
+        if controls.get("yolo"):
+            args.append("--dangerously-skip-permissions")
+        agent = str(controls.get("agent") or "").strip()
+        if agent:
+            args.extend(["--agent", agent])
+        if output_file:
+            args.extend(["--format", "json"])
+        args.append(prompt)
         return args
 
     raise ValueError(f"Unsupported backend: {backend or 'unknown'}")
@@ -496,6 +544,13 @@ def _discover_local_sessions(search_roots: list[Path]) -> list[dict[str, Any]]:
             continue
         seen.add(session_id)
         sessions.append(item)
+    for snapshot in discover_opencode_sessions(search_roots):
+        item = snapshot.model_dump(mode="json")
+        session_id = str(item.get("session_id") or "")
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        sessions.append(item)
     return sessions
 
 
@@ -519,13 +574,13 @@ def _select_created_session(
     workspace_root: str,
 ) -> dict[str, Any] | None:
     before_ids = {str(item.get("session_id") or "") for item in before}
-    normalized_workspace = normalize_workspace_root(workspace_root)
+    normalized_workspace = normalize_workspace_root(workspace_root).casefold()
     candidates = [
         item
         for item in after
         if str(item.get("session_id") or "") not in before_ids
         and str(item.get("backend") or "").lower() == backend.lower()
-        and normalize_workspace_root(str(item.get("workspace_root") or "")) == normalized_workspace
+        and normalize_workspace_root(str(item.get("workspace_root") or "")).casefold() == normalized_workspace
     ]
     if not candidates:
         return None
@@ -576,7 +631,9 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
         after = _discover_local_sessions(roots)
         created = _select_created_session(before, after, backend=backend, workspace_root=workspace_root)
         if created is None:
-            raise RuntimeError("Backend CLI completed but no new session was discovered")
+            detail = cli_output.strip()
+            suffix = f": {detail[:2000]}" if detail else ""
+            raise RuntimeError(f"Backend CLI completed but no new session was discovered{suffix}")
         created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
         return f"created_session_id={created_session_id}\n{cli_output}".strip()
     finally:
@@ -613,6 +670,8 @@ def _provider_handoff_command(backend: str, action: str) -> list[str]:
         return ["claude", "auth", "login"] if action == "login" else ["claude", "auth", "logout"]
     if backend == "kimi":
         return ["kimi", "login"] if action == "login" else ["kimi", "logout"]
+    if backend == "opencode":
+        return ["opencode", "auth", "login"] if action == "login" else ["opencode", "auth", "logout"]
     raise ValueError(f"Unsupported backend: {backend or 'unknown'}")
 
 
@@ -647,6 +706,16 @@ def _combined_process_output(completed: subprocess.CompletedProcess[str]) -> str
         if isinstance(part, str) and part.strip()
     ]
     return "\n".join(parts).strip()
+
+
+def _looks_like_backend_auth_error(output: str) -> bool:
+    lowered = output.lower()
+    return (
+        "invalid x-api-key" in lowered
+        or "invalid api key" in lowered
+        or "authentication failed" in lowered
+        or "unauthorized" in lowered and "api" in lowered
+    )
 
 
 def _format_backend_failure(command_name: str, returncode: int, output: str, captured_file_output: str) -> str:
@@ -746,6 +815,8 @@ def _run_backend_command(
     captured_file_output = _read_output_file(output_file)
     output = _combined_process_output(completed)
     if completed.returncode != 0:
+        raise RuntimeError(_format_backend_failure(args[0], completed.returncode, output, captured_file_output))
+    if _looks_like_backend_auth_error(output or captured_file_output):
         raise RuntimeError(_format_backend_failure(args[0], completed.returncode, output, captured_file_output))
     return captured_file_output or output or "已送达后端 CLI，等待 transcript 同步"
 

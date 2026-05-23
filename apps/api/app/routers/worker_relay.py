@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_worker
 from app.core.security import hash_token
+from app.core.settings_store import get_worker_runtime_defaults
+from app.core.spaces import ensure_default_space
 from app.models import Worker, WorkerEnrollment, utcnow
 from app.routers.internal import _assert_worker_binding, _recover_orphaned_running_jobs, _recover_stale_running_jobs, claim_job as claim_job_internal, complete_job as complete_job_internal, discovered_sessions as discovered_sessions_internal, fail_job as fail_job_internal
 from app.routers.permissions import get_permission_for_worker, request_permission, resolve_permission_from_worker
@@ -36,7 +38,11 @@ def enroll_worker(payload: WorkerEnrollIn, db: DbSession):
         payload={"connection_mode": worker.connection_mode, "label": enrollment.label},
     )
     db.commit()
-    return {"worker": worker_out(worker), "worker_token": issued_token}
+    return {
+        "worker": worker_out(worker),
+        "worker_token": issued_token,
+        "runtime_settings": get_worker_runtime_defaults(db, space_id=enrollment.space_id),
+    }
 
 
 @router.post("/api/worker/heartbeat")
@@ -76,7 +82,8 @@ def heartbeat_public(payload: WorkerHeartbeatIn, db: DbSession, actor: Actor = D
         payload={"status": worker.status, "transport_state": worker.transport_state, "relay": True},
     )
     db.commit()
-    return {"worker": worker_out(worker)}
+    space_id = worker.space_id or actor.space_id or ensure_default_space(db).space_id
+    return {"worker": worker_out(worker), "runtime_settings": get_worker_runtime_defaults(db, space_id=space_id)}
 
 
 @router.post("/api/worker/jobs/claim")

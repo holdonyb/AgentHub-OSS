@@ -7,7 +7,7 @@ ssh_key=""
 ssh_port="22"
 domain=""
 base_url=""
-repo_url="https://github.com/your-org/AgentHub.git"
+repo_url="https://github.com/YOUR_ORG/AgentHub.git"
 branch="main"
 install_root="/opt/agenthub-smoke"
 admin_email=""
@@ -23,7 +23,8 @@ usage() {
 Usage: smoke-selfhost-vm.sh --host HOST --domain DOMAIN --ssh-key KEY --confirm SELFHOST_SMOKE_OK [options]
 
 Run a repeatable self-host smoke test on an explicitly supplied Ubuntu VM.
-Use a disposable VM or a dedicated smoke domain. The script refuses known production domains by default.
+Use a disposable VM or a dedicated smoke domain. The script refuses obvious real production domains by default.
+Example smoke domain: agenthub.example.com
 
 Options:
   --host HOST                SSH host or IP of the smoke VM
@@ -32,7 +33,7 @@ Options:
   --ssh-port PORT            SSH port, default 22
   --domain DOMAIN            Domain or Tailscale DNS name served by the smoke VM
   --base-url URL             External URL, default https://DOMAIN
-  --repo-url URL             Git repository URL, default https://github.com/your-org/AgentHub.git
+  --repo-url URL             Git repository URL, default https://github.com/YOUR_ORG/AgentHub.git
   --branch BRANCH            Branch/ref to install, default main
   --install-root PATH        Remote install root, default /opt/agenthub-smoke
   --admin-email EMAIL        Email for Let's Encrypt when certbot is enabled
@@ -40,7 +41,7 @@ Options:
   --skip-certbot             Use temporary self-signed cert and curl -k checks
   --skip-packages            Skip apt/package installation on the remote VM
   --run-worker-smoke         Also run scripts/smoke-worker-onboarding.sh with AGENTHUB_SMOKE_ADMIN_TOKEN
-  --allow-production-domain  Allow a protected domain such as agenthub.example.com; intended only for explicit emergency checks
+  --allow-production-domain  Allow your real production domain; intended only for explicit emergency checks
   --confirm VALUE            Must be SELFHOST_SMOKE_OK
   -h, --help                 Show this help
 
@@ -182,8 +183,8 @@ if [[ -z "$base_url" ]]; then
   base_url="https://$domain"
 fi
 
-if [[ "$allow_production_domain" != "1" && "$domain" == "agenthub.example.com" ]]; then
-  fail "Refusing to run self-host smoke against protected domain agenthub.example.com"
+if [[ "$allow_production_domain" != "1" && "$domain" != *.example.com && "$domain" != *.test && "$domain" != *.invalid && "$domain" != localhost && "$domain" != *.ts.net ]]; then
+  fail "Refusing to run self-host smoke against a non-disposable domain without --allow-production-domain"
 fi
 
 if [[ "$install_root" == "/opt/agenthub" ]]; then

@@ -1,8 +1,17 @@
 # AgentHub
 
-AgentHub is a self-hosted control plane for managing Codex, Claude, Kimi, and other local agent sessions across Windows and Linux workers.
+AgentHub is a self-hosted control plane for managing Codex, Claude, Kimi, and other local agent sessions across your own machines.
 
-It provides:
+It is for people who want:
+
+- one inbox for local agent sessions
+- phone and desktop access to the same sessions
+- Tailscale-first private control without building a SaaS stack first
+- the option to start on one laptop and move to a VM later
+
+You do not need a VM for the first setup. AgentHub can run directly on your own Windows, macOS, or Linux machine, then expose itself through Tailscale to your phone and other devices.
+
+Repository surface:
 
 - FastAPI control plane in `apps/api`
 - React + TypeScript console in `apps/web`
@@ -31,6 +40,8 @@ If you want to add one of those platforms, see [CONTRIBUTING.md](CONTRIBUTING.md
 
 ## Quick Start
 
+Fastest path if you just want to try it locally:
+
 ```powershell
 copy .env.example .env
 python -m venv .venv
@@ -42,14 +53,26 @@ npm run web:dev
 
 Open `http://localhost:5173` and create the first owner with `AGENTHUB_BOOTSTRAP_TOKEN`.
 
+If you want phone access without a VM, use [docs/LOCAL_SERVER_MODE.md](docs/LOCAL_SERVER_MODE.md) and point the client at your Tailscale URL.
+
+## Start Here
+
+- run on your own machine: [docs/LOCAL_SERVER_MODE.md](docs/LOCAL_SERVER_MODE.md)
+- run on a public VM: [docs/SELF_HOST_QUICKSTART.md](docs/SELF_HOST_QUICKSTART.md)
+- private tailnet deployment: [docs/TAILSCALE_PRIVATE_MODE.md](docs/TAILSCALE_PRIVATE_MODE.md)
+- configure voice providers and limits: [docs/CONFIGURATION_REFERENCE.md](docs/CONFIGURATION_REFERENCE.md)
+- prepare a release and launch: [docs/OPEN_SOURCE_LAUNCH.md](docs/OPEN_SOURCE_LAUNCH.md)
+
 ## Self-Host Paths
 
+- Local server mode: [docs/LOCAL_SERVER_MODE.md](docs/LOCAL_SERVER_MODE.md)
 - Self-Host Public Relay: [docs/SELF_HOST_QUICKSTART.md](docs/SELF_HOST_QUICKSTART.md)
 - Tailscale Private Mode: [docs/TAILSCALE_PRIVATE_MODE.md](docs/TAILSCALE_PRIVATE_MODE.md)
 - Configuration Reference: [docs/CONFIGURATION_REFERENCE.md](docs/CONFIGURATION_REFERENCE.md)
 - AI deployment runbook: [docs/AI_DEPLOYMENT_RUNBOOK.md](docs/AI_DEPLOYMENT_RUNBOOK.md)
 - Deployment brief template: [docs/DEPLOYMENT_BRIEF.example.json](docs/DEPLOYMENT_BRIEF.example.json)
 - OSS export flow: [docs/OSS_RELEASE.md](docs/OSS_RELEASE.md)
+- Open-source launch checklist: [docs/OPEN_SOURCE_LAUNCH.md](docs/OPEN_SOURCE_LAUNCH.md)
 
 ## Clients
 

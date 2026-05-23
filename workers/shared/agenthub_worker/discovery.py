@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ from agenthub_protocol.models import AgentTimelineItem, SessionSnapshot
 from agenthub_worker.paths import normalize_workspace_root, project_name_from_root
 
 
-GENERIC_TITLES = {"codex session", "claude session", "kimi session", "session"}
+GENERIC_TITLES = {"codex session", "claude session", "kimi session", "opencode session", "session"}
 DEFAULT_DISCOVERY_MAX_FILES = 80
 DEFAULT_RUNNING_STALE_SECONDS = 1800
 DISCOVERY_PRUNED_DIRS = {
@@ -71,6 +73,8 @@ def backend_for_session_path(path: Path) -> str:
         return "claude"
     if "kimi" in lower_name or ".kimi" in lower_parts:
         return "kimi"
+    if "opencode" in lower_name or ".opencode" in lower_parts:
+        return "opencode"
     return ""
 
 
@@ -89,7 +93,7 @@ def recent_session_files(search_roots: list[Path], max_files: int | None = None)
                 continue
             if backend == "kimi" and path.name.lower() == "context.jsonl" and (path.parent / "wire.jsonl").exists():
                 continue
-            if backend not in {"codex", "claude", "kimi"}:
+            if backend not in {"codex", "claude", "kimi", "opencode"}:
                 continue
             try:
                 modified_at = path.stat().st_mtime
@@ -137,6 +141,14 @@ def _text_from_content(content: Any) -> str:
     if isinstance(content, dict):
         if isinstance(content.get("text"), str):
             return content["text"]
+        parts: list[str] = []
+        for key in ("message", "output", "stdout", "stderr", "description", "error"):
+            if isinstance(content.get(key), (str, list, dict)):
+                parts.append(_text_from_content(content[key]))
+        if isinstance(content.get("display"), list):
+            parts.append(_text_from_content(content["display"]))
+        if parts:
+            return "\n".join(part for part in parts if part)
         if isinstance(content.get("content"), (str, list, dict)):
             return _text_from_content(content["content"])
     return ""
@@ -270,8 +282,10 @@ def _timeline_from_messages(messages: list[dict[str, Any]]) -> list[AgentTimelin
                 item_type=_timeline_item_type(message),  # type: ignore[arg-type]
                 role=str(message.get("role") or "system"),
                 text=text,
+                tool_call_id=str(message.get("tool_call_id") or "") or None,
+                tool_name=str(message.get("tool_name") or "") or None,
                 status="completed",
-                payload={"kind": message.get("kind")},
+                payload=dict(message.get("payload") or {}, kind=message.get("kind")),
                 created_at=created_at if isinstance(created_at, datetime) else None,
             )
         )
@@ -329,11 +343,169 @@ def _snapshot(
     )
 
 
+def _opencode_workspace_filters(search_roots: list[Path] | None) -> set[str]:
+    if not search_roots:
+        return set()
+    filters: set[str] = set()
+    for root in search_roots:
+        normalized = normalize_workspace_root(str(root))
+        lowered = normalized.lower()
+        if any(marker in lowered for marker in ("/.codex", "/.claude", "/.kimi", "/.local/share/opencode")):
+            continue
+        filters.add(normalized.casefold())
+    return filters
+
+
+def _opencode_query_roots(search_roots: list[Path] | None) -> list[Path | None]:
+    if not search_roots:
+        return [None]
+    roots: list[Path | None] = []
+    seen: set[str] = set()
+    for root in search_roots:
+        normalized = normalize_workspace_root(str(root))
+        lowered = normalized.lower()
+        if any(marker in lowered for marker in ("/.codex", "/.claude", "/.kimi", "/.local/share/opencode")):
+            continue
+        if not root.exists() or not root.is_dir():
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(root)
+    return roots
+
+
+def _opencode_row_value(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _opencode_snapshot_from_row(row: dict[str, Any]) -> SessionSnapshot | None:
+    session_id = _opencode_row_value(row, "id", "session_id", "sessionId")
+    workspace_root = normalize_workspace_root(
+        _opencode_row_value(row, "path", "cwd", "directory", "dir", "workspace_root", "workspaceRoot", "project")
+    )
+    if not session_id or not workspace_root:
+        return None
+    last_activity_at = _timestamp(
+        row.get("updated_at")
+        or row.get("updatedAt")
+        or row.get("updated")
+        or row.get("created_at")
+        or row.get("createdAt")
+        or row.get("created"),
+        datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    title = _opencode_row_value(row, "title", "name") or _fallback_title(workspace_root, "opencode", last_activity_at)
+    activity_summary = _opencode_row_value(row, "summary", "description") or "当前空闲"
+    return SessionSnapshot(
+        session_id=session_id,
+        backend="opencode",
+        workspace_root=workspace_root,
+        project_name=project_name_from_root(workspace_root),
+        runtime_session_ref=f"opencode/{session_id}",
+        status="ready",
+        title=title,
+        display_title=title,
+        heuristic_title=title,
+        activity_summary=activity_summary,
+        last_message=activity_summary if activity_summary != "当前空闲" else "",
+        last_activity_at=last_activity_at,
+        last_role="assistant" if activity_summary != "当前空闲" else "system",
+        controls={},
+        runtime_metadata={"discovery_source": "opencode_cli"},
+        metadata={},
+        timeline=[],
+    )
+
+
+def discover_opencode_sessions(search_roots: list[Path] | None = None) -> list[SessionSnapshot]:
+    executable = shutil.which("opencode")
+    if executable is None:
+        return []
+    workspace_filters = _opencode_workspace_filters(search_roots)
+    sessions: list[SessionSnapshot] = []
+    seen: set[str] = set()
+    for root in _opencode_query_roots(search_roots):
+        try:
+            completed = subprocess.run(
+                ["opencode", "session", "list", "--format", "json"],
+                executable=executable,
+                cwd=str(root) if root is not None else None,
+                text=True,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except OSError:
+            continue
+        if completed.returncode != 0 or not (completed.stdout or "").strip():
+            continue
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            continue
+        rows = payload.get("sessions") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            snapshot = _opencode_snapshot_from_row(row)
+            if snapshot is None:
+                continue
+            if workspace_filters and normalize_workspace_root(snapshot.workspace_root).casefold() not in workspace_filters:
+                continue
+            if snapshot.session_id in seen:
+                continue
+            seen.add(snapshot.session_id)
+            sessions.append(snapshot)
+    sessions.sort(key=lambda item: item.last_activity_at or datetime.min, reverse=True)
+    return sessions
+
+
 def _message(session_id: str, role: str, text: str, created_at: datetime, kind: str) -> dict[str, Any] | None:
     clean = text.strip()
     if not clean:
         return None
     return {"session_id": session_id, "role": role, "text": clean, "created_at": created_at, "kind": kind}
+
+
+def _kimi_tool_name(payload: dict[str, Any]) -> str:
+    function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+    return str(
+        function.get("name")
+        or payload.get("name")
+        or payload.get("tool")
+        or payload.get("sender")
+        or payload.get("action")
+        or "function"
+    ).strip()
+
+
+def _kimi_tool_call_text(payload: dict[str, Any]) -> str:
+    tool_name = _kimi_tool_name(payload)
+    function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+    arguments = _text_from_content(function.get("arguments") or payload.get("arguments") or "")
+    summary = _text_from_content(payload.get("description") or "")
+    detail = arguments or summary
+    return f"调用工具: {tool_name}" if not detail else f"调用工具: {tool_name}\n{detail[:1000]}"
+
+
+def _kimi_tool_result_text(payload: dict[str, Any]) -> str:
+    content = payload.get("return_value")
+    if content is None:
+        content = payload.get("content")
+    if content is None:
+        content = payload.get("result")
+    if content is None:
+        content = payload.get("return")
+    detail = _text_from_content(content)
+    return "工具结果:" if not detail else f"工具结果:\n{detail[:4000]}"
 
 
 def parse_codex_jsonl(path: Path) -> SessionSnapshot:
@@ -520,12 +692,25 @@ def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
                 if item := _message(session_id, "assistant", str(payload.get("text") or ""), timestamp, "assistant"):
                     messages.append(item)
             elif message.get("type") == "ToolCall":
-                text = f"调用工具: {payload.get('name') or payload.get('tool') or 'function'}"
+                text = _kimi_tool_call_text(payload)
                 if item := _message(session_id, "system", text, timestamp, "action"):
+                    item["tool_name"] = _kimi_tool_name(payload)
+                    item["tool_call_id"] = str(payload.get("id") or "")
+                    item["payload"] = {"source_type": message.get("type"), "raw": payload}
                     messages.append(item)
             elif message.get("type") == "ToolResult":
-                text = f"工具结果:\n{_text_from_content(payload.get('content') or payload.get('result') or '')[:1000]}"
+                text = _kimi_tool_result_text(payload)
                 if item := _message(session_id, "system", text, timestamp, "action"):
+                    item["tool_name"] = str(payload.get("sender") or "")
+                    item["tool_call_id"] = str(payload.get("tool_call_id") or "")
+                    item["payload"] = {"source_type": message.get("type"), "raw": payload}
+                    messages.append(item)
+            elif message.get("type") == "ApprovalRequest":
+                text = _kimi_tool_call_text(payload)
+                if item := _message(session_id, "system", text, timestamp, "action"):
+                    item["tool_name"] = _kimi_tool_name(payload)
+                    item["tool_call_id"] = str(payload.get("tool_call_id") or payload.get("id") or "")
+                    item["payload"] = {"source_type": message.get("type"), "raw": payload}
                     messages.append(item)
 
     if not messages and context_path.exists():

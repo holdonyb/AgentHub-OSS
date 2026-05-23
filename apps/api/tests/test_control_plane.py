@@ -9,7 +9,7 @@ from sqlalchemy.dialects import sqlite
 
 from conftest import auth_headers, bootstrap_owner, create_worker, login
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, SpaceMembership
+from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, ProviderSnapshot, SpaceMembership, Worker
 from app.routers.sessions import _session_ordering
 
 
@@ -21,6 +21,55 @@ VALID_PNG_BYTES = base64.b64decode(
 def test_anonymous_business_apis_return_401(client: TestClient) -> None:
     response = client.get("/api/sessions")
     assert response.status_code == 401
+    settings_response = client.get("/api/settings")
+    assert settings_response.status_code == 401
+
+
+def test_admin_can_update_worker_runtime_settings_and_worker_heartbeat_receives_them(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client, "win-runtime")
+    headers = auth_headers(owner_login)
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    listed = client.get("/api/workers", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"][0]["runtime_settings"] == {
+        "max_concurrent_jobs": 2,
+        "job_poll_interval_seconds": 5,
+        "heartbeat_interval_seconds": 30,
+    }
+
+    patched = client.patch(
+        "/api/workers/win-runtime/runtime-settings",
+        headers=headers,
+        json={
+            "max_concurrent_jobs": 6,
+            "job_poll_interval_seconds": 11,
+            "heartbeat_interval_seconds": 44,
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["worker"]["runtime_settings"] == {
+        "max_concurrent_jobs": 6,
+        "job_poll_interval_seconds": 11,
+        "heartbeat_interval_seconds": 44,
+    }
+
+    heartbeat = client.post(
+        "/api/workers/win-runtime/heartbeat",
+        headers=worker_headers,
+        json={"status": "online"},
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert heartbeat.json()["worker"]["runtime_settings"] == {
+        "max_concurrent_jobs": 6,
+        "job_poll_interval_seconds": 11,
+        "heartbeat_interval_seconds": 44,
+    }
+
+    events = client.get("/api/events", headers=headers).json()["items"]
+    assert any(event["event_type"] == "worker.runtime_settings_update" for event in events)
 
 
 def test_sync_status_changes_only_when_relevant_state_changes(client: TestClient) -> None:
@@ -308,6 +357,183 @@ def test_viewer_cannot_create_jobs(client: TestClient) -> None:
             headers=auth_headers(viewer_login),
         )
         assert forbidden.status_code == 403
+        worker_runtime_forbidden = viewer_browser.patch(
+            "/api/settings/worker-runtime",
+            json={"max_concurrent_jobs": 4},
+            headers=auth_headers(viewer_login),
+        )
+        assert worker_runtime_forbidden.status_code == 403
+
+
+def test_settings_default_and_updates_round_trip(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    worker = create_worker(client, "win-defaults")
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    baseline = client.get("/api/settings", headers=headers)
+    assert baseline.status_code == 200, baseline.text
+    baseline_payload = baseline.json()
+    assert baseline_payload["preferences"] == {
+        "locale": "zh-CN",
+        "theme_mode": "dark",
+        "voice_mode": "streaming",
+        "voice_language": "zh-CN",
+        "quick_replies": ["继续", "不对，重新来", "等等", "收到，继续", "先停一下"],
+    }
+    assert [option["value"] for option in baseline_payload["options"]["locales"]] == ["zh-CN", "zh-TW", "en-US"]
+    assert baseline_payload["worker_runtime_defaults"] == {
+        "max_concurrent_jobs": 2,
+        "job_poll_interval_seconds": 5.0,
+        "heartbeat_interval_seconds": 30.0,
+    }
+
+    pref_patch = client.patch(
+        "/api/settings/preferences",
+        json={"locale": "zh-TW", "voice_mode": "standard", "voice_language": "zh-TW", "theme_mode": "light"},
+        headers=headers,
+    )
+    assert pref_patch.status_code == 200, pref_patch.text
+    assert pref_patch.json()["preferences"]["locale"] == "zh-TW"
+
+    runtime_patch = client.patch(
+        "/api/settings/worker-runtime",
+        json={"max_concurrent_jobs": 4, "job_poll_interval_seconds": 9, "heartbeat_interval_seconds": 45},
+        headers=headers,
+    )
+    assert runtime_patch.status_code == 200, runtime_patch.text
+    assert runtime_patch.json()["worker_runtime_defaults"]["max_concurrent_jobs"] == 4
+
+    listed = client.get("/api/workers", headers=headers)
+    assert listed.status_code == 200, listed.text
+    updated_worker = next(item for item in listed.json()["items"] if item["worker_id"] == "win-defaults")
+    assert updated_worker["runtime_settings"] == {
+        "max_concurrent_jobs": 4,
+        "job_poll_interval_seconds": 9,
+        "heartbeat_interval_seconds": 45,
+    }
+
+    heartbeat = client.post(
+        "/api/workers/win-defaults/heartbeat",
+        headers=worker_headers,
+        json={"status": "online"},
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert heartbeat.json()["worker"]["runtime_settings"] == {
+        "max_concurrent_jobs": 4,
+        "job_poll_interval_seconds": 9,
+        "heartbeat_interval_seconds": 45,
+    }
+    assert heartbeat.json()["runtime_settings"] == {
+        "max_concurrent_jobs": 4,
+        "job_poll_interval_seconds": 9,
+        "heartbeat_interval_seconds": 45,
+    }
+
+    refreshed = client.get("/api/settings", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_payload = refreshed.json()
+    assert refreshed_payload["preferences"] == {
+        "locale": "zh-TW",
+        "theme_mode": "light",
+        "voice_mode": "standard",
+        "voice_language": "zh-TW",
+        "quick_replies": ["继续", "不对，重新来", "等等", "收到，继续", "先停一下"],
+    }
+    assert refreshed_payload["worker_runtime_defaults"] == {
+        "max_concurrent_jobs": 4,
+        "job_poll_interval_seconds": 9.0,
+        "heartbeat_interval_seconds": 45.0,
+    }
+    assert any(event["event_type"] == "settings.preferences_update" for event in client.get("/api/events").json()["items"])
+    assert any(event["event_type"] == "settings.worker_runtime_update" for event in client.get("/api/events").json()["items"])
+
+
+def test_user_quick_replies_are_account_preferences(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+
+    patch = client.patch(
+        "/api/settings/preferences",
+        json={"quick_replies": ["继续", "不对，重新来", "等一下"]},
+        headers=headers,
+    )
+    assert patch.status_code == 200, patch.text
+    assert patch.json()["preferences"]["quick_replies"] == ["继续", "不对，重新来", "等一下"]
+
+    refreshed = client.get("/api/settings", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["preferences"]["quick_replies"] == ["继续", "不对，重新来", "等一下"]
+
+    invalid = client.patch(
+        "/api/settings/preferences",
+        json={"quick_replies": [""]},
+        headers=headers,
+    )
+    assert invalid.status_code == 422
+
+
+def test_worker_registration_and_heartbeat_return_runtime_settings(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    patch = client.patch(
+        "/api/settings/worker-runtime",
+        json={"max_concurrent_jobs": 6, "job_poll_interval_seconds": 7, "heartbeat_interval_seconds": 40},
+        headers=headers,
+    )
+    assert patch.status_code == 200, patch.text
+
+    worker = create_worker(client)
+    assert worker["runtime_settings"] == {
+        "max_concurrent_jobs": 6,
+        "job_poll_interval_seconds": 7.0,
+        "heartbeat_interval_seconds": 40.0,
+    }
+
+    heartbeat = client.post(
+        f"/api/workers/{worker['worker']['worker_id']}/heartbeat",
+        headers={"Authorization": f"Bearer {worker['worker_token']}"},
+        json={"status": "online"},
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert heartbeat.json()["runtime_settings"]["max_concurrent_jobs"] == 6
+
+
+def test_worker_heartbeat_backfills_historically_stale_runtime_defaults(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    worker = create_worker(client, "win-stale")
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    runtime_patch = client.patch(
+        "/api/settings/worker-runtime",
+        json={"max_concurrent_jobs": 4, "job_poll_interval_seconds": 9, "heartbeat_interval_seconds": 45},
+        headers=headers,
+    )
+    assert runtime_patch.status_code == 200, runtime_patch.text
+
+    with client.app.state.SessionLocal() as db:
+        worker_row = db.query(Worker).filter(Worker.worker_id == "win-stale").one()
+        worker_row.max_concurrent_jobs = 2
+        worker_row.job_poll_interval_seconds = 5
+        worker_row.heartbeat_interval_seconds = 30
+        db.commit()
+
+    heartbeat = client.post(
+        "/api/workers/win-stale/heartbeat",
+        headers=worker_headers,
+        json={"status": "online"},
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert heartbeat.json()["worker"]["runtime_settings"] == {
+        "max_concurrent_jobs": 4,
+        "job_poll_interval_seconds": 9,
+        "heartbeat_interval_seconds": 45,
+    }
 
 
 def test_session_input_creates_queued_job_and_audit_event(client: TestClient) -> None:
@@ -1295,6 +1521,64 @@ def test_codex_goal_session_input_uses_native_default_turn(client: TestClient) -
     assert job_payload["native_turn_mode"] == "default"
 
 
+def test_codex_goal_session_input_falls_back_when_provider_snapshot_disables_native_goal(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    space_id = worker["worker"]["space_id"]
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-goal-fallback",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-goal-fallback",
+            "status": "ready",
+            "title": "AgentHub goal fallback",
+            "last_message": "ready",
+            "controls": {"sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    with client.app.state.SessionLocal() as db:
+        db.add(
+            ProviderSnapshot(
+                space_id=space_id,
+                worker_id=worker_id,
+                backend="codex",
+                status="ready",
+                features_json=dumps_json({"native_goal_command": False}),
+                diagnostics_json=dumps_json({"auth_status": "ready"}),
+            )
+        )
+        db.commit()
+
+    input_response = client.post(
+        "/api/sessions/sess-goal-fallback/input",
+        json={"prompt": "/goal 完成 provider parity 验证"},
+        headers=auth_headers(owner_login),
+    )
+
+    assert input_response.status_code == 200, input_response.text
+    job_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
+    assert job_payload["reply_mode"] == "direct"
+    assert job_payload["raw_prompt"] == "/goal 完成 provider parity 验证"
+    assert "进入 AgentHub 目标推进模式" in job_payload["prompt"]
+    assert "目标：完成 provider parity 验证" in job_payload["prompt"]
+    assert job_payload["native_plan_mode"] is False
+    assert "native_goal_command" not in job_payload or job_payload["native_goal_command"] is False
+    assert job_payload["native_turn_mode"] == "default"
+
+
 def test_codex_direct_session_input_uses_native_default_turn(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
@@ -1400,7 +1684,7 @@ def test_new_session_input_expires_prior_pending_plan_exit(client: TestClient) -
     assert expired["response"]["action"] == "expired"
 
 
-def test_claude_goal_session_input_is_marked_and_preserved(client: TestClient) -> None:
+def test_claude_goal_session_input_uses_agenthub_goal_alias_prompt(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
     worker = create_worker(client)
@@ -1436,9 +1720,67 @@ def test_claude_goal_session_input_is_marked_and_preserved(client: TestClient) -
     job_payload = client.get("/api/jobs", headers=auth_headers(owner_login)).json()["items"][0]["payload"]
     assert job_payload["reply_mode"] == "direct"
     assert job_payload["raw_prompt"] == "/goal 所有移动端搜索体验测试通过"
-    assert job_payload["prompt"] == "/goal 所有移动端搜索体验测试通过"
+    assert "进入 AgentHub 目标推进模式" in job_payload["prompt"]
+    assert "目标：所有移动端搜索体验测试通过" in job_payload["prompt"]
     assert job_payload["native_plan_mode"] is False
-    assert job_payload["native_goal_command"] is True
+    assert "native_goal_command" not in job_payload or job_payload["native_goal_command"] is False
+
+
+def test_opencode_plan_session_input_uses_plan_agent_without_claiming_native_codex_flow(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker_response = client.post(
+        "/api/workers/register",
+        headers={"Authorization": "Bearer worker-register-test-token"},
+        json={
+            "worker_id": "worker-opencode",
+            "machine_name": "DevBox",
+            "os": "windows",
+            "reachable_backends": ["opencode"],
+            "workspace_roots": ["E:/work"],
+            "capabilities": {"opencode": True},
+        },
+    )
+    assert worker_response.status_code == 200, worker_response.text
+    worker = worker_response.json()
+    headers = auth_headers(owner_login)
+    response = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "sess-opencode-plan",
+            "backend": "opencode",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "opencode/sess-opencode-plan",
+            "status": "needs_reply",
+            "title": "AgentHub OpenCode plan",
+            "display_title": "OpenCode 规划",
+            "activity_summary": "等你回复：先规划再执行",
+            "last_message": "先规划再执行",
+        },
+    )
+    assert response.status_code == 200
+
+    input_response = client.post(
+        "/api/sessions/sess-opencode-plan/input",
+        headers=headers,
+        json={"prompt": "梳理 provider 接入差异", "reply_mode": "plan"},
+    )
+    assert input_response.status_code == 200
+
+    with client.app.state.SessionLocal() as db:
+        job = db.query(Job).filter(Job.target_session_id == "sess-opencode-plan").order_by(Job.created_at.desc()).first()
+        assert job is not None
+        job_payload = loads_json(job.payload_json, {})
+
+    assert job_payload["reply_mode"] == "plan"
+    assert job_payload["native_plan_mode"] is False
+    assert job_payload["controls"]["agent"] == "plan"
+    assert "按这个计划执行" in job_payload["prompt"]
     assert "native_turn_mode" not in job_payload
 
 

@@ -43,9 +43,11 @@ describe('mobile WebView layout guardrails', () => {
     expect(mobileBlock).toContain('--mobile-nav-height: 60px');
     expect(mobileBlock).toContain('--mobile-toast-clearance: 0px');
     expect(mobileBlock).toContain('--mobile-composer-clearance: 224px');
+    expect(mobileBlock).toContain('--mobile-message-bottom-gutter: 20px');
     expect(mobileBlock).toMatch(/\.topbar\s*{[^}]*height:\s*var\(--mobile-topbar-height\)/s);
     expect(mobileBlock).toMatch(/\.workspace\s*{[^}]*height:\s*calc\([^}]*var\(--mobile-toast-clearance\)/s);
-    expect(mobileBlock).toMatch(/\.message-block\s*{[^}]*padding:\s*6px 0 var\(--mobile-composer-clearance\)/s);
+    expect(mobileBlock).toMatch(/\.message-block\s*{[^}]*padding:\s*6px 0 var\(--mobile-message-bottom-gutter\)/s);
+    expect(mobileBlock).not.toMatch(/\.message-block\s*{[^}]*padding:\s*6px 0 var\(--mobile-composer-clearance\)/s);
     expect(mobileBlock).toMatch(/\.load-older-button\s*{[^}]*margin-bottom:\s*22px/s);
   });
 
@@ -63,7 +65,10 @@ describe('mobile WebView layout guardrails', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
 
-    expect(mobileBlock).toMatch(/\.thread-pane > \*\s*{[^}]*min-width:\s*0[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
+    expect(mobileBlock).toMatch(
+      /\.thread-pane > \*:not\(\.scroll-to-bottom-button\)\s*{[^}]*min-width:\s*0[^}]*width:\s*100%[^}]*max-width:\s*100%/s,
+    );
+    expect(mobileBlock).toMatch(/\.scroll-to-bottom-button\s*{[^}]*width:\s*42px[^}]*height:\s*42px/s);
     expect(mobileBlock).toMatch(/\.thread-head\s*{[^}]*min-width:\s*0[^}]*max-width:\s*100%[^}]*overflow:\s*hidden/s);
     expect(mobileBlock).toMatch(/\.thread-head-actions\s*{[^}]*min-width:\s*0[^}]*flex-wrap:\s*nowrap[^}]*overflow:\s*visible/s);
     expect(mobileBlock).toMatch(/\.thread-head-actions \.mobile-control-shortcut\s*{[^}]*flex:\s*0 0 40px[^}]*font-size:\s*0/s);
@@ -81,10 +86,10 @@ describe('mobile WebView layout guardrails', () => {
     expect(mobileBlock).toMatch(/\.notification-toast\s*{[^}]*position:\s*static/s);
     expect(mobileBlock).toMatch(/\.notification-toast \+ \.workspace\s*{[^}]*--mobile-toast-clearance:\s*74px/s);
     expect(mobileBlock).toMatch(/\.ops-rail\s*{[^}]*overflow-y:\s*auto/s);
-    expect(mobileBlock).toMatch(/\.rail-panel summary\s*{[^}]*color:\s*#f8fafc/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary,\s*\n\s*\.rail-panel-summary\s*{[^}]*color:\s*#f8fafc/s);
     expect(mobileBlock).toMatch(/\.editor-panel input,\s*\n\s*\.editor-panel select,\s*\n\s*\.editor-panel textarea\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
-    expect(mobileBlock).toMatch(/\.rail-panel summary\s*{[^}]*min-height:\s*48px[^}]*overflow:\s*visible/s);
-    expect(mobileBlock).toMatch(/\.rail-panel summary > span\s*{[^}]*white-space:\s*nowrap/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary,\s*\n\s*\.rail-panel-summary\s*{[^}]*min-height:\s*48px[^}]*overflow:\s*visible/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary > span,\s*\n\s*\.rail-panel-summary > span\s*{[^}]*white-space:\s*nowrap/s);
   });
 
   it('lets the mobile status strip and composer expand on demand', () => {

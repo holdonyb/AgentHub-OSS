@@ -2,6 +2,16 @@ import { LabASR } from 'byted-ailab-speech-sdk';
 
 // Android WebView can leave stopRecord hanging without firing SDK close/error callbacks.
 const STOP_FALLBACK_MS = 1500;
+const RECONNECT_BASE_MS = 450;
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 2;
+const STREAMING_VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  },
+};
 
 export interface VoiceStreamAuthPayload {
   url: string;
@@ -35,8 +45,10 @@ export interface StartStreamingVoiceOptions {
   auth: VoiceStreamAuthPayload;
   onStart?: () => void;
   onPartialText?: (text: string, fullData: unknown) => void;
+  onRecovering?: (attempt: number) => void;
   onClose?: () => void;
   onError?: () => void;
+  maxReconnectAttempts?: number;
 }
 
 function buildStreamingUrl(url: string, auth: Record<string, string>) {
@@ -47,12 +59,39 @@ function buildStreamingUrl(url: string, auth: Record<string, string>) {
   return `${url}?${params.toString()}`;
 }
 
+function mergeVoiceConstraints(requested: MediaStreamConstraints | undefined): MediaStreamConstraints {
+  const baseAudioConstraints = {
+    ...(STREAMING_VOICE_MEDIA_CONSTRAINTS.audio as MediaTrackConstraints),
+  };
+  const requestedAudio = requested?.audio;
+  if (requestedAudio && typeof requestedAudio === 'object' && !Array.isArray(requestedAudio)) {
+    return {
+      ...(requested ?? {}),
+      audio: {
+        ...baseAudioConstraints,
+        ...requestedAudio,
+      },
+    };
+  }
+  return {
+    ...(requested ?? {}),
+    audio: {
+      ...baseAudioConstraints,
+    },
+  };
+}
+
 export async function startStreamingVoice(options: StartStreamingVoiceOptions): Promise<StreamingVoiceController> {
   let mediaStream: MediaStream | null = null;
+  let client: ReturnType<typeof LabASR> | null = null;
   let finished = false;
+  let stopping = false;
+  let reconnectAttempts = 0;
   let stopFallbackTimer: number | null = null;
+  let reconnectTimer: number | null = null;
   const mediaDevices = navigator.mediaDevices;
   const originalGetUserMedia = mediaDevices?.getUserMedia?.bind(mediaDevices);
+  const maxReconnectAttempts = options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
 
   const clearStopFallback = () => {
     if (stopFallbackTimer !== null) {
@@ -61,70 +100,109 @@ export async function startStreamingVoice(options: StartStreamingVoiceOptions): 
     }
   };
 
+  const clearReconnectTimer = () => {
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
   const stopTracks = () => {
     mediaStream?.getTracks().forEach((track) => track.stop());
     mediaStream = null;
   };
 
-  const finishClose = () => {
+  const finalClose = () => {
     if (finished) return;
     finished = true;
     clearStopFallback();
+    clearReconnectTimer();
     stopTracks();
     options.onClose?.();
   };
 
-  const finishError = () => {
+  const finalError = () => {
     if (finished) return;
     finished = true;
     clearStopFallback();
+    clearReconnectTimer();
     stopTracks();
     options.onError?.();
   };
-
-  const client = LabASR({
-    onMessage: (text: string, fullData: unknown) => options.onPartialText?.(text, fullData),
-    onStart: () => options.onStart?.(),
-    onClose: () => finishClose(),
-    onError: () => finishError(),
-  });
-
-  client.connect({
-    url: buildStreamingUrl(options.auth.url, options.auth.auth),
-    config: options.auth.config,
-  });
 
   if (!originalGetUserMedia) {
     throw new Error('Current environment does not support microphone recording');
   }
 
-  const patchedGetUserMedia: typeof navigator.mediaDevices.getUserMedia = async (...args) => {
-    const stream = await originalGetUserMedia(...args);
-    mediaStream = stream;
-    return stream;
+  const scheduleReconnect = () => {
+    if (finished || stopping || reconnectAttempts >= maxReconnectAttempts) return false;
+    reconnectAttempts += 1;
+    clearStopFallback();
+    stopTracks();
+    options.onRecovering?.(reconnectAttempts);
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      void startClient().catch(() => finalError());
+    }, RECONNECT_BASE_MS * reconnectAttempts);
+    return true;
   };
 
-  mediaDevices.getUserMedia = patchedGetUserMedia;
-  try {
-    await client.startRecord();
-  } catch (error) {
-    stopTracks();
-    throw error;
-  } finally {
-    mediaDevices.getUserMedia = originalGetUserMedia;
+  const finishClose = () => {
+    if (!stopping && scheduleReconnect()) return;
+    finalClose();
+  };
+
+  const finishError = () => {
+    if (!stopping && scheduleReconnect()) return;
+    finalError();
+  };
+
+  async function startClient() {
+    if (finished || stopping) return;
+    client = LabASR({
+      onMessage: (text: string, fullData: unknown) => options.onPartialText?.(text, fullData),
+      onStart: () => options.onStart?.(),
+      onClose: () => finishClose(),
+      onError: () => finishError(),
+    });
+
+    client.connect({
+      url: buildStreamingUrl(options.auth.url, options.auth.auth),
+      config: options.auth.config,
+    });
+
+    const patchedGetUserMedia: typeof navigator.mediaDevices.getUserMedia = async (...args) => {
+      const stream = await originalGetUserMedia(mergeVoiceConstraints(args[0]));
+      mediaStream = stream;
+      return stream;
+    };
+
+    mediaDevices.getUserMedia = patchedGetUserMedia;
+    try {
+      await client.startRecord();
+    } catch (error) {
+      stopTracks();
+      throw error;
+    } finally {
+      mediaDevices.getUserMedia = originalGetUserMedia;
+    }
   }
+
+  await startClient();
 
   return {
     stop: () => {
       if (finished) return;
+      stopping = true;
+      clearReconnectTimer();
       clearStopFallback();
       stopFallbackTimer = window.setTimeout(() => {
-        finishClose();
+        finalClose();
       }, STOP_FALLBACK_MS);
       try {
-        client.stopRecord();
+        client?.stopRecord();
       } catch {
-        finishClose();
+        finalClose();
       }
     },
   };

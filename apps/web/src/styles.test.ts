@@ -84,10 +84,23 @@ describe('AgentHub responsive layout styles', () => {
   });
 
   it('allows the control pane to scroll independently on web and Android', () => {
-    expect(styles).toMatch(/\.ops-rail\s*{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s);
-    expect(styles).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)\s+minmax\(220px,\s*38vh\)/);
-    expect(styles).toMatch(/\.ops-rail\s*{[^}]*max-height:\s*38vh/s);
+    expect(styles).toMatch(/\.ops-rail\s*{[^}]*min-height:\s*0[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*overflow-y:\s*auto/s);
+    expect(styles).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)\s+minmax\(320px,\s*1fr\)/);
+    expect(styles).toMatch(/@media \(max-width: 1120px\)\s*{[\s\S]*?\.workspace\s*{[^}]*overflow-y:\s*auto/s);
+    expect(styles).toMatch(/@media \(max-width: 1120px\)\s*{[\s\S]*?\.ops-rail\s*{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*max-height:\s*none/s);
+    expect(styles).toMatch(/\.ops-rail > \*\s*{[^}]*flex:\s*0 0 auto/s);
+    expect(styles).toMatch(/\.rail-panel\s*{[^}]*flex:\s*0 0 auto/s);
     expect(styles).toMatch(/\.workspace\.mobile-pane-controls \.ops-rail\s*{[^}]*overflow-y:\s*auto/s);
+    expect(styles).toMatch(/\.workspace\.mobile-pane-controls \.ops-rail\s*{[^}]*display:\s*flex[^}]*flex-direction:\s*column/s);
+    expect(styles).toMatch(/\.workspace\.mobile-pane-controls \.rail-panel\s*{[^}]*flex:\s*0 0 auto/s);
+    expect(styles).toMatch(/\.workspace\.mobile-pane-controls \.rail-panel\.is-open \.rail-panel-body\s*{[^}]*display:\s*grid/s);
+  });
+
+  it('keeps the mobile scroll-to-bottom affordance as a compact floating circle', () => {
+    expect(styles).toMatch(/\.scroll-to-bottom-button\s*{[^}]*width:\s*38px[^}]*height:\s*38px[^}]*padding:\s*0/s);
+    expect(styles).toMatch(/\.scroll-to-bottom-button\s*{[^}]*min-width:\s*38px[^}]*min-height:\s*38px/s);
+    expect(styles).toMatch(/\.thread-pane > \*:not\(\.scroll-to-bottom-button\)\s*{[^}]*width:\s*100%/s);
+    expect(styles).toMatch(/@media \(max-width: 760px\)\s*{[\s\S]*?\.scroll-to-bottom-button\s*{[^}]*width:\s*42px[^}]*height:\s*42px/s);
   });
 
   it('keeps the desktop control rail inside the viewport with long paths and summaries', () => {
@@ -98,5 +111,15 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.rail-panel-body\s*{[^}]*min-width:\s*0[^}]*max-width:\s*100%/s);
     expect(styles).toMatch(/\.inspector-overview\s*{[^}]*min-width:\s*0[^}]*max-width:\s*100%/s);
     expect(styles).toMatch(/\.inspector-overview p,\s*\n\.local-resume-panel p,\s*\n\.provider-row,\s*\n\.event-row,\s*\n\.secret-row\s*{[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
+  it('restores markdown document formatting inside the full text preview', () => {
+    expect(styles).toMatch(/\.rich-preview ul,\s*\n\.rich-preview ol\s*{[^}]*padding-left:\s*1\.35em[^}]*margin:\s*0\.75em 0/s);
+    expect(styles).toMatch(/\.rich-preview ul\s*{[^}]*list-style:\s*disc/s);
+    expect(styles).toMatch(/\.rich-preview ol\s*{[^}]*list-style:\s*decimal/s);
+    expect(styles).toMatch(/\.rich-preview code\s*{[^}]*font-family:\s*ui-monospace/s);
+    expect(styles).toMatch(/\.rich-preview h1,\s*\n\.rich-preview h2,\s*\n\.rich-preview h3\s*{[^}]*font-weight:\s*800/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview code,\s*\n\.app-shell\.theme-dark \.rich-preview pre\s*{[^}]*background:\s*#07090d/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview th,\s*\n\.app-shell\.theme-dark \.rich-preview td\s*{[^}]*border-color:\s*rgba\(255,\s*255,\s*255,\s*0\.12\)/s);
   });
 });

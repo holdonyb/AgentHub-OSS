@@ -15,7 +15,7 @@ from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.deps import Actor, DbSession, require_min_role
 from app.schemas import VoiceStreamAuthOut, VoiceTranscribeIn, VoiceTranscribeOut
-from app.services import voice_asr
+from app.services import doubao_asr
 
 router = APIRouter()
 
@@ -85,11 +85,7 @@ def _transcode_audio_to_wav(audio_bytes: bytes, source_format: str) -> bytes:
         return output_path.read_bytes()
 
 
-def _prepare_audio_for_asr(audio_bytes: bytes, audio_format: str, *, provider: str) -> tuple[bytes, str]:
-    if provider in {"openai", "openai-compatible", "whisper"}:
-        if audio_format in ALLOWED_AUDIO_TYPES.values():
-            return audio_bytes, audio_format
-        raise HTTPException(status_code=400, detail={"message": "Unsupported audio type", "code": "VOICE_TYPE"})
+def _prepare_audio_for_asr(audio_bytes: bytes, audio_format: str) -> tuple[bytes, str]:
     if audio_format in DOUBAO_STANDARD_AUDIO_FORMATS:
         return audio_bytes, audio_format
     if audio_format in TRANSCODABLE_AUDIO_FORMATS:
@@ -97,11 +93,11 @@ def _prepare_audio_for_asr(audio_bytes: bytes, audio_format: str, *, provider: s
     raise HTTPException(status_code=400, detail={"message": "Unsupported audio type", "code": "VOICE_TYPE"})
 
 
-def _asr_http_error_message(exc: httpx.HTTPStatusError, *, provider_label: str) -> str:
+def _asr_http_error_message(exc: httpx.HTTPStatusError) -> str:
     reason = exc.response.reason_phrase.strip() if exc.response else ""
     suffix = f" {reason}" if reason else ""
     if not exc.response:
-        return f"{provider_label} HTTP error"
+        return "Doubao ASR HTTP error"
     provider_code = exc.response.headers.get("X-Api-Status-Code", "").strip()
     provider_message = exc.response.headers.get("X-Api-Message", "").strip()
     provider_detail = ""
@@ -109,20 +105,18 @@ def _asr_http_error_message(exc: httpx.HTTPStatusError, *, provider_label: str) 
         provider_detail = f" ({provider_code})"
     if provider_message:
         provider_detail = f"{provider_detail}: {provider_message[:180]}"
-    return f"{provider_label} HTTP {exc.response.status_code}{suffix}{provider_detail}"
+    return f"Doubao ASR HTTP {exc.response.status_code}{suffix}{provider_detail}"
 
 
 def _voice_diagnostics(
     payload: VoiceTranscribeIn,
     *,
-    provider: str,
     input_format: str,
     asr_format: str,
     input_bytes: int,
     prepared_bytes: int,
 ) -> dict[str, object]:
     return {
-        "provider": provider,
         "filename": payload.filename,
         "content_type": payload.content_type,
         "input_format": input_format,
@@ -145,8 +139,6 @@ async def transcribe_voice(
     actor: Actor = Depends(require_min_role("operator")),
 ) -> dict[str, object]:
     source_id = f"voice-{uuid.uuid4().hex}"
-    provider = voice_asr.diagnostics_provider()
-    provider_label = voice_asr.provider_label()
     input_format = _audio_format(payload)
     try:
         source_audio_bytes = base64.b64decode(payload.data_base64, validate=True)
@@ -158,17 +150,15 @@ async def transcribe_voice(
         raise HTTPException(status_code=413, detail={"message": "Audio is too large", "code": "VOICE_TOO_LARGE"})
     diagnostics: dict[str, object] = _voice_diagnostics(
         payload,
-        provider=provider,
         input_format=input_format,
         asr_format=input_format,
         input_bytes=len(source_audio_bytes),
         prepared_bytes=len(source_audio_bytes),
     )
     try:
-        audio_bytes, audio_format = _prepare_audio_for_asr(source_audio_bytes, input_format, provider=provider)
+        audio_bytes, audio_format = _prepare_audio_for_asr(source_audio_bytes, input_format)
         diagnostics = _voice_diagnostics(
             payload,
-            provider=provider,
             input_format=input_format,
             asr_format=audio_format,
             input_bytes=len(source_audio_bytes),
@@ -176,7 +166,7 @@ async def transcribe_voice(
         )
         if len(audio_bytes) > get_settings().max_voice_audio_bytes:
             raise HTTPException(status_code=413, detail={"message": "Audio is too large", "code": "VOICE_TOO_LARGE"})
-        text = await voice_asr.transcribe_audio_bytes(
+        text = await doubao_asr.transcribe_audio_bytes(
             audio_bytes,
             audio_format=audio_format,
             language=payload.language,
@@ -198,7 +188,7 @@ async def transcribe_voice(
         db.commit()
         raise _voice_error(status_code, message, "VOICE_ASR_FAILED", diagnostics) from None
     except httpx.TimeoutException:
-        message = f"{provider_label} timed out"
+        message = "Doubao ASR timed out"
         write_event(
             db,
             space_id=actor.space_id,
@@ -213,7 +203,7 @@ async def transcribe_voice(
         db.commit()
         raise _voice_error(504, message, "VOICE_ASR_TIMEOUT", diagnostics) from None
     except httpx.HTTPStatusError as exc:
-        message = _asr_http_error_message(exc, provider_label=provider_label)
+        message = _asr_http_error_message(exc)
         write_event(
             db,
             space_id=actor.space_id,
@@ -228,7 +218,7 @@ async def transcribe_voice(
         db.commit()
         raise _voice_error(502, message, "VOICE_ASR_FAILED", diagnostics) from None
     except httpx.RequestError as exc:
-        message = f"{provider_label} request failed: {type(exc).__name__}"
+        message = f"Doubao ASR request failed: {type(exc).__name__}"
         write_event(
             db,
             space_id=actor.space_id,
@@ -263,14 +253,11 @@ async def create_voice_stream_auth(
 ) -> dict[str, object]:
     source_id = f"voice-stream-{uuid.uuid4().hex}"
     uid = actor.actor_id or "agenthub"
-    provider = voice_asr.diagnostics_provider()
-    provider_label = voice_asr.provider_label()
     try:
-        payload = await voice_asr.issue_stream_auth(uid=uid)
+        payload = await doubao_asr.issue_stream_auth(uid=uid)
     except RuntimeError as exc:
         message = str(exc)
-        error_code = "VOICE_STREAM_UNAVAILABLE" if "does not support streaming auth" in message else "VOICE_STREAM_AUTH_FAILED"
-        status_code = 503 if ("not configured" in message or error_code == "VOICE_STREAM_UNAVAILABLE") else 502
+        status_code = 503 if "not configured" in message else 502
         write_event(
             db,
             space_id=actor.space_id,
@@ -280,12 +267,12 @@ async def create_voice_stream_auth(
             source_id=source_id,
             event_type="voice.stream_auth.failed",
             level="warning",
-            payload={"message": message, "code": error_code, "provider": provider},
+            payload={"message": message, "code": "VOICE_STREAM_AUTH_FAILED"},
         )
         db.commit()
-        raise HTTPException(status_code=status_code, detail={"message": message, "code": error_code}) from None
+        raise HTTPException(status_code=status_code, detail={"message": message, "code": "VOICE_STREAM_AUTH_FAILED"}) from None
     except httpx.TimeoutException:
-        message = f"{provider_label} token timed out"
+        message = "Doubao streaming ASR token timed out"
         write_event(
             db,
             space_id=actor.space_id,
@@ -300,7 +287,7 @@ async def create_voice_stream_auth(
         db.commit()
         raise HTTPException(status_code=504, detail={"message": message, "code": "VOICE_STREAM_AUTH_TIMEOUT"}) from None
     except httpx.HTTPStatusError as exc:
-        message = _asr_http_error_message(exc, provider_label=f"{provider_label} token")
+        message = _asr_http_error_message(exc).replace("Doubao ASR", "Doubao streaming ASR token")
         write_event(
             db,
             space_id=actor.space_id,
@@ -315,7 +302,7 @@ async def create_voice_stream_auth(
         db.commit()
         raise HTTPException(status_code=502, detail={"message": message, "code": "VOICE_STREAM_AUTH_FAILED"}) from None
     except httpx.RequestError as exc:
-        message = f"{provider_label} token request failed: {type(exc).__name__}"
+        message = f"Doubao streaming ASR token request failed: {type(exc).__name__}"
         write_event(
             db,
             space_id=actor.space_id,

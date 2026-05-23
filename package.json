@@ -1,6 +1,6 @@
 {
   "name": "agenthub",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,7 @@
     "web:build": "npm --workspace @agenthub/web run build",
     "desktop:test": "npm --workspace @agenthub/desktop run test -- --run",
     "desktop:build": "npm --workspace @agenthub/desktop run build",
+    "desktop:package:win": "npm --workspace @agenthub/desktop run package:win",
     "desktop:start": "npm --workspace @agenthub/desktop run start",
     "mobile:test": "npm --workspace @agenthub/mobile run test -- --run",
     "mobile:sync": "npm --workspace @agenthub/mobile run sync",

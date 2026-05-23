@@ -140,6 +140,11 @@ def worker_out(worker: Worker) -> dict[str, Any]:
         "capabilities": loads_json(worker.capabilities_json, {}),
         "status": worker.status,
         "last_heartbeat_at": worker.last_heartbeat_at,
+        "runtime_settings": {
+            "max_concurrent_jobs": worker.max_concurrent_jobs,
+            "job_poll_interval_seconds": worker.job_poll_interval_seconds,
+            "heartbeat_interval_seconds": worker.heartbeat_interval_seconds,
+        },
     }
 
 
@@ -1160,104 +1165,6 @@ class DoubaoAsrFacade:
 
 
 doubao_asr = DoubaoAsrFacade()
-
-
-class OpenAiAsrFacade:
-    async def transcribe_audio_bytes(
-        self,
-        audio_bytes: bytes,
-        *,
-        audio_format: str,
-        language: str | None = None,
-    ) -> str:
-        settings = get_settings()
-        api_key = settings.openai_asr_api_key.strip()
-        base_url = settings.openai_asr_base_url.strip().rstrip("/")
-        model = settings.openai_asr_model.strip() or "whisper-1"
-        if not api_key:
-            raise RuntimeError("OpenAI ASR credentials are not configured")
-        if not base_url:
-            raise RuntimeError("OpenAI ASR base URL is not configured")
-        files = {
-            "file": (
-                f"voice.{audio_format or 'wav'}",
-                audio_bytes,
-                f"audio/{audio_format or 'wav'}",
-            )
-        }
-        data = {"model": model, "response_format": "text"}
-        if language:
-            data["language"] = language
-        headers = {"Authorization": f"Bearer {api_key}"}
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            response = await client.post(
-                f"{base_url}/audio/transcriptions",
-                data=data,
-                files=files,
-                headers=headers,
-            )
-            response.raise_for_status()
-        text = response.text.strip()
-        if text:
-            return text
-        payload = response.json() if response.content else {}
-        if isinstance(payload, dict):
-            text = str(payload.get("text") or "").strip()
-            if text:
-                return text
-        raise RuntimeError("OpenAI ASR returned empty text")
-
-
-openai_asr = OpenAiAsrFacade()
-
-
-class VoiceAsrFacade:
-    def configured_provider(self) -> str:
-        provider = get_settings().voice_asr_provider.strip().lower()
-        return provider or "doubao"
-
-    def diagnostics_provider(self) -> str:
-        provider = self.configured_provider()
-        return "openai" if provider in {"openai", "openai-compatible", "whisper"} else provider
-
-    def provider_label(self) -> str:
-        provider = self.configured_provider()
-        if provider in {"openai", "openai-compatible", "whisper"}:
-            return "OpenAI ASR"
-        if provider == "doubao":
-            return "Doubao ASR"
-        return f"{provider} ASR"
-
-    async def transcribe_audio_bytes(
-        self,
-        audio_bytes: bytes,
-        *,
-        audio_format: str,
-        language: str | None = None,
-    ) -> str:
-        provider = self.configured_provider()
-        if provider == "doubao":
-            return await doubao_asr.transcribe_audio_bytes(
-                audio_bytes,
-                audio_format=audio_format,
-                language=language,
-            )
-        if provider in {"openai", "openai-compatible", "whisper"}:
-            return await openai_asr.transcribe_audio_bytes(
-                audio_bytes,
-                audio_format=audio_format,
-                language=language,
-            )
-        raise RuntimeError(f"Unsupported voice ASR provider: {provider}")
-
-    async def issue_stream_auth(self, *, uid: str) -> dict[str, Any]:
-        provider = self.configured_provider()
-        if provider == "doubao":
-            return await doubao_asr.issue_stream_auth(uid=uid)
-        raise RuntimeError("Configured voice ASR provider does not support streaming auth")
-
-
-voice_asr = VoiceAsrFacade()
 
 
 def schedule_out(schedule: Schedule) -> dict[str, Any]:

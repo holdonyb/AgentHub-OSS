@@ -29,5 +29,6 @@ def default_agent_session_roots(home: str | None = None) -> list[Path]:
         home_path / ".codex" / "sessions",
         home_path / ".claude" / "projects",
         home_path / ".kimi" / "sessions",
+        home_path / ".local" / "share" / "opencode",
     ]
     return [path for path in candidates if path.exists()]

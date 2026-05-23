@@ -42,4 +42,12 @@ describe('AgentHub desktop window config', () => {
     expect(options.skipTaskbar).toBe(true);
     expect(options.width).toBeLessThan(520);
   });
+
+  it('creates a setup window for first-launch server configuration', () => {
+    const options = createWindowOptions({ kind: 'setup', preloadPath: 'preload.cjs' });
+
+    expect(options.title).toBe('AgentHub Setup');
+    expect(options.width).toBeGreaterThanOrEqual(500);
+    expect(options.height).toBeGreaterThanOrEqual(400);
+  });
 });
