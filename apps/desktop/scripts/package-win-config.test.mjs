@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   DEFAULT_ELECTRON_BUILDER_BINARIES_MIRROR,
   DEFAULT_ELECTRON_MIRROR,
@@ -37,5 +38,12 @@ describe('package-win-config', () => {
     });
     expect(env.ELECTRON_MIRROR).toBe('https://override.example/electron');
     expect(env.ELECTRON_BUILDER_BINARIES_MIRROR).toBe('https://override.example/builder');
+  });
+
+  it('uses the AgentHub brand icon for Windows packages', () => {
+    const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+    expect(packageJson.build.files).toContain('assets/icon.ico');
+    expect(packageJson.build.win.icon).toBe('assets/icon.ico');
   });
 });
