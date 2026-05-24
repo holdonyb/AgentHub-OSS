@@ -122,6 +122,29 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(capacitorSettings).toContain("include ':capacitor-local-notifications'");
     expect(capacitorSettings).toContain("include ':capacitor-app'");
   });
+
+  it('uses the shared AgentHub brand icon for Android launchers', () => {
+    const launcher = readFileSync(
+      new URL('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml', import.meta.url),
+      'utf-8',
+    );
+    const foreground = readFileSync(
+      new URL('android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml', import.meta.url),
+      'utf-8',
+    );
+    const notificationIcon = readFileSync(
+      new URL('android/app/src/main/res/drawable/ic_stat_agenthub.xml', import.meta.url),
+      'utf-8',
+    );
+    const webFavicon = readFileSync(new URL('../web/public/favicon.svg', import.meta.url), 'utf-8');
+
+    expect(launcher).toContain('@drawable/ic_launcher_background');
+    expect(launcher).toContain('@mipmap/ic_launcher_foreground');
+    expect(foreground).toContain('#68C5FF');
+    expect(notificationIcon).toContain('strokeWidth="2.8"');
+    expect(webFavicon).toContain('<title>AgentHub</title>');
+    expect(webFavicon).toContain('#68C5FF');
+  });
 });
 
 describe('Production deploy workflow', () => {

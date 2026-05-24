@@ -22,12 +22,14 @@
     },
     "files": [
       "dist/**/*",
+      "assets/icon.ico",
       "package.json"
     ],
     "extraMetadata": {
       "main": "dist/main/index.js"
     },
     "win": {
+      "icon": "assets/icon.ico",
       "artifactName": "AgentHub-${version}-${arch}.${ext}",
       "target": [
         "portable"
