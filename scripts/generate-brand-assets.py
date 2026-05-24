@@ -52,6 +52,15 @@ ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" r
 </svg>
 """
 
+MARK_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
+  <title>AgentHub mark</title>
+  <path fill="#0D66D0" d="M512 64 816 240v352l-104 60V300L512 184 312 300v352l-104-60V240z"/>
+  <path fill="#2F9CF4" d="M392 352 496 292v512l-104-60z"/>
+  <path fill="#0D66D0" d="M528 292 632 352v392l-104 60z"/>
+  <path fill="#5CB8FF" d="M496 292h32v512l-16 10-16-10z"/>
+</svg>
+"""
+
 
 FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -193,20 +202,50 @@ def render_icon(size: int, include_background: bool = True) -> Image.Image:
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def render_mark(size: int) -> Image.Image:
+    scale = 4
+    canvas = size * scale
+    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
+    def s(value: float) -> int:
+        return round(value * canvas / 1024)
+
+    draw.polygon(
+        [
+            (s(512), s(64)),
+            (s(816), s(240)),
+            (s(816), s(592)),
+            (s(712), s(652)),
+            (s(712), s(300)),
+            (s(512), s(184)),
+            (s(312), s(300)),
+            (s(312), s(652)),
+            (s(208), s(592)),
+            (s(208), s(240)),
+        ],
+        fill="#0D66D0",
+    )
+    draw.polygon([(s(392), s(352)), (s(496), s(292)), (s(496), s(804)), (s(392), s(744))], fill="#2F9CF4")
+    draw.polygon([(s(528), s(292)), (s(632), s(352)), (s(632), s(744)), (s(528), s(804))], fill="#0D66D0")
+    draw.polygon([(s(496), s(292)), (s(528), s(292)), (s(528), s(804)), (s(512), s(814)), (s(496), s(804))], fill="#5CB8FF")
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
 def save_png(path: Path, image: Image.Image) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, "PNG")
 
 
-def replace_logo_in_docs(icon: Image.Image) -> None:
+def replace_logo_in_docs(mark: Image.Image) -> None:
     replacements = {
         "docs/assets/agenthub-readme-hero.png": [
-            ((478, 5, 576, 106), 88),
-            ((568, 337, 628, 407), 56),
+            ((478, 5, 576, 106), 58),
+            ((568, 337, 628, 407), 34),
         ],
         "docs/assets/agenthub-architecture-overview.png": [
-            ((486, 0, 565, 85), 72),
-            ((1242, 369, 1276, 408), 32),
+            ((486, 0, 565, 85), 50),
+            ((1242, 369, 1276, 408), 24),
         ],
     }
     for relative, entries in replacements.items():
@@ -214,8 +253,8 @@ def replace_logo_in_docs(icon: Image.Image) -> None:
         image = Image.open(path).convert("RGBA")
         draw = ImageDraw.Draw(image)
         for box, icon_size in entries:
-            draw.rounded_rectangle(box, radius=8, fill=(255, 255, 255, 255))
-            icon_small = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+            draw.rectangle(box, fill=(255, 255, 255, 255))
+            icon_small = mark.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
             x = box[0] + (box[2] - box[0] - icon_size) // 2
             y = box[1] + (box[3] - box[1] - icon_size) // 2
             image.alpha_composite(icon_small, (x, y))
@@ -224,6 +263,7 @@ def replace_logo_in_docs(icon: Image.Image) -> None:
 
 def main() -> None:
     write_text(ROOT / "assets/brand/agenthub-icon.svg", ICON_SVG)
+    write_text(ROOT / "assets/brand/agenthub-mark.svg", MARK_SVG)
     write_text(ROOT / "apps/web/public/favicon.svg", ICON_SVG)
     write_text(ROOT / "apps/mobile/android/app/src/main/assets/public/favicon.svg", ICON_SVG)
     write_text(ROOT / "apps/mobile/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml", FOREGROUND_SVG)
@@ -233,8 +273,10 @@ def main() -> None:
     write_text(ROOT / "apps/mobile/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml", ADAPTIVE_ICON_XML)
 
     icon_1024 = render_icon(1024, include_background=True)
+    mark_1024 = render_mark(1024)
     foreground_1024 = render_icon(1024, include_background=False)
     save_png(ROOT / "assets/brand/agenthub-icon.png", icon_1024)
+    save_png(ROOT / "assets/brand/agenthub-mark.png", mark_1024)
     save_png(ROOT / "apps/desktop/assets/icon.png", icon_1024.resize((512, 512), Image.Resampling.LANCZOS))
 
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
@@ -267,7 +309,7 @@ def main() -> None:
             foreground_1024.resize((size, size), Image.Resampling.LANCZOS),
         )
 
-    replace_logo_in_docs(icon_1024)
+    replace_logo_in_docs(mark_1024)
 
 
 if __name__ == "__main__":

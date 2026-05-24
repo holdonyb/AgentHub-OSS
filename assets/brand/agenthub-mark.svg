@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
+  <title>AgentHub mark</title>
+  <path fill="#0D66D0" d="M512 64 816 240v352l-104 60V300L512 184 312 300v352l-104-60V240z"/>
+  <path fill="#2F9CF4" d="M392 352 496 292v512l-104-60z"/>
+  <path fill="#0D66D0" d="M528 292 632 352v392l-104 60z"/>
+  <path fill="#5CB8FF" d="M496 292h32v512l-16 10-16-10z"/>
+</svg>
