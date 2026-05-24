@@ -14,7 +14,7 @@
 
 AgentHub 用来统一管理你自己机器上的 Codex、Claude、Kimi、OpenCode 等本地 agent runtime。
 
-你可以把 server 跑在笔记本、本地工作站或 VM 上，通过 Tailscale 或自己的 HTTPS 域名接入；然后在 Web、Android、Windows 桌面端统一控制多台电脑、多条终端 session、多个 agent backend。
+你可以把 server 跑在笔记本、本地工作站或 VM 上，通过 Tailscale private mode 或 HTTPS public relay 接入；然后在 Web、Android、Windows 桌面端统一控制多台电脑、多条终端 session、多个 agent backend。
 
 AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在你的机器上，使用你的文件、工具和运行环境；AgentHub 负责会话收件箱、控制界面、worker 接入和审计记录。
 
@@ -26,7 +26,23 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 - **多机器控制。** Windows 和 Linux worker 都可以接入，消息、健康检查和任务会路由到对应机器。
 - **手机和桌面都能用。** Web、Android APK、Windows 桌面端都可以接入同一个 AgentHub server；其中 Android APK 首启会先要求填写 server URL。
 - **Tailscale-first 私有模式。** 不需要把 worker 端口暴露到公网，也能从手机控制本机 agent。
+- **Public relay 公开入口。** 如果你有域名和 HTTPS 反代，也可以把 Web/App 入口放到公网，worker 仍然可以只走私网或出站连接。
 - **配置优先。** 语音识别、服务器地址、worker 根目录、provider 密钥都走配置，不写死维护者环境。
+
+## 典型使用场景
+
+- **只有一台主力电脑。** 直接在 Windows、macOS 或 Linux 上跑 AgentHub server，通过 Tailscale 地址让手机和桌面端接入；worker 可以和 server 在同一台机器上。
+- **一台云端 VM + 多台本地电脑。** VM 提供稳定 HTTPS 入口，本地 Windows / Linux worker 通过 Tailscale private mode 或 public relay 接入，适合长期在线和多机器协作。
+- **手机查看和轻量控制。** Android APK 首启填写你的 server URL，之后用同一个账号查看 session、发回复、处理审批和查看状态。
+- **不想暴露 worker。** 只把 Web/API 入口暴露给 HTTPS，worker 继续通过 Tailscale 或出站连接通信，不开放 SSH、数据库或 worker 端口。
+- **给工程 agent 部署。** 把 [Deployment brief template](docs/DEPLOYMENT_BRIEF.example.json) 填好，再让 Codex / Claude Code 按 [AI deployment runbook](docs/AI_DEPLOYMENT_RUNBOOK.md) 执行。
+
+小技巧：
+
+- 本机 server 场景下，Android 里优先填 Tailscale DNS 或 `100.x.y.z` 地址，避免局域网 IP 变化。
+- 公网 VM 场景下，Web/App 入口必须使用 HTTPS；普通公网 `http://` 不应该用于登录态。
+- worker 可以和 server 同机，也可以分布在多台电脑上；AgentHub 只负责任务路由和状态同步，agent runtime 仍然使用 worker 本机环境。
+- iOS client 和 macOS desktop 当前不是 first-party 支持面，但 `CONTRIBUTING.md` 已经放了贡献提示词和约束，欢迎社区补齐。
 
 ## 快速开始
 

@@ -14,7 +14,7 @@
 
 AgentHub unifies Codex, Claude, Kimi, OpenCode, and other local agent runtimes across your own machines.
 
-Run the server on a laptop or a VM. Connect through Tailscale or your own HTTPS domain. Control many computers, many terminal sessions, and many agent backends from Web, Android, or Windows desktop.
+Run the server on a laptop or a VM. Connect through Tailscale private mode or an HTTPS public relay. Control many computers, many terminal sessions, and many agent backends from Web, Android, or Windows desktop.
 
 AgentHub is not a hosted SaaS and not a generic remote shell. Your agents keep running on your machines, with your files, your tools, and your runtime environment. AgentHub is the session inbox, control surface, worker relay, and audit trail around them.
 
@@ -26,7 +26,23 @@ Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.
 - **Multi-machine control.** Register Windows and Linux workers, then route session input and health jobs to the right machine.
 - **Phone and desktop access.** Use Web, Android APK, or Windows desktop to continue work away from the terminal. The Android APK asks for your server URL on first launch before showing login.
 - **Tailscale-first private mode.** Start without opening worker ports to the public internet.
+- **HTTPS public relay.** If you have a domain and reverse proxy, expose the Web/App entry through HTTPS while workers still use private networking or outbound-only connections.
 - **Configuration-first setup.** Voice ASR, server URL, worker roots, and provider credentials are configuration, not hardcoded maintainer defaults.
+
+## Common Scenarios
+
+- **One main machine.** Run AgentHub server directly on Windows, macOS, or Linux. Point your phone and desktop client at the Tailscale URL. The worker can run on the same machine.
+- **Cloud VM plus local workers.** Put the server on a small VM with HTTPS. Connect Windows/Linux workers through Tailscale private mode or public relay for always-on access and multi-machine coordination.
+- **Phone-based check-ins.** Install the Android APK, enter your own server URL on first launch, then use the same account to inspect sessions, reply, approve prompts, and check worker state.
+- **No exposed workers.** Expose only the Web/API entry through HTTPS. Keep worker ports, SSH, and databases private.
+- **Agent-assisted deployment.** Fill in the [Deployment brief template](docs/DEPLOYMENT_BRIEF.example.json), then let Codex / Claude Code follow the [AI deployment runbook](docs/AI_DEPLOYMENT_RUNBOOK.md).
+
+Tips:
+
+- For local-server setups, prefer a Tailscale DNS name or `100.x.y.z` address in Android so LAN IP changes do not break the app.
+- For public VM setups, use HTTPS for Web/App login; do not use plain public `http://` for authenticated access.
+- A worker can live on the same machine as the server or on many separate machines. AgentHub routes jobs and syncs state; agent runtimes still use the worker's local environment.
+- iOS client and macOS desktop are not first-party surfaces yet. Contribution prompts and guardrails are already in `CONTRIBUTING.md`.
 
 ## Getting Started
 
