@@ -9,6 +9,11 @@ on:
 jobs:
   build-web-mobile-workers:
     runs-on: ubuntu-latest
+    env:
+      AGENTHUB_ANDROID_KEYSTORE_BASE64: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_BASE64 }}
+      AGENTHUB_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_PASSWORD }}
+      AGENTHUB_ANDROID_KEY_ALIAS: ${{ secrets.AGENTHUB_ANDROID_KEY_ALIAS }}
+      AGENTHUB_ANDROID_KEY_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +53,16 @@ jobs:
 
       - name: Build web console
         run: npm run web:build
+
+      - name: Decode Android signing key
+        shell: bash
+        run: |
+          test -n "$AGENTHUB_ANDROID_KEYSTORE_BASE64" || (echo "Missing AGENTHUB_ANDROID_KEYSTORE_BASE64 secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEYSTORE_PASSWORD" || (echo "Missing AGENTHUB_ANDROID_KEYSTORE_PASSWORD secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEY_ALIAS" || (echo "Missing AGENTHUB_ANDROID_KEY_ALIAS secret" && exit 1)
+          test -n "$AGENTHUB_ANDROID_KEY_PASSWORD" || (echo "Missing AGENTHUB_ANDROID_KEY_PASSWORD secret" && exit 1)
+          echo "$AGENTHUB_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/agenthub-upload-key.jks"
+          echo "AGENTHUB_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/agenthub-upload-key.jks" >> "$GITHUB_ENV"
 
       - name: Build Android APK
         run: npm run mobile:build:release

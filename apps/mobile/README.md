@@ -41,7 +41,7 @@ AGENTHUB_ANDROID_KEY_PASSWORD
 
 GitHub Actions reads the same values from repository secrets, with the keystore stored as `AGENTHUB_ANDROID_KEYSTORE_BASE64`.
 
-The public release flow publishes Android assets only when you cut a version tag that matches `v*`. If there is no GitHub Release yet, no public APK has been published yet.
+The public release flow publishes Android assets when you cut a version tag that matches `v*`. Download the packaged APK from the matching GitHub Release.
 
 Publish your signed debug APK to your own download path:
 
