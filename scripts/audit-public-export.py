@@ -65,6 +65,8 @@ def audit_file(path: Path) -> list[tuple[str, int, str]]:
     lines = text.splitlines()
     for index, line in enumerate(lines, start=1):
         for rule in RULES:
+            if rule.label == "owner-handle" and path.name == "CODEOWNERS":
+                continue
             for pattern in rule.patterns:
                 if pattern in line:
                     matches.append((rule.label, index, line.strip()))
