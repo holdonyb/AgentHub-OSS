@@ -16,6 +16,10 @@ describe('Android APK GitHub Actions workflow', () => {
       new URL('../../.github/workflows/android-apk.yml', import.meta.url),
       'utf-8',
     );
+    const releaseWorkflow = readFileSync(
+      new URL('../../.github/workflows/release.yml', import.meta.url),
+      'utf-8',
+    );
     const buildGradle = readFileSync(
       new URL('android/app/build.gradle', import.meta.url),
       'utf-8',
@@ -27,10 +31,14 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(workflow).toContain('Build signed debug APK');
     expect(workflow).toContain('Upload signed APKs');
     expect(workflow).toContain('apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk');
+    expect(releaseWorkflow).toContain("name: Release");
+    expect(releaseWorkflow).toContain('AGENTHUB_ANDROID_KEYSTORE_BASE64');
+    expect(releaseWorkflow).toContain('Decode Android signing key');
+    expect(releaseWorkflow).toContain('agenthub-android-release.apk');
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
-    expect(buildGradle).toContain('versionCode 13');
-    expect(buildGradle).toContain('versionName "1.12"');
+    expect(buildGradle).toContain('versionCode 14');
+    expect(buildGradle).toContain('versionName "0.1.0"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);
