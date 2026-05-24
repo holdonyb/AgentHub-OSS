@@ -4,6 +4,8 @@
 
 ## 个人 AI Agent 控制台
 
+![AgentHub README Hero](docs/assets/agenthub-readme-hero.png)
+
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-334155)](.github/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-public_preview-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0ea5e9.svg)](LICENSE)
@@ -15,6 +17,8 @@ AgentHub 用来统一管理你自己机器上的 Codex、Claude、Kimi、OpenCod
 你可以把 server 跑在笔记本、本地工作站或 VM 上，通过 Tailscale 或自己的 HTTPS 域名接入；然后在 Web、Android、Windows 桌面端统一控制多台电脑、多条终端 session、多个 agent backend。
 
 AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在你的机器上，使用你的文件、工具和运行环境；AgentHub 负责会话收件箱、控制界面、worker 接入和审计记录。
+
+架构关系和部署形态见：[架构图](docs/ARCHITECTURE.md)
 
 ## 它解决什么
 
@@ -90,6 +94,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 ## 文档入口
 
 - [English README](README.en.md)
+- [Architecture diagrams](docs/ARCHITECTURE.md)
 - [Local server mode](docs/LOCAL_SERVER_MODE.md)
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)

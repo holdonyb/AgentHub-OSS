@@ -4,6 +4,8 @@
 
 ## Personal Agent Control Plane
 
+![AgentHub README Hero](docs/assets/agenthub-readme-hero.png)
+
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-334155)](.github/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-public_preview-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0ea5e9.svg)](LICENSE)
@@ -15,6 +17,8 @@ AgentHub unifies Codex, Claude, Kimi, OpenCode, and other local agent runtimes a
 Run the server on a laptop or a VM. Connect through Tailscale or your own HTTPS domain. Control many computers, many terminal sessions, and many agent backends from Web, Android, or Windows desktop.
 
 AgentHub is not a hosted SaaS and not a generic remote shell. Your agents keep running on your machines, with your files, your tools, and your runtime environment. AgentHub is the session inbox, control surface, worker relay, and audit trail around them.
+
+Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.md)
 
 ## What It Does
 
@@ -90,6 +94,7 @@ Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 ## Docs
 
 - [中文 README](README.md)
+- [Architecture diagrams](docs/ARCHITECTURE.md)
 - [Local server mode](docs/LOCAL_SERVER_MODE.md)
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
