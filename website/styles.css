@@ -1,0 +1,276 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-alt: #eef4ff;
+  --text: #0f172a;
+  --muted: #475569;
+  --line: #dbe4f0;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --shadow: 0 20px 48px rgba(15, 23, 42, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #ffffff 0, var(--bg) 48rem);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.page {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 64px;
+}
+
+.page-narrow {
+  width: min(860px, calc(100% - 32px));
+}
+
+.hero {
+  padding: 28px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(219, 228, 240, 0.9);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+.hero-compact {
+  margin-top: 60px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand-mark {
+  width: 72px;
+  height: 72px;
+}
+
+.eyebrow {
+  font-size: 14px;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+h1 {
+  margin: 6px 0 0;
+  font-size: clamp(40px, 5vw, 72px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.1;
+}
+
+h3 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.lead {
+  margin-top: 24px;
+  font-size: 20px;
+  max-width: 920px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.button:hover {
+  text-decoration: none;
+}
+
+.button-primary {
+  background: linear-gradient(135deg, var(--primary), #60a5fa);
+  color: #fff;
+  border-color: transparent;
+}
+
+.button-primary:hover {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+}
+
+.hero-grid,
+.card-grid,
+.link-grid,
+.steps {
+  display: grid;
+  gap: 16px;
+}
+
+.hero-grid {
+  margin-top: 28px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stat,
+.card,
+.link-card,
+.step {
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.stat {
+  padding: 16px 18px;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stat-value {
+  margin-top: 8px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.band {
+  margin-top: 24px;
+  padding: 28px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(219, 228, 240, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.section-copy {
+  max-width: 860px;
+}
+
+.card-grid {
+  margin-top: 22px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card {
+  padding: 20px;
+}
+
+.image-band img {
+  margin-top: 22px;
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.steps {
+  margin-top: 22px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.step {
+  padding: 20px;
+}
+
+.step-index {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--panel-alt);
+  color: var(--primary);
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+
+.link-grid {
+  margin-top: 22px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.link-card {
+  padding: 20px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.link-card:hover {
+  text-decoration: none;
+  border-color: rgba(37, 99, 235, 0.28);
+}
+
+@media (max-width: 900px) {
+  .hero-grid,
+  .card-grid,
+  .steps,
+  .link-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page {
+    width: min(100% - 20px, 1180px);
+    padding-top: 16px;
+  }
+
+  .hero,
+  .band {
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .brand {
+    align-items: flex-start;
+  }
+
+  .brand-mark {
+    width: 56px;
+    height: 56px;
+  }
+
+  .lead {
+    font-size: 17px;
+  }
+}

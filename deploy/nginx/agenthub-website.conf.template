@@ -1,0 +1,102 @@
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __AGENTHUB_ROOT_DOMAIN__ www.__AGENTHUB_ROOT_DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    return 301 https://__AGENTHUB_ROOT_DOMAIN__$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __AGENTHUB_ROOT_DOMAIN__ www.__AGENTHUB_ROOT_DOMAIN__;
+
+    ssl_certificate __AGENTHUB_TLS_CERT__;
+    ssl_certificate_key __AGENTHUB_TLS_KEY__;
+
+    root __AGENTHUB_SITE_ROOT__;
+    index index.html;
+
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header X-Content-Type-Options nosniff;
+    add_header Referrer-Policy strict-origin-when-cross-origin;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    location = /docs {
+        return 302 https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs;
+    }
+
+    location = /download {
+        return 302 https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name docs.__AGENTHUB_ROOT_DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    return 301 https://docs.__AGENTHUB_ROOT_DOMAIN__$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name docs.__AGENTHUB_ROOT_DOMAIN__;
+
+    ssl_certificate __AGENTHUB_TLS_CERT__;
+    ssl_certificate_key __AGENTHUB_TLS_KEY__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    return 302 https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name app.__AGENTHUB_ROOT_DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    return 301 https://app.__AGENTHUB_ROOT_DOMAIN__$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name app.__AGENTHUB_ROOT_DOMAIN__;
+
+    ssl_certificate __AGENTHUB_TLS_CERT__;
+    ssl_certificate_key __AGENTHUB_TLS_KEY__;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/agenthub-certbot;
+    }
+
+    root __AGENTHUB_SITE_ROOT__;
+    index app/index.html;
+
+    location / {
+        try_files $uri $uri/ /app/index.html;
+    }
+}

@@ -49,6 +49,24 @@ sudo bash scripts/install-selfhost-linux.sh \
 
 After DNS is fixed, run the installer again with `--admin-email` to request a Let's Encrypt certificate.
 
+If you want to validate the machine before DNS is switched, you can also do a throwaway IP-based precheck:
+
+```bash
+sudo bash scripts/install-selfhost-linux.sh \
+  --domain 123.57.71.62 \
+  --public-base-url https://123.57.71.62 \
+  --skip-certbot \
+  --install-root /opt/agenthub-precheck
+
+bash scripts/check-selfhost.sh \
+  --base-url https://123.57.71.62 \
+  --expect-public-relay \
+  --expect-worker-bundles \
+  --insecure
+```
+
+This is only for a disposable smoke pass. After DNS is correct, rerun the normal domain-based install and checks.
+
 ## 3. Create the owner
 
 Read the bootstrap token on the VM:
@@ -122,6 +140,20 @@ Verify in the Web console:
 - reachable backends include installed CLIs
 - discovered sessions appear
 - sending a short prompt creates a job, changes to running, and completes or asks for approval
+
+If the Windows host already has real session data and has `uv` installed but no usable `python` / `py` launcher on `PATH`, you can still validate the bundle directly from the extracted worker directory:
+
+```powershell
+uv run --with-requirements workers\requirements.txt --python 3.13 python `
+  workers\local-windows\agenthub_windows_worker\main.py `
+  --api-url https://agenthub.example.com `
+  --worker-id windows-office-01 `
+  --connection-mode public_relay `
+  --workspace-root C:/Users/Administrator `
+  --once
+```
+
+After the first successful enroll, rerun the same command without the one-time enrollment token, or wrap it in a Scheduled Task for an always-on smoke worker. The real worker token is cached under `.runtime\<worker-id>.worker-token`.
 
 ## 7. Linux worker smoke
 

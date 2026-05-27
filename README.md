@@ -115,6 +115,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
+- [Public website deployment](docs/WEBSITE_DEPLOYMENT.md)
 - [Branding and logo source](docs/BRANDING.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security model](docs/SECURITY.md)
