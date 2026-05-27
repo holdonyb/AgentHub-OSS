@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentHub | Self-hosted AI Agent Control Plane</title>
+    <meta
+      name="description"
+      content="AgentHub 是一个 self-hosted control plane，用来统一管理你自己机器上的 Codex、Claude、Kimi、OpenCode session。"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="brand">
+          <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
+          <div>
+            <div class="eyebrow">Self-hosted AI Agent Control Plane</div>
+            <h1>AgentHub</h1>
+          </div>
+        </div>
+        <p class="lead">
+          多设备、多电脑、多 Agent Runtime 的统一控制平面。把 server 跑在本机或 VM 上，通过
+          Tailscale private mode 或 HTTPS public relay，统一控制 Codex、Claude、Kimi、OpenCode。
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">下载 Release</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">自托管开始</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__">GitHub</a>
+        </div>
+        <div class="hero-grid">
+          <div class="stat">
+            <div class="stat-label">部署方式</div>
+            <div class="stat-value">Local / VM / Tailscale</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">当前客户端</div>
+            <div class="stat-value">Web / Android / Windows</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">当前 worker</div>
+            <div class="stat-value">Windows / Linux</div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="band">
+          <div class="section-copy">
+            <h2>它解决什么</h2>
+            <p>
+              AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在你的机器上，使用你的文件、工具和运行环境；AgentHub
+              负责会话收件箱、控制界面、worker 接入和审计记录。
+            </p>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <h3>统一会话收件箱</h3>
+              <p>把本机和远程机器上的 Codex、Claude、Kimi、OpenCode 会话放到一个入口里。</p>
+            </article>
+            <article class="card">
+              <h3>多机器控制</h3>
+              <p>Windows 和 Linux worker 都能接入，任务会被路由到对应机器执行。</p>
+            </article>
+            <article class="card">
+              <h3>手机可控</h3>
+              <p>Android 可以直接处理审批、发回复、查看 session 和 worker 状态。</p>
+            </article>
+            <article class="card">
+              <h3>私有优先</h3>
+              <p>优先走 Tailscale private mode；需要公网入口时，再单独挂 HTTPS public relay。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="band image-band">
+          <div class="section-copy">
+            <h2>两种入口，并行成立</h2>
+            <p>
+              Tailscale private mode 和 HTTPS public relay 不是二选一。你可以只走私网，也可以只暴露 Web/API
+              入口，同时让 worker 继续通过私网或出站连接通信。
+            </p>
+          </div>
+          <img src="/assets/agenthub-architecture-overview.png" alt="AgentHub architecture" class="architecture" />
+        </section>
+
+        <section class="band image-band">
+          <div class="section-copy">
+            <h2>先跑起来，再考虑规模化</h2>
+            <p>
+              对个人和小团队来说，最实用的起点是把 server 跑在本地笔记本、工作站或一台小 VM 上。当前 release
+              已经覆盖 Web、Android、Windows Desktop、Windows/Linux worker。
+            </p>
+          </div>
+          <img src="/assets/agenthub-readme-hero.png" alt="AgentHub hero" class="hero-image" />
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>开始路径</h2>
+          </div>
+          <div class="steps">
+            <article class="step">
+              <div class="step-index">1</div>
+              <h3>没有 VM</h3>
+              <p>直接把 server 跑在自己的电脑上，然后用 Tailscale 地址让 Android 或 Windows Desktop 接入。</p>
+              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/LOCAL_SERVER_MODE.md">Local server mode</a>
+            </article>
+            <article class="step">
+              <div class="step-index">2</div>
+              <h3>有公网入口</h3>
+              <p>在 Ubuntu VM 上跑 self-host，给 Web/API 配 HTTPS，再让 worker 走私网或出站连接。</p>
+              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">Self-host quickstart</a>
+            </article>
+            <article class="step">
+              <div class="step-index">3</div>
+              <h3>让另一个 agent 帮你部署</h3>
+              <p>直接把 deployment brief 和 runbook 给 Codex、Claude Code 或其他工程 agent。</p>
+              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/AI_DEPLOYMENT_RUNBOOK.md">Deployment runbook</a>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>下载与文档</h2>
+          </div>
+          <div class="link-grid">
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">Android APK / Windows Desktop / worker bundles</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/CONFIGURATION_REFERENCE.md">配置参考</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/TAILSCALE_PRIVATE_MODE.md">Tailscale private mode</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/TESTING.md">测试与 smoke</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

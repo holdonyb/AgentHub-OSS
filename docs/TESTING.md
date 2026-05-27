@@ -68,3 +68,35 @@ For releases that touch workers, job state, mobile WebView, or Android native co
 3. Confirm the job leaves `queued/running` and ends as `succeeded` or a visible `failed` error.
 4. Install the freshly built APK and check the top status/cutout area, bottom nav, and reply bar on a real phone.
 
+If your public smoke domain has not switched yet, do one disposable precheck directly against the VM IP with `--skip-certbot` and `check-selfhost.sh --insecure`, then rerun the same smoke against the final HTTPS domain after DNS is correct.
+
+## Live Smoke Reference: Canary + Windows Worker
+
+The current canary flow has already been proven against a real public relay deployment:
+
+- `https://canary.myagenthub.dev`
+- real Windows worker host
+- real discovered Kimi session
+- repeated `worker.heartbeat`
+- repeated `session.discovery`
+- real `health_check` job `queued -> claimed -> succeeded`
+
+That matters because it closes the gap between "bundle downloads and API health are fine" and "a long-running Windows worker can actually stay online and drain work".
+
+If the Windows host already has real session data but does not have a reliable `python` / `py` launcher on `PATH`, the fallback that worked in production smoke was:
+
+1. Download and extract `agenthub-worker-windows.zip`.
+2. Use `uv` directly from the host, for example:
+
+```powershell
+uv run --with-requirements workers\requirements.txt --python 3.13 python `
+  workers\local-windows\agenthub_windows_worker\main.py `
+  --api-url https://agenthub.example.com `
+  --worker-id windows-office-01 `
+  --connection-mode public_relay `
+  --workspace-root C:/Users/Administrator `
+  --once
+```
+
+3. After enrollment succeeds, remove the one-time enrollment token and use the cached `.runtime/<worker-id>.worker-token` for recurring runs or a scheduled task.
+

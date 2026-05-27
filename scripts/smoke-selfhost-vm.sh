@@ -31,7 +31,7 @@ Options:
   --ssh-user USER            SSH user, default root
   --ssh-key PATH             SSH private key path
   --ssh-port PORT            SSH port, default 22
-  --domain DOMAIN            Domain or Tailscale DNS name served by the smoke VM
+  --domain DOMAIN            Domain, Tailscale DNS name, or raw IP served by the smoke VM
   --base-url URL             External URL, default https://DOMAIN
   --repo-url URL             Git repository URL, default https://github.com/YOUR_ORG/AgentHub.git
   --branch BRANCH            Branch/ref to install, default main
@@ -57,6 +57,13 @@ log() {
 fail() {
   printf '[agenthub-selfhost-vm-smoke] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+is_ip_literal() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 0
+  [[ "$value" == *:* ]] && return 0
+  return 1
 }
 
 require_value() {
@@ -183,8 +190,14 @@ if [[ -z "$base_url" ]]; then
   base_url="https://$domain"
 fi
 
-if [[ "$allow_production_domain" != "1" && "$domain" != *.example.com && "$domain" != *.test && "$domain" != *.invalid && "$domain" != localhost && "$domain" != *.ts.net ]]; then
-  fail "Refusing to run self-host smoke against a non-disposable domain without --allow-production-domain"
+if [[ "$allow_production_domain" != "1" ]]; then
+  if is_ip_literal "$domain"; then
+    if [[ "$skip_certbot" != "1" ]]; then
+      fail "Raw IP smoke targets require --skip-certbot"
+    fi
+  elif [[ "$domain" != *.example.com && "$domain" != *.test && "$domain" != *.invalid && "$domain" != localhost && "$domain" != *.ts.net ]]; then
+    fail "Refusing to run self-host smoke against a non-disposable domain without --allow-production-domain"
+  fi
 fi
 
 if [[ "$install_root" == "/opt/agenthub" ]]; then

@@ -2361,7 +2361,7 @@ describe('AgentHub console', () => {
     expect(await screen.findByText(/移动端复制全文/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '复制全文' }));
     await waitFor(() => expect(nativeCopyText).toHaveBeenCalledWith(longText));
-    expect(screen.getByText('已复制')).toBeInTheDocument();
+    expect(await screen.findByText('已复制')).toBeInTheDocument();
     delete (window as unknown as { AgentHubAndroid?: unknown }).AgentHubAndroid;
   });
 

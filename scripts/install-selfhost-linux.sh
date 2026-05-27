@@ -177,7 +177,7 @@ install_dependencies_and_build() {
 
   if [[ "$skip_npm_ci" != "1" ]]; then
     log "installing Node dependencies"
-    npm ci
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
   fi
 
   log "building Web assets"
