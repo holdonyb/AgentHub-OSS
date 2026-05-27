@@ -6,7 +6,9 @@ AgentHub-OSS is the public self-hosted distribution of AgentHub. It packages the
 
 ## Current State
 
-The public repo already builds and documents the core self-hosted product surface. In this round, the repo gained an initial public website surface under `website/`, a website nginx deployment template, a website deployment script, and a safer self-host smoke path that can validate a disposable VM by raw IP with a self-signed certificate before DNS is ready. The canary Ubuntu host is now up at `https://canary.myagenthub.dev` with a valid Let's Encrypt certificate, worker bundle downloads, and public relay rejection verified by live smoke. The public entry site is also live on `https://myagenthub.dev`, with `https://www.myagenthub.dev` covered by the same certificate, `docs.myagenthub.dev` redirecting to GitHub docs, and `app.myagenthub.dev` serving a placeholder hosted-entry page.
+The public repo already builds and documents the core self-hosted product surface. In this round, the repo gained an initial public website surface under `website/`, a website nginx deployment template, a website deployment script, and a safer self-host smoke path that can validate a disposable VM by raw IP with a self-signed certificate before DNS is ready. The public entry site is live on `https://myagenthub.dev`, with `https://www.myagenthub.dev` covered by the same certificate, `docs.myagenthub.dev` redirecting to GitHub docs, and `app.myagenthub.dev` serving a placeholder hosted-entry page.
+
+The canary deployment has now been moved onto `gpu-server` after the previous Beijing VM hit an upstream domain-level ingress problem that broke public TLS only when accessed through `canary.myagenthub.dev`. The public canary remains exposed at `https://canary.myagenthub.dev`, but it now shares the stable public edge with the website host while keeping a separate AgentHub install root and API service. During that migration, the self-host nginx template was corrected so `/.well-known/acme-challenge/` stays reachable over plain HTTP instead of being swallowed by the port-80 HTTPS redirect, which makes fresh Let's Encrypt issuance reliable on new hosts.
 
 ## Active Work
 
@@ -92,6 +94,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-27: Promoted the Ubuntu canary from raw-IP precheck to `https://canary.myagenthub.dev` with a valid Let's Encrypt certificate and a passing public self-host smoke.
 - 2026-05-27: Deployed the static public website to `https://myagenthub.dev`, expanded the certificate to include `www.myagenthub.dev`, and wired `docs.myagenthub.dev` / `app.myagenthub.dev` on the public host.
 - 2026-05-27: Completed a real Windows public-relay smoke on `120.26.35.12`: scheduled task running, persistent heartbeats visible on canary, Kimi session discovery active, and `health_check` jobs automatically claimed and completed.
+- 2026-05-28: Moved `canary.myagenthub.dev` onto `gpu-server` after the previous Beijing VM showed a domain-level ingress/TLS reset problem, and fixed the self-host nginx template so HTTP ACME challenge paths are served before the HTTPS redirect.
 
 ## Next Step
 
