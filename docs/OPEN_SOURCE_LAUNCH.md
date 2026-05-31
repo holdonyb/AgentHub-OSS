@@ -13,6 +13,7 @@ Keep the public story anchored in:
 - self-hosted
 - Tailscale-first
 - local machine can be the server
+- Docker mode
 - phone can control local agent sessions
 
 ## Supported surface for v0.1
@@ -90,6 +91,6 @@ Homepage must answer four questions immediately:
 
 Use this as a base for HN, X, or community posts:
 
-> Open sourced AgentHub. It is a self-hosted control plane for Codex, Claude, Kimi, and other local agent sessions. You can run it on your own machine or a VM, use Tailscale for private access, and control local sessions from Web, Android, or Windows desktop.
+> Open sourced AgentHub. It is a self-hosted control plane for Codex, Claude, Kimi, and other local agent sessions. You can run it on your own machine, through Docker mode, or on a VM, use Tailscale for private access, and control local sessions from Web, Android, or Windows desktop.
 
 Adjust channel tone, but keep the claims narrow and verifiable.

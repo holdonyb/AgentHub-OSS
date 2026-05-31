@@ -1,8 +1,10 @@
 # Self-Host Quickstart
 
-This guide takes a fresh Ubuntu VM to a usable AgentHub control plane with HTTPS, Web console, downloadable worker bundles, and public relay worker enrollment.
+This guide is for the VM path. It takes a fresh Ubuntu VM to a usable AgentHub control plane with HTTPS, Web console, downloadable worker bundles, and public relay worker enrollment.
 
 Use this path when the worker machines can reach your AgentHub server over outbound HTTPS. Workers do not need inbound ports.
+
+If you want containers on one host instead of a VM-native install, use [DOCKER_SELFHOST_MODE.md](DOCKER_SELFHOST_MODE.md).
 
 ## 1. Prepare the VM
 

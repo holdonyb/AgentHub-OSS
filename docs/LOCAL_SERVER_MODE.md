@@ -2,6 +2,8 @@
 
 AgentHub already supports running the server directly on your own machine. You do not need a VM for the first setup.
 
+Docker is a separate install mode. Use this document when you want host-native Python + Node on the same machine. If you want containers instead, go to [DOCKER_SELFHOST_MODE.md](DOCKER_SELFHOST_MODE.md).
+
 This is the recommended path when:
 
 - you mainly want to control your own Codex, Claude, or Kimi sessions

@@ -10,7 +10,7 @@ The public repo already builds and documents the core self-hosted product surfac
 
 The canary deployment has now been moved onto `gpu-server` after the previous Beijing VM hit an upstream domain-level ingress problem that broke public TLS only when accessed through `canary.myagenthub.dev`. The public canary remains exposed at `https://canary.myagenthub.dev`, but it now shares the stable public edge with the website host while keeping a separate AgentHub install root and API service. During that migration, the self-host nginx template was corrected so `/.well-known/acme-challenge/` stays reachable over plain HTTP instead of being swallowed by the port-80 HTTPS redirect, which makes fresh Let's Encrypt issuance reliable on new hosts.
 
-This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `agenthub-worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release through Trusted Publishing or an npm automation token, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
+This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `agenthub-worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, an official Docker self-host stack under `deploy/docker-compose.selfhost.yml`, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release through Trusted Publishing or an npm automation token, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
 
 ## Active Work
 
@@ -20,6 +20,7 @@ Current focus is release operations for the open-source distribution:
 - public root-domain website handoff
 - release/test runbook hardening
 - install-surface simplification for server and worker onboarding
+- install-mode consolidation across local, Docker, and VM paths
 
 ## How to Run
 
@@ -48,6 +49,13 @@ sudo bash scripts/install-selfhost-linux.sh \
   --domain agenthub.example.com \
   --admin-email you@example.com \
   --install-root /opt/agenthub
+```
+
+For Docker self-host:
+
+```bash
+cp .env.example .env
+docker compose -f deploy/docker-compose.selfhost.yml up -d --build
 ```
 
 For the public website:
@@ -85,11 +93,16 @@ bash scripts/check-selfhost.sh \
 
 - `scripts/install-selfhost-linux.sh`: Ubuntu self-host installer; now skips Electron/Playwright binary download during server-side `npm ci`
 - `scripts/install.sh`: thin public Linux installer entrypoint, suitable for `curl ... | bash`
+- `deploy/docker-compose.selfhost.yml`: official Docker self-host stack with API + Web reverse proxy
+- `deploy/docker/Dockerfile.api`: API image build
+- `deploy/docker/Dockerfile.web`: Web + worker-bundle image build
+- `deploy/docker/nginx-selfhost.conf`: same-origin `/api` proxy for Docker mode
 - `scripts/check-worker-package-version.mjs`: validates that the repo version and `agenthub-worker` package version stay aligned, and optionally checks a `worker-vX.Y.Z` tag
 - `scripts/smoke-selfhost-vm.sh`: disposable VM smoke entrypoint; now supports raw IP targets with `--skip-certbot`
 - `scripts/deploy-website.sh`: static website deployment helper for the root public domain
 - `packages/worker-cli/`: npm worker installer package that downloads a worker bundle and calls the existing platform installer
 - `.github/workflows/npm-worker-publish.yml`: dedicated workflow for publishing `agenthub-worker` to npm
+- `docs/DOCKER_SELFHOST_MODE.md`: operator guide for the official compose path
 - `deploy/nginx/agenthub-website.conf.template`: nginx vhost template for `myagenthub.dev`, `www`, `docs`, and `app`
 - `website/`: static public website source
 - `docs/WEBSITE_DEPLOYMENT.md`: public website deployment guide
@@ -111,6 +124,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-27: Completed a real Windows public-relay smoke on `120.26.35.12`: scheduled task running, persistent heartbeats visible on canary, Kimi session discovery active, and `health_check` jobs automatically claimed and completed.
 - 2026-05-28: Moved `canary.myagenthub.dev` onto `gpu-server` after the previous Beijing VM showed a domain-level ingress/TLS reset problem, and fixed the self-host nginx template so HTTP ACME challenge paths are served before the HTTPS redirect.
 - 2026-05-31: Added `scripts/install.sh` as the public Linux self-host entrypoint, published it through the website deploy flow, added a new `agenthub-worker` npm workspace, taught both worker install scripts to fall back to `uv` for bootstrap when `python`/`py` are absent, added a dedicated worker publish workflow, and codified the `worker-vX.Y.Z` tag/version check path.
+- 2026-05-31: Added a first-class Docker self-host path with API/Web container builds, same-origin nginx proxying, downloadable worker bundles, and a dedicated Docker operator guide so install UX now centers on local, Docker, and VM modes.
 
 ## Next Step
 

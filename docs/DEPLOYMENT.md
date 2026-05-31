@@ -8,7 +8,7 @@ AgentHub supports two worker connection shapes:
 Private mode remains the default for personal deployments. Public relay mode exists for multi-tenant and non-Tailscale worker onboarding.
 Worker enrollment tokens are now the preferred bootstrap path for both modes. The legacy VM-wide `AGENTHUB_WORKER_REGISTRATION_TOKEN` stays available for compatibility, but new installs should use per-space enrollment.
 
-For a fresh VM install, start with [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md). For private-network deployments, use [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md). For running AgentHub directly on your own Windows, macOS, or Linux machine, use [LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md). For common failures, use [SELF_HOST_TROUBLESHOOTING.md](SELF_HOST_TROUBLESHOOTING.md).
+For a fresh VM install, start with [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md). For a containerized single-host install, use [DOCKER_SELFHOST_MODE.md](DOCKER_SELFHOST_MODE.md). For private-network deployments, use [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md). For running AgentHub directly on your own Windows, macOS, or Linux machine, use [LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md). For common failures, use [SELF_HOST_TROUBLESHOOTING.md](SELF_HOST_TROUBLESHOOTING.md).
 
 ## Local Dev
 
@@ -102,6 +102,7 @@ The public repo treats deployment as a source-based self-host workflow, not as a
 Recommended paths:
 
 - local machine as the server: [LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md)
+- Docker self-host: [DOCKER_SELFHOST_MODE.md](DOCKER_SELFHOST_MODE.md)
 - public VM with HTTPS: [SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md)
 - private tailnet deployment: [TAILSCALE_PRIVATE_MODE.md](TAILSCALE_PRIVATE_MODE.md)
 

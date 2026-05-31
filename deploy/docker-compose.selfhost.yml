@@ -1,0 +1,43 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      - AGENTHUB_DATABASE_URL=sqlite+pysqlite:////var/lib/agenthub/agenthub.db
+      - AGENTHUB_PUBLIC_BASE_URL=${AGENTHUB_PUBLIC_BASE_URL:-http://localhost:8080}
+      - AGENTHUB_COOKIE_SECURE=${AGENTHUB_COOKIE_SECURE:-false}
+    volumes:
+      - agenthub-data:/var/lib/agenthub
+    expose:
+      - "8019"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8019/healthz')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  agenthub-data:

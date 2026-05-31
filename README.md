@@ -46,6 +46,12 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 ## 快速开始
 
+先选一种 server 安装模式：
+
+- **本机模式。** 直接在自己的 Windows、macOS 或 Linux 机器上跑 AgentHub。
+- **Docker 模式。** 用 `docker compose` 在一台机器上起 API + Web 反代栈。
+- **VM 模式。** 用 Linux VM + HTTPS + nginx + certbot 做长期在线入口。
+
 ### 装 worker：直接走 npm / npx
 
 如果你的 server 已经起来了，单独给 Windows 或 Linux 机器装 worker 时，优先走这个入口：
@@ -93,6 +99,23 @@ npm run web:dev
 
 指南：[Local server mode](docs/LOCAL_SERVER_MODE.md)
 
+### Docker 模式：用 compose 起一个完整控制面
+
+适合想要统一容器化，但暂时不想自己手装 Python、Node.js、nginx 或 systemd 的场景。
+
+```bash
+cp .env.example .env
+docker compose -f deploy/docker-compose.selfhost.yml up -d --build
+```
+
+默认入口：
+
+```text
+http://localhost:8080
+```
+
+指南：[Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
+
 ### 有公网入口：用 HTTPS 自托管到 VM
 
 适合需要长期在线、worker bundle 下载、公网入口或 public relay 的场景。
@@ -134,6 +157,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 - [English README](README.en.md)
 - [Architecture diagrams](docs/ARCHITECTURE.md)
 - [Local server mode](docs/LOCAL_SERVER_MODE.md)
+- [Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)

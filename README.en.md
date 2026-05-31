@@ -46,6 +46,12 @@ Tips:
 
 ## Getting Started
 
+Choose one server install mode first:
+
+- **Local mode.** Run AgentHub directly on your own Windows, macOS, or Linux machine.
+- **Docker mode.** Use `docker compose` to start an API + Web reverse-proxy stack on one host.
+- **VM mode.** Use a Linux VM with HTTPS, nginx, and certbot for a long-running public entry.
+
 ### Install workers directly with npm / npx
 
 If your server is already running and you only need to attach a Windows or Linux machine as a worker, start here:
@@ -93,6 +99,23 @@ Open `http://localhost:5173`, create the first owner with `AGENTHUB_BOOTSTRAP_TO
 
 Guide: [Local server mode](docs/LOCAL_SERVER_MODE.md)
 
+### Docker mode: start a complete control plane with compose
+
+Use this when you want the simplest containerized path and do not want to install Python, Node.js, nginx, or systemd directly on the host.
+
+```bash
+cp .env.example .env
+docker compose -f deploy/docker-compose.selfhost.yml up -d --build
+```
+
+Default entry:
+
+```text
+http://localhost:8080
+```
+
+Guide: [Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
+
 ### Public VM: self-host with HTTPS
 
 Use this when you want always-on access, worker downloads, and optional public relay.
@@ -134,6 +157,7 @@ Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [中文 README](README.md)
 - [Architecture diagrams](docs/ARCHITECTURE.md)
 - [Local server mode](docs/LOCAL_SERVER_MODE.md)
+- [Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
 - [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
