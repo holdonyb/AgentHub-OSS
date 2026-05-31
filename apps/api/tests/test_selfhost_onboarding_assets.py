@@ -25,6 +25,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "docs/SELF_HOST_TROUBLESHOOTING.md",
         "scripts/export-oss.ps1",
         "scripts/audit-public-export.py",
+        "scripts/check-worker-package-version.mjs",
+        "scripts/install.sh",
         "scripts/install-selfhost-linux.sh",
         "scripts/check-selfhost.sh",
         "scripts/check-selfhost.ps1",
@@ -33,6 +35,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "scripts/smoke-worker-onboarding.sh",
         "deploy/nginx/agenthub-selfhost.conf.template",
         ".github/workflows/selfhost-smoke.yml",
+        ".github/workflows/npm-worker-publish.yml",
+        "docs/WORKER_PACKAGE_RELEASE.md",
     ]
 
     for relative_path in required_files:
@@ -47,6 +51,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "docs/AI_DEPLOYMENT_RUNBOOK.md" in readme
     assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
     assert "没有 VM：直接跑在自己的电脑上" in readme
+    assert "https://myagenthub.dev/install.sh" in readme
+    assert "npx @agenthub/worker" in readme
     assert "Tailscale-first 私有模式" in readme
     assert "Local server mode" in readme
     assert "Android APK" in readme
@@ -61,6 +67,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Codex, Claude, Kimi, OpenCode" in readme_en
     assert "Recommended: deploy from an agent-friendly prompt" in readme_en
     assert "No VM: run AgentHub on your own machine" in readme_en
+    assert "https://myagenthub.dev/install.sh" in readme_en
+    assert "npx @agenthub/worker" in readme_en
     assert "Tailscale-first private mode" in readme_en
     assert "Community welcome" in readme_en
     assert "中文 README" in readme_en
@@ -78,6 +86,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     quickstart = (REPO_ROOT / "docs" / "SELF_HOST_QUICKSTART.md").read_text(encoding="utf-8")
     tailscale = (REPO_ROOT / "docs" / "TAILSCALE_PRIVATE_MODE.md").read_text(encoding="utf-8")
     troubleshooting = (REPO_ROOT / "docs" / "SELF_HOST_TROUBLESHOOTING.md").read_text(encoding="utf-8")
+    worker_release = (REPO_ROOT / "docs" / "WORKER_PACKAGE_RELEASE.md").read_text(encoding="utf-8")
 
     for expected in [
         '"mode": "public_relay"',
@@ -137,6 +146,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "Create the owner",
         "Add Worker",
         "public_relay",
+        "install.sh | bash",
         "agenthub-worker-windows.zip",
         "agenthub-worker-linux.tar.gz",
         "scripts/check-selfhost.sh",
@@ -164,6 +174,15 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     ]:
         assert expected in troubleshooting
 
+    for expected in [
+        "@agenthub/worker",
+        "worker-v",
+        "NPM_TOKEN",
+        "same version as the repo",
+        "npm-worker-publish.yml",
+    ]:
+        assert expected in worker_release
+
 
 def test_contributing_covers_platform_scope_and_prompts() -> None:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
@@ -186,13 +205,16 @@ def test_contributing_covers_platform_scope_and_prompts() -> None:
 def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     export_ps1 = (REPO_ROOT / "scripts" / "export-oss.ps1").read_text(encoding="utf-8")
     export_audit = (REPO_ROOT / "scripts" / "audit-public-export.py").read_text(encoding="utf-8")
+    wrapper_script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     install_script = (REPO_ROOT / "scripts" / "install-selfhost-linux.sh").read_text(encoding="utf-8")
     check_sh = (REPO_ROOT / "scripts" / "check-selfhost.sh").read_text(encoding="utf-8")
     check_ps1 = (REPO_ROOT / "scripts" / "check-selfhost.ps1").read_text(encoding="utf-8")
     render_brief = (REPO_ROOT / "scripts" / "render-deployment-brief.py").read_text(encoding="utf-8")
+    worker_version_script = (REPO_ROOT / "scripts" / "check-worker-package-version.mjs").read_text(encoding="utf-8")
     smoke_vm = (REPO_ROOT / "scripts" / "smoke-selfhost-vm.sh").read_text(encoding="utf-8")
     smoke_worker = (REPO_ROOT / "scripts" / "smoke-worker-onboarding.sh").read_text(encoding="utf-8")
     workflow = (REPO_ROOT / ".github" / "workflows" / "selfhost-smoke.yml").read_text(encoding="utf-8")
+    publish_workflow = (REPO_ROOT / ".github" / "workflows" / "npm-worker-publish.yml").read_text(encoding="utf-8")
     nginx_template = (REPO_ROOT / "deploy" / "nginx" / "agenthub-selfhost.conf.template").read_text(encoding="utf-8")
 
     assert "param(" in export_ps1
@@ -204,6 +226,9 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "private-domain" in export_audit
     assert ("agenthub" + ".ifix.xin") in export_audit
     assert ("publish" + "-apk.ps1") in export_audit
+
+    assert "set -Eeuo pipefail" in wrapper_script
+    assert "install-selfhost-linux.sh" in wrapper_script
 
     assert "Usage: install-selfhost-linux.sh" in install_script
     assert "--domain" in install_script
@@ -239,6 +264,10 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "--json" in render_brief
     assert "OpenAI-compatible" in render_brief
 
+    assert "worker-v" in worker_version_script
+    assert "packages/worker-cli/package.json" in worker_version_script
+    assert "package.json" in worker_version_script
+
     assert "client_max_body_size" in nginx_template
     assert "location ^~ /api/internal/" in nginx_template
     assert "location ^~ /api/worker/" in nginx_template
@@ -264,6 +293,12 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "SELFHOST_SMOKE_OK" in workflow
     assert "smoke-selfhost-vm.sh" in workflow
     assert "run_worker_smoke" in workflow
+
+    assert "workflow_dispatch" in publish_workflow
+    assert "NPM_TOKEN" in publish_workflow
+    assert "@agenthub/worker" in publish_workflow
+    assert "packages/worker-cli" in publish_workflow
+    assert "check-worker-package-version.mjs" in publish_workflow
 
 
 def test_selfhost_shell_scripts_parse_with_bash_help() -> None:

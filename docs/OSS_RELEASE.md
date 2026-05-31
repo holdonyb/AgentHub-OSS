@@ -43,6 +43,12 @@ The export keeps the public-facing versions of:
 
 These files are intentionally treated as OSS overlay files instead of being overwritten blindly from the private repo.
 
+Worker-package release helpers that should also stay curated on the OSS side:
+
+- `.github/workflows/npm-worker-publish.yml`
+- `docs/WORKER_PACKAGE_RELEASE.md`
+- `scripts/check-worker-package-version.mjs`
+
 ## Audit
 
 Run audit manually if needed:
@@ -66,7 +72,9 @@ The audit blocks common leaks such as:
 4. run audit
 5. run public CI and build checks in `AgentHub-OSS`
 6. review diff in `AgentHub-OSS`
-7. push public repo and tag release
+7. if publishing the worker package, run `npm run worker:version:check`
+8. if publishing the worker package by tag, use `worker-vX.Y.Z`
+9. push public repo and tag release
 
 ## Validation
 

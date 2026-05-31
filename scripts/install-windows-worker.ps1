@@ -71,6 +71,10 @@ function Resolve-PythonBootstrap {
     if ($python) {
         return @($python.Source)
     }
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if ($uv) {
+        return @($uv.Source, "python")
+    }
     throw "Python 3 launcher not found on PATH"
 }
 

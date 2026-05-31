@@ -46,6 +46,17 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 ## 快速开始
 
+### 装 worker：直接走 npm / npx
+
+如果你的 server 已经起来了，单独给 Windows 或 Linux 机器装 worker 时，优先走这个入口：
+
+```bash
+npx @agenthub/worker doctor
+npx @agenthub/worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
+```
+
+Windows 机器同样可以用 `npx @agenthub/worker install`，只需要把 `--platform windows` 和 `--workspace-root E:/Work` 这类参数改成实际值。
+
 ### 推荐方式：直接给另一个 agent 一份部署提示词
 
 如果你想最快部署，优先从这两个文件开始，让另一个 agent 或实施人员直接照着执行：
@@ -86,6 +97,17 @@ npm run web:dev
 
 适合需要长期在线、worker bundle 下载、公网入口或 public relay 的场景。
 
+最快入口：
+
+```bash
+curl -fsSL https://myagenthub.dev/install.sh | bash -s -- \
+  --domain agenthub.example.com \
+  --install-root /opt/agenthub \
+  --admin-email you@example.com
+```
+
+仓库内脚本入口：
+
 ```bash
 sudo bash scripts/install-selfhost-linux.sh \
   --domain agenthub.example.com \
@@ -117,6 +139,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
 - [Public website deployment](docs/WEBSITE_DEPLOYMENT.md)
 - [Branding and logo source](docs/BRANDING.md)
+- [Worker package release](docs/WORKER_PACKAGE_RELEASE.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security model](docs/SECURITY.md)
 - [Testing](docs/TESTING.md)

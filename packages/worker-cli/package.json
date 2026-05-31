@@ -1,0 +1,43 @@
+{
+  "name": "@agenthub/worker",
+  "version": "0.1.1",
+  "description": "AgentHub worker installer and diagnostics CLI",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://myagenthub.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holdonyb/AgentHub-OSS.git",
+    "directory": "packages/worker-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/holdonyb/AgentHub-OSS/issues"
+  },
+  "keywords": [
+    "agenthub",
+    "worker",
+    "codex",
+    "claude",
+    "kimi",
+    "self-hosted"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "bin": {
+    "agenthub-worker": "./src/cli.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
+}

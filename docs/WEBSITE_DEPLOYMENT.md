@@ -36,6 +36,7 @@ sudo bash scripts/deploy-website.sh \
 What it does:
 
 - copies `website/` and selected brand/docs assets into `/var/www/agenthub-site`
+- publishes `install.sh` at `https://<domain>/install.sh`
 - renders `agenthub-website.conf`
 - enables the nginx site
 - reloads nginx after `nginx -t`
