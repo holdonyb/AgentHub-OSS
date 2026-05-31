@@ -1,6 +1,6 @@
 {
   "name": "@myagenthub/worker",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AgentHub worker installer and diagnostics CLI",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,7 @@
     "README.md"
   ],
   "bin": {
-    "agenthub-worker": "./src/cli.mjs"
+    "agenthub-worker": "src/cli.mjs"
   },
   "publishConfig": {
     "access": "public"

@@ -27,7 +27,7 @@ It supports:
 Example tag:
 
 ```text
-worker-v0.1.1
+worker-v0.1.2
 ```
 
 ## Publish auth
@@ -65,7 +65,7 @@ npm run worker:cli:test
 For a tag-based release:
 
 ```bash
-node scripts/check-worker-package-version.mjs --tag worker-v0.1.1
+node scripts/check-worker-package-version.mjs --tag worker-v0.1.2
 ```
 
 ## Publish rule
