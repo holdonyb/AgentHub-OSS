@@ -8,7 +8,7 @@ This document is the operator-facing reference for self-hosted AgentHub. Use it 
 
 ## Deployment Shapes
 
-AgentHub supports three practical layouts:
+AgentHub supports three primary install modes:
 
 ### 1. Local laptop server
 
@@ -18,7 +18,15 @@ Use this when you only want to run AgentHub on your own workstation.
 - Use `http://localhost:5173` or a LAN/Tailscale URL.
 - Good for one-user private control and local testing.
 
-### 2. Self-hosted VM with public relay
+### 2. Docker self-host mode
+
+Use this when you want one reproducible compose stack on a single host.
+
+- Run the official `docker compose` stack from `deploy/docker-compose.selfhost.yml`.
+- Good for local labs, Tailscale-only installs, and operators who prefer containers.
+- Default entry is `http://localhost:8080` unless you front it with your own reverse proxy.
+
+### 3. Self-hosted VM with public relay
 
 Use this when you have a VM plus a domain.
 
@@ -26,13 +34,19 @@ Use this when you have a VM plus a domain.
 - Browser, Android, and desktop connect to your HTTPS domain.
 - Workers connect over outbound HTTPS in `public_relay` mode.
 
-### 3. Tailscale private mode
+### Network overlay: Tailscale private mode
 
 Use this when your VM, laptop, Android phone, and workers are in the same tailnet.
 
 - AgentHub server URL can be a Tailscale DNS name or Tailscale IP.
 - Workers use `ConnectionMode private`.
 - This is the preferred private deployment shape when you do not want public worker traffic.
+
+See also:
+
+- [docs/LOCAL_SERVER_MODE.md](LOCAL_SERVER_MODE.md)
+- [docs/DOCKER_SELFHOST_MODE.md](DOCKER_SELFHOST_MODE.md)
+- [docs/SELF_HOST_QUICKSTART.md](SELF_HOST_QUICKSTART.md)
 
 ## Core Server Settings
 

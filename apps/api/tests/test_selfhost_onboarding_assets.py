@@ -16,6 +16,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     required_files = [
         "docs/AI_DEPLOYMENT_RUNBOOK.md",
         "docs/DEPLOYMENT_BRIEF.example.json",
+        "docs/DOCKER_SELFHOST_MODE.md",
         "docs/OSS_RELEASE.md",
         "docs/CONFIGURATION_REFERENCE.md",
         "docs/LOCAL_SERVER_MODE.md",
@@ -33,6 +34,10 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "scripts/render-deployment-brief.py",
         "scripts/smoke-selfhost-vm.sh",
         "scripts/smoke-worker-onboarding.sh",
+        "deploy/docker-compose.selfhost.yml",
+        "deploy/docker/Dockerfile.api",
+        "deploy/docker/Dockerfile.web",
+        "deploy/docker/nginx-selfhost.conf",
         "deploy/nginx/agenthub-selfhost.conf.template",
         ".github/workflows/selfhost-smoke.yml",
         ".github/workflows/npm-worker-publish.yml",
@@ -53,6 +58,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "没有 VM：直接跑在自己的电脑上" in readme
     assert "https://myagenthub.dev/install.sh" in readme
     assert "npx agenthub-worker" in readme
+    assert "Docker 模式" in readme
     assert "Tailscale-first 私有模式" in readme
     assert "Local server mode" in readme
     assert "Android APK" in readme
@@ -69,6 +75,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "No VM: run AgentHub on your own machine" in readme_en
     assert "https://myagenthub.dev/install.sh" in readme_en
     assert "npx agenthub-worker" in readme_en
+    assert "Docker mode" in readme_en
     assert "Tailscale-first private mode" in readme_en
     assert "Community welcome" in readme_en
     assert "中文 README" in readme_en
@@ -81,6 +88,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     ai_runbook = (REPO_ROOT / "docs" / "AI_DEPLOYMENT_RUNBOOK.md").read_text(encoding="utf-8")
     deployment_brief = (REPO_ROOT / "docs" / "DEPLOYMENT_BRIEF.example.json").read_text(encoding="utf-8")
     config_reference = (REPO_ROOT / "docs" / "CONFIGURATION_REFERENCE.md").read_text(encoding="utf-8")
+    docker_mode = (REPO_ROOT / "docs" / "DOCKER_SELFHOST_MODE.md").read_text(encoding="utf-8")
     local_server = (REPO_ROOT / "docs" / "LOCAL_SERVER_MODE.md").read_text(encoding="utf-8")
     open_source_launch = (REPO_ROOT / "docs" / "OPEN_SOURCE_LAUNCH.md").read_text(encoding="utf-8")
     quickstart = (REPO_ROOT / "docs" / "SELF_HOST_QUICKSTART.md").read_text(encoding="utf-8")
@@ -120,6 +128,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
 
     for expected in [
         "You do not need a VM",
+        "Docker is a separate install mode",
         "Windows",
         "macOS",
         "Linux",
@@ -129,9 +138,19 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         assert expected in local_server
 
     for expected in [
+        "Docker self-host mode",
+        "docker compose -f deploy/docker-compose.selfhost.yml up -d --build",
+        "http://localhost:8080",
+        "reverse proxy",
+        "AGENTHUB_COOKIE_SECURE=false",
+    ]:
+        assert expected in docker_mode
+
+    for expected in [
         "self-hosted",
         "Tailscale-first",
         "local machine can be the server",
+        "Docker mode",
         "Android APK",
         "Windows desktop",
         "Hacker News",
@@ -139,9 +158,18 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         assert expected in open_source_launch
 
     for expected in [
+        "Docker self-host mode",
+        "docker compose",
+        "LOCAL_SERVER_MODE.md",
+        "SELF_HOST_QUICKSTART.md",
+    ]:
+        assert expected in config_reference
+
+    for expected in [
         "Ubuntu 22.04",
         "DNS A record",
         "certbot",
+        "This guide is for the VM path",
         "AGENTHUB_BOOTSTRAP_TOKEN",
         "Create the owner",
         "Add Worker",
@@ -215,6 +243,10 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     worker_version_script = (REPO_ROOT / "scripts" / "check-worker-package-version.mjs").read_text(encoding="utf-8")
     smoke_vm = (REPO_ROOT / "scripts" / "smoke-selfhost-vm.sh").read_text(encoding="utf-8")
     smoke_worker = (REPO_ROOT / "scripts" / "smoke-worker-onboarding.sh").read_text(encoding="utf-8")
+    docker_compose = (REPO_ROOT / "deploy" / "docker-compose.selfhost.yml").read_text(encoding="utf-8")
+    docker_api = (REPO_ROOT / "deploy" / "docker" / "Dockerfile.api").read_text(encoding="utf-8")
+    docker_web = (REPO_ROOT / "deploy" / "docker" / "Dockerfile.web").read_text(encoding="utf-8")
+    docker_nginx = (REPO_ROOT / "deploy" / "docker" / "nginx-selfhost.conf").read_text(encoding="utf-8")
     workflow = (REPO_ROOT / ".github" / "workflows" / "selfhost-smoke.yml").read_text(encoding="utf-8")
     publish_workflow = (REPO_ROOT / ".github" / "workflows" / "npm-worker-publish.yml").read_text(encoding="utf-8")
     nginx_template = (REPO_ROOT / "deploy" / "nginx" / "agenthub-selfhost.conf.template").read_text(encoding="utf-8")
@@ -288,6 +320,27 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "/api/worker/jobs/claim" in smoke_worker
     assert "health_check" in smoke_worker
     assert "AGENTHUB_JSON_PAYLOAD" in smoke_worker
+
+    assert "services:" in docker_compose
+    assert "api:" in docker_compose
+    assert "web:" in docker_compose
+    assert "8080:80" in docker_compose
+    assert "docker/Dockerfile.api" in docker_compose
+    assert "docker/Dockerfile.web" in docker_compose
+    assert "AGENTHUB_DATABASE_URL=sqlite+pysqlite:////var/lib/agenthub/agenthub.db" in docker_compose
+
+    assert "FROM python:" in docker_api
+    assert "uvicorn" in docker_api
+    assert "apps/api/requirements.txt" in docker_api
+
+    assert "FROM node:" in docker_web
+    assert "FROM nginx:" in docker_web
+    assert "build-worker-bundle.py" in docker_web
+    assert "npm run web:build" in docker_web
+
+    assert "location /api/" in docker_nginx
+    assert "proxy_pass http://api:8019" in docker_nginx
+    assert "try_files $uri /index.html" in docker_nginx
 
     assert "workflow_dispatch" in workflow
     assert "AGENTHUB_SELFHOST_SMOKE_HOST" in workflow
