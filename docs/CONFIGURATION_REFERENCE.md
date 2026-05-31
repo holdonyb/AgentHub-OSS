@@ -63,7 +63,7 @@ Recommended HTTPS deployment settings:
 
 ```env
 AGENTHUB_COOKIE_SECURE=true
-AGENTHUB_CORS_ORIGINS=["https://agenthub.example.com"]
+AGENTHUB_CORS_ORIGINS=https://agenthub.example.com
 ```
 
 ## Voice ASR Provider Selection

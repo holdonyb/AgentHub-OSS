@@ -41,7 +41,7 @@ AGENTHUB_BOOTSTRAP_TOKEN=change-me-on-first-start
 AGENTHUB_SECRET_ENCRYPTION_KEY=replace-with-a-stable-random-secret
 AGENTHUB_PUBLIC_BASE_URL=http://localhost:8080
 AGENTHUB_COOKIE_SECURE=false
-AGENTHUB_CORS_ORIGINS=["http://localhost:8080"]
+AGENTHUB_CORS_ORIGINS=http://localhost:8080
 ```
 
 3. Start the stack:
@@ -66,11 +66,13 @@ If Docker mode is only for your own machines, set:
 
 ```env
 AGENTHUB_PUBLIC_BASE_URL=http://100.x.y.z:8080
-AGENTHUB_CORS_ORIGINS=["http://100.x.y.z:8080"]
+AGENTHUB_CORS_ORIGINS=http://100.x.y.z:8080
 AGENTHUB_COOKIE_SECURE=false
 ```
 
 If you front it with HTTPS on a tailnet DNS name or reverse proxy, switch `AGENTHUB_PUBLIC_BASE_URL` to `https://...` and set `AGENTHUB_COOKIE_SECURE=true`.
+
+`AGENTHUB_CORS_ORIGINS` accepts either a single origin string like `http://localhost:8080` or a JSON array if you need multiple origins.
 
 ### Public reverse proxy
 

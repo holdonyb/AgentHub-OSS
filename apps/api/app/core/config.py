@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     bootstrap_token: str | None = None
     worker_registration_token: str | None = None
     cookie_secure: bool = True
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:5173"])
     rate_limit_enabled: bool = True
     login_rate_limit_count: Annotated[int, Field(ge=1)] = 5
     login_rate_limit_window_seconds: Annotated[int, Field(ge=1)] = 300
@@ -39,6 +40,34 @@ class Settings(BaseSettings):
     doubao_stream_asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
     doubao_stream_asr_resource_id: str = "volc.bigasr.sauc.duration"
     doubao_stream_token_duration_seconds: Annotated[int, Field(ge=60, le=3600)] = 300
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def normalize_cors_origins(cls, value: object) -> list[str] | object:
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, str):
+            return value
+
+        raw = value.strip()
+        if not raw:
+            return []
+
+        if raw.startswith(("'", '"')) and raw.endswith(("'", '"')) and len(raw) >= 2:
+            raw = raw[1:-1].strip()
+
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                inner = raw[1:-1].strip()
+                if not inner:
+                    return []
+                return [item.strip().strip("'\"") for item in inner.split(",") if item.strip()]
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+
+        return [raw]
 
 
 @lru_cache
