@@ -125,6 +125,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-28: Moved `canary.myagenthub.dev` onto `gpu-server` after the previous Beijing VM showed a domain-level ingress/TLS reset problem, and fixed the self-host nginx template so HTTP ACME challenge paths are served before the HTTPS redirect.
 - 2026-05-31: Added `scripts/install.sh` as the public Linux self-host entrypoint, published it through the website deploy flow, added a new `agenthub-worker` npm workspace, taught both worker install scripts to fall back to `uv` for bootstrap when `python`/`py` are absent, added a dedicated worker publish workflow, and codified the `worker-vX.Y.Z` tag/version check path.
 - 2026-05-31: Added a first-class Docker self-host path with API/Web container builds, same-origin nginx proxying, downloadable worker bundles, and a dedicated Docker operator guide so install UX now centers on local, Docker, and VM modes.
+- 2026-05-31: Fixed the worker publish workflow to branch on a job-level `NODE_AUTH_TOKEN` env wrapper instead of reading `secrets.NPM_TOKEN` directly inside step `if` guards, which avoids false-failure workflow parses on ordinary `main` pushes.
 
 ## Next Step
 

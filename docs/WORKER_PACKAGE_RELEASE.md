@@ -50,6 +50,7 @@ Allowed actions: npm publish
 The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential once the package is configured as a trusted publisher.
 
 If `NPM_TOKEN` is present, the workflow uses the token path. If `NPM_TOKEN` is absent, it falls back to Trusted Publishing automatically.
+The workflow reads `NPM_TOKEN` through a job-level env var and branches on `env.NODE_AUTH_TOKEN`, not `secrets.*` directly inside step conditions, so plain `main` pushes do not fail at workflow parse time.
 
 Use the token path for first publish, emergency fallback, or until npm Trusted Publishing is configured for the package.
 

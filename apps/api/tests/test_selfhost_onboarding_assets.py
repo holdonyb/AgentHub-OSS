@@ -357,8 +357,9 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "check-worker-package-version.mjs" in publish_workflow
     assert "NODE_AUTH_TOKEN" in publish_workflow
     assert "Trusted Publishing" in publish_workflow
-    assert "secrets.NPM_TOKEN == ''" in publish_workflow
-    assert "secrets.NPM_TOKEN != ''" in publish_workflow
+    assert "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}" in publish_workflow
+    assert "env.NODE_AUTH_TOKEN == ''" in publish_workflow
+    assert "env.NODE_AUTH_TOKEN != ''" in publish_workflow
 
 
 def test_selfhost_shell_scripts_parse_with_bash_help() -> None:
