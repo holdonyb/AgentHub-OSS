@@ -1,6 +1,6 @@
 {
   "name": "agenthub",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "mobile:sync": "npm --workspace @agenthub/mobile run sync",
     "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
     "mobile:build:release": "npm --workspace @agenthub/mobile run build:release",
-    "worker:cli:test": "npm --workspace @myagenthub/worker run test -- --run",
+    "worker:cli:test": "npm --workspace agenthub-worker run test -- --run",
     "worker:version:check": "node scripts/check-worker-package-version.mjs"
   },
   "workspaces": [

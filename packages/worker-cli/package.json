@@ -1,6 +1,6 @@
 {
-  "name": "@myagenthub/worker",
-  "version": "0.1.2",
+  "name": "agenthub-worker",
+  "version": "0.1.3",
   "description": "AgentHub worker installer and diagnostics CLI",
   "type": "module",
   "license": "MIT",

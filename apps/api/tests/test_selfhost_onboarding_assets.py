@@ -52,7 +52,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
     assert "没有 VM：直接跑在自己的电脑上" in readme
     assert "https://myagenthub.dev/install.sh" in readme
-    assert "npx @myagenthub/worker" in readme
+    assert "npx agenthub-worker" in readme
     assert "Tailscale-first 私有模式" in readme
     assert "Local server mode" in readme
     assert "Android APK" in readme
@@ -68,7 +68,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Recommended: deploy from an agent-friendly prompt" in readme_en
     assert "No VM: run AgentHub on your own machine" in readme_en
     assert "https://myagenthub.dev/install.sh" in readme_en
-    assert "npx @myagenthub/worker" in readme_en
+    assert "npx agenthub-worker" in readme_en
     assert "Tailscale-first private mode" in readme_en
     assert "Community welcome" in readme_en
     assert "中文 README" in readme_en
@@ -175,7 +175,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         assert expected in troubleshooting
 
     for expected in [
-        "@myagenthub/worker",
+        "agenthub-worker",
         "worker-v",
         "Trusted Publishing",
         "NPM_TOKEN",
@@ -299,7 +299,7 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "workflow_dispatch" in publish_workflow
     assert "id-token: write" in publish_workflow
     assert 'node-version: "24"' in publish_workflow
-    assert "@myagenthub/worker" in publish_workflow
+    assert "agenthub-worker" in publish_workflow
     assert "packages/worker-cli" in publish_workflow
     assert "check-worker-package-version.mjs" in publish_workflow
     assert "NODE_AUTH_TOKEN" in publish_workflow

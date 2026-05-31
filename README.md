@@ -51,11 +51,11 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 如果你的 server 已经起来了，单独给 Windows 或 Linux 机器装 worker 时，优先走这个入口：
 
 ```bash
-npx @myagenthub/worker doctor
-npx @myagenthub/worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
+npx agenthub-worker doctor
+npx agenthub-worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
 ```
 
-Windows 机器同样可以用 `npx @myagenthub/worker install`，只需要把 `--platform windows` 和 `--workspace-root E:/Work` 这类参数改成实际值。
+Windows 机器同样可以用 `npx agenthub-worker install`，只需要把 `--platform windows` 和 `--workspace-root E:/Work` 这类参数改成实际值。
 
 ### 推荐方式：直接给另一个 agent 一份部署提示词
 

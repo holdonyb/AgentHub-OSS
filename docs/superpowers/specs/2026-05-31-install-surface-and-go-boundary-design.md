@@ -47,16 +47,16 @@ The worker install surface should move from “download a bundle and manually re
 Recommended user-facing commands:
 
 ```bash
-npx @myagenthub/worker install
-npx @myagenthub/worker enroll
-npx @myagenthub/worker service install
-npx @myagenthub/worker run
+npx agenthub-worker install
+npx agenthub-worker enroll
+npx agenthub-worker service install
+npx agenthub-worker run
 ```
 
 or:
 
 ```bash
-npm i -g @myagenthub/worker
+npm i -g agenthub-worker
 agenthub-worker install
 ```
 
@@ -392,7 +392,7 @@ Mitigation:
 
 ### Phase 1
 
-1. Build `@myagenthub/worker` CLI wrapper
+1. Build `agenthub-worker` CLI wrapper
 2. Make `uv` / `python` / `py` detection first-class
 3. Update docs to make npm worker install the recommended path
 

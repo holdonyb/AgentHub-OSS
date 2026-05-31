@@ -1,6 +1,6 @@
 # Worker Package Release
 
-This page defines how `@myagenthub/worker` is versioned and published.
+This page defines how `agenthub-worker` is versioned and published.
 
 ## Current rule
 
@@ -27,7 +27,7 @@ It supports:
 Example tag:
 
 ```text
-worker-v0.1.2
+worker-v0.1.3
 ```
 
 ## Publish auth
@@ -65,7 +65,7 @@ npm run worker:cli:test
 For a tag-based release:
 
 ```bash
-node scripts/check-worker-package-version.mjs --tag worker-v0.1.2
+node scripts/check-worker-package-version.mjs --tag worker-v0.1.3
 ```
 
 ## Publish rule
@@ -74,4 +74,4 @@ Do not publish a worker package version that diverges from the repo version unle
 
 Today the intended rule is simple:
 
-> `@myagenthub/worker` should use the same version as the repo.
+> `agenthub-worker` should use the same version as the repo.
