@@ -1,5 +1,5 @@
 {
-  "name": "@agenthub/worker",
+  "name": "@myagenthub/worker",
   "version": "0.1.1",
   "description": "AgentHub worker installer and diagnostics CLI",
   "type": "module",

@@ -51,11 +51,11 @@ Tips:
 If your server is already running and you only need to attach a Windows or Linux machine as a worker, start here:
 
 ```bash
-npx @agenthub/worker doctor
-npx @agenthub/worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
+npx @myagenthub/worker doctor
+npx @myagenthub/worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
 ```
 
-The same `npx @agenthub/worker install` entrypoint works on Windows with `--platform windows` and Windows-style workspace roots.
+The same `npx @myagenthub/worker install` entrypoint works on Windows with `--platform windows` and Windows-style workspace roots.
 
 ### Recommended: deploy from an agent-friendly prompt
 
