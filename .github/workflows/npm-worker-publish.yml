@@ -13,6 +13,8 @@ permissions:
 jobs:
   publish-worker:
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,13 +40,11 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/worker-v') }}
 
       - name: Publish agenthub-worker via Trusted Publishing
-        if: ${{ secrets.NPM_TOKEN == '' }}
+        if: ${{ env.NODE_AUTH_TOKEN == '' }}
         working-directory: packages/worker-cli
         run: npm publish --access public
 
       - name: Publish agenthub-worker via NPM token
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         working-directory: packages/worker-cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
