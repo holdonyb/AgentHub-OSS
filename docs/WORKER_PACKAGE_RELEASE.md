@@ -1,6 +1,6 @@
 # Worker Package Release
 
-This page defines how `@agenthub/worker` is versioned and published.
+This page defines how `@myagenthub/worker` is versioned and published.
 
 ## Current rule
 
@@ -30,11 +30,14 @@ Example tag:
 worker-v0.1.1
 ```
 
-## Trusted Publishing
+## Publish auth
 
-`@agenthub/worker` should publish through npm Trusted Publishing, not a long-lived token.
+The worker package can publish in two modes:
 
-Configure the trusted publisher on npmjs.com with:
+- preferred steady state: npm Trusted Publishing
+- first publish or scope bootstrap: npm automation token through `NPM_TOKEN`
+
+Trusted Publishing configuration on npmjs.com:
 
 ```text
 Provider: GitHub Actions
@@ -44,9 +47,9 @@ Workflow filename: npm-worker-publish.yml
 Allowed actions: npm publish
 ```
 
-The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential.
+The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential once the package scope is already trusted.
 
-Do not add `NPM_TOKEN` unless this project deliberately falls back to token-based publishing.
+For first publish under a new npm scope, set `NPM_TOKEN` to an automation token with publish rights for that scope. After the initial package exists and Trusted Publishing is configured, the secret can be removed.
 
 The publish command is `npm publish --access public` because scoped npm packages default to restricted/private access on first publish unless public access is explicit.
 
@@ -71,4 +74,4 @@ Do not publish a worker package version that diverges from the repo version unle
 
 Today the intended rule is simple:
 
-> `@agenthub/worker` should use the same version as the repo.
+> `@myagenthub/worker` should use the same version as the repo.

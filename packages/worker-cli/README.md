@@ -1,17 +1,17 @@
-# @agenthub/worker
+# @myagenthub/worker
 
-`@agenthub/worker` is the publishable npm entrypoint for installing and diagnosing AgentHub workers.
+`@myagenthub/worker` is the publishable npm entrypoint for installing and diagnosing AgentHub workers.
 
 It does not replace the existing Python worker runtime. It downloads the published worker bundle, extracts it, and calls the existing platform installer.
 
 ## Commands
 
 ```bash
-npx @agenthub/worker doctor
+npx @myagenthub/worker doctor
 ```
 
 ```bash
-npx @agenthub/worker install \
+npx @myagenthub/worker install \
   --api-url https://agenthub.example.com \
   --enrollment-token ahe_worker_enroll_xxx \
   --platform linux \
@@ -22,7 +22,7 @@ npx @agenthub/worker install \
 Windows example:
 
 ```powershell
-npx @agenthub/worker install `
+npx @myagenthub/worker install `
   --api-url https://agenthub.example.com `
   --enrollment-token ahe_worker_enroll_xxx `
   --platform windows `

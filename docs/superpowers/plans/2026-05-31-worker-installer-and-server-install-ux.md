@@ -4,7 +4,7 @@
 
 **Goal:** Add a first-class npm worker installer, close the current `uv` bootstrap gap in worker install scripts, and expose a simpler Linux server install entrypoint without changing the current FastAPI/Python control-plane architecture.
 
-**Architecture:** Keep the existing Python worker bundles and shell/PowerShell installers as the source of truth. Add a new Node workspace package `@agenthub/worker` that downloads a published bundle, extracts it to a temp directory, and invokes the existing platform installer with normalized arguments. Add a thin `scripts/install.sh` wrapper for Linux self-host installs and wire the public website deploy to publish that installer directly.
+**Architecture:** Keep the existing Python worker bundles and shell/PowerShell installers as the source of truth. Add a new Node workspace package `@myagenthub/worker` that downloads a published bundle, extracts it to a temp directory, and invokes the existing platform installer with normalized arguments. Add a thin `scripts/install.sh` wrapper for Linux self-host installs and wire the public website deploy to publish that installer directly.
 
 **Tech Stack:** Node.js ESM, npm workspaces, Vitest, PowerShell, bash, Python worker bundles, existing FastAPI test suite.
 
@@ -31,7 +31,7 @@ Update the root workspace list and add a focused test script for the new package
 ```json
 {
   "scripts": {
-    "worker:cli:test": "npm --workspace @agenthub/worker run test -- --run"
+    "worker:cli:test": "npm --workspace @myagenthub/worker run test -- --run"
   },
   "workspaces": [
     "apps/web",
@@ -49,7 +49,7 @@ Use a plain ESM package with a `bin` entry and Vitest:
 
 ```json
 {
-  "name": "@agenthub/worker",
+  "name": "@myagenthub/worker",
   "version": "0.1.1",
   "type": "module",
   "bin": {
@@ -362,7 +362,7 @@ git commit -m "feat: add single-entry server install wrapper"
 
 Record that the repo now exposes:
 
-- `@agenthub/worker` npm installer
+- `@myagenthub/worker` npm installer
 - first-class `uv` fallback in bundle installers
 - `scripts/install.sh` public Linux entrypoint
 
@@ -395,6 +395,6 @@ git commit -m "docs: record install surface improvements"
 
 - Spec coverage: this plan implements the first-phase scope from the design doc only; Go contract freezing remains intentionally out of scope for this implementation round.
 - Placeholder scan: no `TODO`, `TBD`, or vague “add error handling” language remains.
-- Type consistency: `@agenthub/worker`, `buildInstallPlan()`, `scripts/install.sh`, and the `uv` bootstrap behavior are named consistently across tasks.
+- Type consistency: `@myagenthub/worker`, `buildInstallPlan()`, `scripts/install.sh`, and the `uv` bootstrap behavior are named consistently across tasks.
 
 Plan complete and saved to `docs/superpowers/plans/2026-05-31-worker-installer-and-server-install-ux.md`. This round is already user-approved for execution, so continue inline with the first task set.
