@@ -35,7 +35,7 @@ worker-v0.1.3
 The worker package can publish in two modes:
 
 - preferred steady state: npm Trusted Publishing
-- first publish or scope bootstrap: npm automation token through `NPM_TOKEN`
+- fallback path: npm automation token through `NPM_TOKEN`
 
 Trusted Publishing configuration on npmjs.com:
 
@@ -47,9 +47,11 @@ Workflow filename: npm-worker-publish.yml
 Allowed actions: npm publish
 ```
 
-The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential once the package scope is already trusted.
+The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential once the package is configured as a trusted publisher.
 
-For first publish under a new npm scope, set `NPM_TOKEN` to an automation token with publish rights for that scope. After the initial package exists and Trusted Publishing is configured, the secret can be removed.
+If `NPM_TOKEN` is present, the workflow uses the token path. If `NPM_TOKEN` is absent, it falls back to Trusted Publishing automatically.
+
+Use the token path for first publish, emergency fallback, or until npm Trusted Publishing is configured for the package.
 
 The publish command is `npm publish --access public` because scoped npm packages default to restricted/private access on first publish unless public access is explicit.
 
