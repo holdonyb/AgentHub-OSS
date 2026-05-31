@@ -30,15 +30,25 @@ Example tag:
 worker-v0.1.1
 ```
 
-## Required secret
+## Trusted Publishing
 
-GitHub Actions needs:
+`@agenthub/worker` should publish through npm Trusted Publishing, not a long-lived token.
+
+Configure the trusted publisher on npmjs.com with:
 
 ```text
-NPM_TOKEN
+Provider: GitHub Actions
+Organization or user: holdonyb
+Repository: AgentHub-OSS
+Workflow filename: npm-worker-publish.yml
+Allowed actions: npm publish
 ```
 
-with publish access for the target npm scope.
+The workflow grants `id-token: write`, uses Node 24, and lets npm exchange the GitHub Actions OIDC identity for a short-lived publish credential.
+
+Do not add `NPM_TOKEN` unless this project deliberately falls back to token-based publishing.
+
+The publish command is `npm publish --access public` because scoped npm packages default to restricted/private access on first publish unless public access is explicit.
 
 ## Verification before publish
 
