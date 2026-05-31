@@ -23,7 +23,16 @@ curl -I http://agenthub.example.com
 
 ## 2. Install AgentHub
 
-Clone the repo on the VM, then run the installer:
+Fastest path from a fresh VM:
+
+```bash
+curl -fsSL https://myagenthub.dev/install.sh | bash -s -- \
+  --domain agenthub.example.com \
+  --admin-email you@example.com \
+  --install-root /opt/agenthub
+```
+
+If you want the repo-local path, clone the repo on the VM, then run the installer:
 
 ```bash
 sudo apt-get update

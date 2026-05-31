@@ -119,6 +119,8 @@ fi
 
 mkdir -p "$site_root/app" "$site_root/assets"
 cp "$source_root/website/styles.css" "$site_root/styles.css"
+cp "$source_root/scripts/install.sh" "$site_root/install.sh"
+chmod +x "$site_root/install.sh"
 cp "$source_root/docs/assets/agenthub-readme-hero.png" "$site_root/assets/agenthub-readme-hero.png"
 cp "$source_root/docs/assets/agenthub-architecture-overview.png" "$site_root/assets/agenthub-architecture-overview.png"
 cp "$source_root/assets/brand/agenthub-mark.svg" "$site_root/assets/agenthub-mark.svg"

@@ -182,6 +182,10 @@ resolve_python_bootstrap() {
     printf 'py -3'
     return 0
   fi
+  if command -v uv >/dev/null 2>&1; then
+    printf 'uv python'
+    return 0
+  fi
   echo "Python 3 launcher not found on PATH" >&2
   exit 1
 }

@@ -1,0 +1,44 @@
+name: Publish Worker Package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "worker-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test worker package
+        run: npm run worker:cli:test
+
+      - name: Check worker package version
+        run: node scripts/check-worker-package-version.mjs --tag "${GITHUB_REF_NAME}"
+        if: startsWith(github.ref, 'refs/tags/worker-v')
+
+      - name: Check worker package version (manual)
+        run: node scripts/check-worker-package-version.mjs
+        if: ${{ !startsWith(github.ref, 'refs/tags/worker-v') }}
+
+      - name: Publish @agenthub/worker
+        working-directory: packages/worker-cli
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

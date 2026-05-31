@@ -16,12 +16,15 @@
     "mobile:test": "npm --workspace @agenthub/mobile run test -- --run",
     "mobile:sync": "npm --workspace @agenthub/mobile run sync",
     "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
-    "mobile:build:release": "npm --workspace @agenthub/mobile run build:release"
+    "mobile:build:release": "npm --workspace @agenthub/mobile run build:release",
+    "worker:cli:test": "npm --workspace @agenthub/worker run test -- --run",
+    "worker:version:check": "node scripts/check-worker-package-version.mjs"
   },
   "workspaces": [
     "apps/web",
     "apps/mobile",
     "apps/desktop",
-    "packages/protocol"
+    "packages/protocol",
+    "packages/worker-cli"
   ]
 }

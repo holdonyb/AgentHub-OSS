@@ -160,8 +160,10 @@ def test_worker_scripts_wire_auto_update_configuration() -> None:
     assert "AGENTHUB_WORKER_AUTO_UPDATE" in install_windows
     assert "AGENTHUB_WORKER_BUNDLE_URL" in install_windows
     assert "AGENTHUB_WORKER_MANIFEST_URL" in install_windows
+    assert "Get-Command uv" in install_windows
     assert "update-windows-worker.ps1" in loop_windows
     assert "AGENTHUB_WORKER_AUTO_UPDATE" in install_linux
+    assert "command -v uv" in install_linux
     assert "ExecStartPre=" in install_linux
     assert "update-linux-worker.sh" in install_linux
 

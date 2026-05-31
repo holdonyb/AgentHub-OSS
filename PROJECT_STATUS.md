@@ -10,6 +10,8 @@ The public repo already builds and documents the core self-hosted product surfac
 
 The canary deployment has now been moved onto `gpu-server` after the previous Beijing VM hit an upstream domain-level ingress problem that broke public TLS only when accessed through `canary.myagenthub.dev`. The public canary remains exposed at `https://canary.myagenthub.dev`, but it now shares the stable public edge with the website host while keeping a separate AgentHub install root and API service. During that migration, the self-host nginx template was corrected so `/.well-known/acme-challenge/` stays reachable over plain HTTP instead of being swallowed by the port-80 HTTPS redirect, which makes fresh Let's Encrypt issuance reliable on new hosts.
 
+This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `@agenthub/worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
+
 ## Active Work
 
 Current focus is release operations for the open-source distribution:
@@ -17,7 +19,7 @@ Current focus is release operations for the open-source distribution:
 - canary/self-host smoke environment
 - public root-domain website handoff
 - release/test runbook hardening
-- remote Windows smoke path documentation and repeatability
+- install-surface simplification for server and worker onboarding
 
 ## How to Run
 
@@ -31,6 +33,15 @@ npm run web:dev
 ```
 
 For Ubuntu self-host:
+
+```bash
+curl -fsSL https://myagenthub.dev/install.sh | bash -s -- \
+  --domain agenthub.example.com \
+  --admin-email you@example.com \
+  --install-root /opt/agenthub
+```
+
+Repo-local equivalent:
 
 ```bash
 sudo bash scripts/install-selfhost-linux.sh \
@@ -73,8 +84,12 @@ bash scripts/check-selfhost.sh \
 ## Important Files
 
 - `scripts/install-selfhost-linux.sh`: Ubuntu self-host installer; now skips Electron/Playwright binary download during server-side `npm ci`
+- `scripts/install.sh`: thin public Linux installer entrypoint, suitable for `curl ... | bash`
+- `scripts/check-worker-package-version.mjs`: validates that the repo version and `@agenthub/worker` package version stay aligned, and optionally checks a `worker-vX.Y.Z` tag
 - `scripts/smoke-selfhost-vm.sh`: disposable VM smoke entrypoint; now supports raw IP targets with `--skip-certbot`
 - `scripts/deploy-website.sh`: static website deployment helper for the root public domain
+- `packages/worker-cli/`: npm worker installer package that downloads a worker bundle and calls the existing platform installer
+- `.github/workflows/npm-worker-publish.yml`: dedicated workflow for publishing `@agenthub/worker` to npm
 - `deploy/nginx/agenthub-website.conf.template`: nginx vhost template for `myagenthub.dev`, `www`, `docs`, and `app`
 - `website/`: static public website source
 - `docs/WEBSITE_DEPLOYMENT.md`: public website deployment guide
@@ -83,7 +98,7 @@ bash scripts/check-selfhost.sh \
 
 ## Known Risks / Blockers
 
-- Windows worker install still has an operator footgun on existing Windows hosts whose environment has `uv` available but no reliable `python` / `py` launcher on `PATH`. The bundle itself works, but the fallback path should stay documented until the install flow grows first-class `uv` detection.
+- `@agenthub/worker` now has package metadata and a publish workflow, but an actual npm release still depends on repository-side `NPM_TOKEN` configuration and version/tag discipline.
 - WinRM on the current smoke host is listening on `5985`, but cross-network local-account auth still depends on the target machine's local policy and the caller's TrustedHosts/auth settings. SSH is the more reliable automation path for this environment.
 
 ## Recent Decisions
@@ -95,11 +110,12 @@ bash scripts/check-selfhost.sh \
 - 2026-05-27: Deployed the static public website to `https://myagenthub.dev`, expanded the certificate to include `www.myagenthub.dev`, and wired `docs.myagenthub.dev` / `app.myagenthub.dev` on the public host.
 - 2026-05-27: Completed a real Windows public-relay smoke on `120.26.35.12`: scheduled task running, persistent heartbeats visible on canary, Kimi session discovery active, and `health_check` jobs automatically claimed and completed.
 - 2026-05-28: Moved `canary.myagenthub.dev` onto `gpu-server` after the previous Beijing VM showed a domain-level ingress/TLS reset problem, and fixed the self-host nginx template so HTTP ACME challenge paths are served before the HTTPS redirect.
+- 2026-05-31: Added `scripts/install.sh` as the public Linux self-host entrypoint, published it through the website deploy flow, added a new `@agenthub/worker` npm workspace, taught both worker install scripts to fall back to `uv` for bootstrap when `python`/`py` are absent, added a dedicated npm publish workflow for the worker package, and codified the `worker-vX.Y.Z` tag/version check path.
 
 ## Next Step
 
-Turn the verified rollout into a release gate:
+Turn the simplified install surface into a public release path:
 
-1. keep the Windows `uv` fallback documented for clean hosts
-2. run the full local CI/build suite on the branch
-3. merge the canary/website/release-ops changes and cut the next public release
+1. configure repository `NPM_TOKEN`
+2. publish `@agenthub/worker` with either `workflow_dispatch` or `worker-vX.Y.Z`
+3. run the full local CI/build suite before the next public release

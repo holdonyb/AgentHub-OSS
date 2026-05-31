@@ -46,6 +46,17 @@ Tips:
 
 ## Getting Started
 
+### Install workers directly with npm / npx
+
+If your server is already running and you only need to attach a Windows or Linux machine as a worker, start here:
+
+```bash
+npx @agenthub/worker doctor
+npx @agenthub/worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
+```
+
+The same `npx @agenthub/worker install` entrypoint works on Windows with `--platform windows` and Windows-style workspace roots.
+
 ### Recommended: deploy from an agent-friendly prompt
 
 If you want the fastest path, start with these two files and let another agent or operator drive the setup:
@@ -86,6 +97,17 @@ Guide: [Local server mode](docs/LOCAL_SERVER_MODE.md)
 
 Use this when you want always-on access, worker downloads, and optional public relay.
 
+Fastest entry:
+
+```bash
+curl -fsSL https://myagenthub.dev/install.sh | bash -s -- \
+  --domain agenthub.example.com \
+  --install-root /opt/agenthub \
+  --admin-email you@example.com
+```
+
+Repo-local entry:
+
 ```bash
 sudo bash scripts/install-selfhost-linux.sh \
   --domain agenthub.example.com \
@@ -116,6 +138,7 @@ Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 - [Tailscale private mode](docs/TAILSCALE_PRIVATE_MODE.md)
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
 - [Branding and logo source](docs/BRANDING.md)
+- [Worker package release](docs/WORKER_PACKAGE_RELEASE.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security model](docs/SECURITY.md)
 - [Testing](docs/TESTING.md)
