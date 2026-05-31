@@ -98,7 +98,7 @@ bash scripts/check-selfhost.sh \
 
 ## Known Risks / Blockers
 
-- `agenthub-worker` is now the canonical public package name. The older scoped package can be deprecated after the unscoped publish is confirmed.
+- `agenthub-worker` is now the canonical public package name. The older scoped package still exists, but all public docs and workflows now default to the unscoped package.
 - WinRM on the current smoke host is listening on `5985`, but cross-network local-account auth still depends on the target machine's local policy and the caller's TrustedHosts/auth settings. SSH is the more reliable automation path for this environment.
 
 ## Recent Decisions
@@ -116,6 +116,6 @@ bash scripts/check-selfhost.sh \
 
 Turn the simplified install surface into a public release path:
 
-1. publish `agenthub-worker` as the default public npm entrypoint
-2. deprecate `@myagenthub/worker` with a short migration note
+1. optionally configure npm Trusted Publishing for `agenthub-worker` and then remove `NPM_TOKEN`
+2. optionally deprecate `@myagenthub/worker` with a short migration note
 3. run the full local CI/build suite before the next public release
