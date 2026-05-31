@@ -177,9 +177,10 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     for expected in [
         "@agenthub/worker",
         "worker-v",
-        "NPM_TOKEN",
+        "Trusted Publishing",
         "same version as the repo",
         "npm-worker-publish.yml",
+        "id-token: write",
     ]:
         assert expected in worker_release
 
@@ -295,10 +296,12 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "run_worker_smoke" in workflow
 
     assert "workflow_dispatch" in publish_workflow
-    assert "NPM_TOKEN" in publish_workflow
+    assert "id-token: write" in publish_workflow
+    assert 'node-version: "24"' in publish_workflow
     assert "@agenthub/worker" in publish_workflow
     assert "packages/worker-cli" in publish_workflow
     assert "check-worker-package-version.mjs" in publish_workflow
+    assert "NODE_AUTH_TOKEN" not in publish_workflow
 
 
 def test_selfhost_shell_scripts_parse_with_bash_help() -> None:
