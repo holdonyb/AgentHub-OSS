@@ -37,7 +37,7 @@ jobs:
         run: node scripts/check-worker-package-version.mjs
         if: ${{ !startsWith(github.ref, 'refs/tags/worker-v') }}
 
-      - name: Publish @myagenthub/worker
+      - name: Publish agenthub-worker
         working-directory: packages/worker-cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

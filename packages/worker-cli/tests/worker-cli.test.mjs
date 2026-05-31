@@ -34,6 +34,7 @@ describe("package publish surface", () => {
     expect(packageJson.repository?.url).toContain("AgentHub-OSS");
     expect(packageJson.files).toContain("src");
     expect(packageJson.bin?.["agenthub-worker"]).toBe("src/cli.mjs");
+    expect(packageJson.name).toBe("agenthub-worker");
     expect(packageJson.version).toBe(rootPackageJson.version);
     expect(existsSync(readmePath)).toBe(true);
   });
