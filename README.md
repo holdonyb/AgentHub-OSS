@@ -46,11 +46,23 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 ## 快速开始
 
-先选一种 server 安装模式：
+先选一种 server 安装模式，再抄对应命令：
 
-- **本机模式。** 直接在自己的 Windows、macOS 或 Linux 机器上跑 AgentHub。
-- **Docker 模式。** 用 `docker compose` 在一台机器上起 API + Web 反代栈。
-- **VM 模式。** 用 Linux VM + HTTPS + nginx + certbot 做长期在线入口。
+| 模式 | 适合谁 | 默认入口 | 第一步 |
+| --- | --- | --- | --- |
+| **本机模式** | 只有一台主力电脑，先把自己的 agent 跑起来 | `http://localhost:43073` | `npm run local:dev` |
+| **Docker 模式** | 已有 Docker，希望少碰 Python/Node 运维细节 | `http://localhost:8080` | `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` |
+| **VM 模式** | 需要长期在线、HTTPS 和公网入口 | `https://agenthub.example.com` | `curl -fsSL https://myagenthub.dev/install.sh | bash` |
+
+完整对比见：
+
+- [Local server mode](docs/LOCAL_SERVER_MODE.md)
+- [Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
+- [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
+
+官网版安装选择页：
+
+- `https://myagenthub.dev/install/`
 
 ### 装 worker：直接走 npm / npx
 
@@ -82,20 +94,22 @@ Windows 机器同样可以用 `npx agenthub-worker install`，只需要把 `--pl
 - 然后进入对应站点的登录页
 - 不是免登录，而是先选自己的 server，再登录自己的账号
 
-### 没有 VM：直接跑在自己的电脑上
+### 本机模式：一条命令拉起本地控制台
 
-适合已经在用 Tailscale，只想先让手机或桌面端接管本机 agent 的场景。
+适合已经在用 Tailscale，只想先让手机或桌面端接管本机 agent 的场景。默认本机端口组是：
+
+- Web/UI: `http://localhost:43073`
+- API/healthz: `http://127.0.0.1:43080`
 
 ```powershell
 copy .env.example .env
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r apps/api/requirements.txt
 npm install
-npm run api:dev
-npm run web:dev
+npm run local:dev
 ```
 
-打开 `http://localhost:5173`，用 `AGENTHUB_BOOTSTRAP_TOKEN` 创建第一个 owner，然后在 Android 或 Windows 桌面端填入本机或 Tailscale 地址。
+打开 `http://localhost:43073`，用 `AGENTHUB_BOOTSTRAP_TOKEN` 创建第一个 owner，然后在 Android 或 Windows 桌面端填入本机或 Tailscale 地址。
 
 指南：[Local server mode](docs/LOCAL_SERVER_MODE.md)
 
@@ -139,6 +153,10 @@ sudo bash scripts/install-selfhost-linux.sh \
 ```
 
 指南：[Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
+
+如果你想先比对三条路径的差异，再决定装哪一种，官网完整版在这里：
+
+- `https://myagenthub.dev/install/`
 
 ## 当前支持范围
 

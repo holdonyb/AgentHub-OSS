@@ -26,7 +26,7 @@
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">下载 Release</a>
-          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">自托管开始</a>
+          <a class="button" href="/install/">先选安装模式</a>
           <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__">GitHub</a>
         </div>
         <div class="hero-grid">
@@ -98,26 +98,27 @@
 
         <section class="band">
           <div class="section-copy">
-            <h2>开始路径</h2>
+            <h2>先选安装模式</h2>
+            <p>本机、Docker、VM 三条路径都已经有真实 smoke。先按自己的机器条件选一种，再抄对应命令。</p>
           </div>
           <div class="steps">
             <article class="step">
               <div class="step-index">1</div>
-              <h3>没有 VM</h3>
-              <p>直接把 server 跑在自己的电脑上，然后用 Tailscale 地址让 Android 或 Windows Desktop 接入。</p>
-              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/LOCAL_SERVER_MODE.md">Local server mode</a>
+              <h3>本机模式</h3>
+              <p>一台主力电脑、先跑自己用的控制台。默认入口 `http://localhost:43073`。</p>
+              <a href="/install/">看本机命令</a>
             </article>
             <article class="step">
               <div class="step-index">2</div>
-              <h3>有公网入口</h3>
-              <p>在 Ubuntu VM 上跑 self-host，给 Web/API 配 HTTPS，再让 worker 走私网或出站连接。</p>
-              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">Self-host quickstart</a>
+              <h3>Docker 模式</h3>
+              <p>已经有 Docker，不想手装 Python/Node/nginx。默认入口 `http://localhost:8080`。</p>
+              <a href="/install/">看 compose 命令</a>
             </article>
             <article class="step">
               <div class="step-index">3</div>
-              <h3>让另一个 agent 帮你部署</h3>
-              <p>直接把 deployment brief 和 runbook 给 Codex、Claude Code 或其他工程 agent。</p>
-              <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/AI_DEPLOYMENT_RUNBOOK.md">Deployment runbook</a>
+              <h3>VM 模式</h3>
+              <p>需要长期在线、HTTPS 和 worker bundle 下载，就走 Linux VM + `install.sh`。</p>
+              <a href="/install/">看 VM 命令</a>
             </article>
           </div>
         </section>

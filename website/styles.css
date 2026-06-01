@@ -231,6 +231,33 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.mode-grid {
+  margin-top: 22px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mode-links {
+  margin-top: 18px;
+}
+
+.mode-links code,
+pre code {
+  font-family: "Consolas", "SFMono-Regular", monospace;
+}
+
+pre {
+  margin: 0;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow-x: auto;
+  line-height: 1.6;
+}
+
 .link-card {
   padding: 20px;
   color: var(--text);
@@ -242,9 +269,37 @@ p {
   border-color: rgba(37, 99, 235, 0.28);
 }
 
+.install-chooser {
+  grid-template-columns: 1fr;
+}
+
+.entry-meta {
+  margin: 10px 0 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.command-block {
+  margin: 0 0 16px;
+  padding: 16px;
+  overflow-x: auto;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.command-block code {
+  white-space: pre;
+}
+
 @media (max-width: 900px) {
   .hero-grid,
   .card-grid,
+  .mode-grid,
   .steps,
   .link-grid {
     grid-template-columns: 1fr;

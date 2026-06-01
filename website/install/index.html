@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentHub 安装模式 | Local / Docker / VM</title>
+    <meta
+      name="description"
+      content="按本机模式、Docker 模式或 VM 模式选择 AgentHub 的安装路径，并直接抄最短命令。"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="brand">
+          <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
+          <div>
+            <div class="eyebrow">Install Mode Chooser</div>
+            <h1>先选一种安装模式</h1>
+          </div>
+        </div>
+        <p class="lead">
+          先决定 AgentHub server 跑在哪里，再抄对应命令。默认推荐顺序是：本机模式起步，Docker 模式复现，VM 模式长期在线。
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">下载 Release</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__">GitHub</a>
+          <a class="button" href="/">返回首页</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="band">
+          <div class="section-copy">
+            <h2>本机模式</h2>
+            <p>适合只有一台主力电脑，先让手机或桌面端接管本机 agent。默认 Web 入口 `43073`，API 端口 `43080`。</p>
+          </div>
+          <div class="mode-grid">
+            <article class="card">
+              <h3>什么时候选它</h3>
+              <p>你已经在本机开发，想最快看到 Web 控制台，并通过 Tailscale 让手机或另一台电脑接入。</p>
+            </article>
+            <article class="card">
+              <h3>最短命令</h3>
+              <pre><code>copy .env.example .env
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r apps/api/requirements.txt
+npm install
+npm run local:dev</code></pre>
+            </article>
+          </div>
+          <p class="mode-links">
+            入口：<code>http://localhost:43073</code> · 指南：
+            <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/LOCAL_SERVER_MODE.md">Local server mode</a>
+          </p>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>Docker 模式</h2>
+            <p>适合已经在用 Docker，希望用容器把 API 和 Web 反代栈收进一条 compose，而不是自己装 Python / Node / nginx。</p>
+          </div>
+          <div class="mode-grid">
+            <article class="card">
+              <h3>什么时候选它</h3>
+              <p>你想要一个可复现的单机栈，先跑起来，再决定是否需要 HTTPS、VM 或更正式的反向代理。</p>
+            </article>
+            <article class="card">
+              <h3>最短命令</h3>
+              <pre><code>cp .env.example .env
+docker compose -f deploy/docker-compose.selfhost.yml up -d --build</code></pre>
+            </article>
+          </div>
+          <p class="mode-links">
+            入口：<code>http://localhost:8080</code> · 指南：
+            <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/DOCKER_SELFHOST_MODE.md">Docker self-host mode</a>
+          </p>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>VM 模式</h2>
+            <p>适合长期在线、HTTPS、公网入口、worker bundle 下载和 public relay。默认就是正式 self-host 形态。</p>
+          </div>
+          <div class="mode-grid">
+            <article class="card">
+              <h3>什么时候选它</h3>
+              <p>你已经有域名和 Linux VM，或者要给多台 worker 和多台客户端提供一个稳定入口。</p>
+            </article>
+            <article class="card">
+              <h3>最短命令</h3>
+              <pre><code>curl -fsSL https://myagenthub.dev/install.sh | bash -s -- \
+  --domain agenthub.example.com \
+  --install-root /opt/agenthub \
+  --admin-email you@example.com</code></pre>
+            </article>
+          </div>
+          <p class="mode-links">
+            入口：<code>https://agenthub.example.com</code> · 指南：
+            <a href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">Self-host quickstart</a>
+          </p>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>装 worker 或交给别的 agent</h2>
+            <p>Server 起来以后，worker 直接走 `npx agenthub-worker`。如果你想把整套部署交给别的工程 agent，就用 runbook 和 deployment brief。</p>
+          </div>
+          <div class="link-grid">
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/AI_DEPLOYMENT_RUNBOOK.md">AI deployment runbook</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/DEPLOYMENT_BRIEF.example.json">Deployment brief template</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/CONFIGURATION_REFERENCE.md">Configuration reference</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/TESTING.md">Testing and smoke</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
