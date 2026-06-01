@@ -49,8 +49,8 @@ copy .env.example .env
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r apps/api/requirements.txt
 npm install
-npm run web:build
 npm run api:dev
+npm run web:dev
 ```
 
 Then open the Web console locally and point Android or Windows desktop at either:
@@ -72,9 +72,16 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r apps/api/requirements.txt
 npm install
-npm run web:build
 npm run api:dev
+npm run web:dev
 ```
+
+For the first local smoke, use the Vite dev server as the user-facing entrypoint:
+
+- Web/UI entrypoint: `http://localhost:5173`
+- backend/API entrypoint: `http://127.0.0.1:8000`
+
+The API port is backend-only in this mode. Android, Windows desktop, and browser users should point at the Web entrypoint, not the raw API port.
 
 ## Tailscale-first setup
 
@@ -88,11 +95,11 @@ This is the simplest remote-control path when you do not have a VM.
 Typical examples:
 
 ```text
-http://100.x.y.z:8019
+http://100.x.y.z:5173
 https://agenthub.tailnet-name.ts.net
 ```
 
-If you use HTTPS on the tailnet hostname, prefer that over raw IP.
+If you use HTTPS on the tailnet hostname, prefer that over raw IP. That HTTPS hostname assumes you are fronting the local API and built Web console with your own reverse proxy; the bare `npm run web:dev` path exposes `5173`, not `8019`.
 
 On Android:
 
