@@ -127,6 +127,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-31: Added a first-class Docker self-host path with API/Web container builds, same-origin nginx proxying, downloadable worker bundles, and a dedicated Docker operator guide so install UX now centers on local, Docker, and VM modes.
 - 2026-05-31: Fixed the worker publish workflow to branch on a job-level `NODE_AUTH_TOKEN` env wrapper instead of reading `secrets.NPM_TOKEN` directly inside step `if` guards, which avoids false-failure workflow parses on ordinary `main` pushes.
 - 2026-05-31: Ran a full remote Docker smoke on `gpu-server`: `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` completed, `/healthz`, `/`, and `/downloads/workers/worker-bundles-manifest.json` all returned `200`, then the temporary stack was torn down. That smoke also exposed a real operator-UX bug in `AGENTHUB_CORS_ORIGINS`, which is now normalized from single-origin and compose-style bracketed values instead of requiring strict JSON parsing.
+- 2026-06-01: Ran a real local-mode smoke on Windows using `npm run api:dev` and `npm run web:dev`. `http://127.0.0.1:8000/healthz`, `http://127.0.0.1:5173/`, and the Vite proxy path `http://127.0.0.1:5173/healthz` all returned `200`. That smoke confirmed the local-mode docs needed to point operators and mobile/desktop clients at the Web entrypoint (`5173`) instead of implying that `web:build` alone or the raw API port was enough.
 
 ## Next Step
 
