@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "api:test": ".\\.venv\\Scripts\\python.exe -m pytest apps/api/tests -q",
-    "api:dev": ".\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --app-dir apps/api",
+    "api:dev": ".\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --app-dir apps/api --host 127.0.0.1 --port 43080",
     "web:dev": "npm --workspace @agenthub/web run dev",
+    "local:dev": "node scripts/run-local-dev.mjs",
     "web:test": "npm --workspace @agenthub/web run test -- --run",
     "web:build": "npm --workspace @agenthub/web run build",
     "desktop:test": "npm --workspace @agenthub/desktop run test -- --run",

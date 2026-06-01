@@ -66,8 +66,7 @@ def install_command(brief: dict[str, Any]) -> str:
                 "python -m venv .venv",
                 ".\\.venv\\Scripts\\python -m pip install -r apps/api/requirements.txt",
                 "npm install",
-                "npm run api:dev",
-                "npm run web:dev",
+                "npm run local:dev",
             ]
         )
 
@@ -100,7 +99,10 @@ def install_command(brief: dict[str, Any]) -> str:
 def smoke_command(brief: dict[str, Any]) -> str:
     mode = str(brief["mode"]).strip()
     if mode == "local_laptop":
-        return "Open http://localhost:5173 and create the owner with AGENTHUB_BOOTSTRAP_TOKEN."
+        return (
+            "Open http://localhost:43073, create the owner with AGENTHUB_BOOTSTRAP_TOKEN, "
+            "and use http://127.0.0.1:43080/healthz for the backend check."
+        )
     domain = str(get_nested(brief, "server.domain") or "").strip()
     insecure = " --insecure" if mode == "tailscale_private" else ""
     return (

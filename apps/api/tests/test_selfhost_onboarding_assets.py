@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -29,6 +30,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "scripts/check-worker-package-version.mjs",
         "scripts/install.sh",
         "scripts/install-selfhost-linux.sh",
+        "scripts/run-local-dev.mjs",
         "scripts/check-selfhost.sh",
         "scripts/check-selfhost.ps1",
         "scripts/render-deployment-brief.py",
@@ -39,6 +41,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "deploy/docker/Dockerfile.web",
         "deploy/docker/nginx-selfhost.conf",
         "deploy/nginx/agenthub-selfhost.conf.template",
+        "website/install/index.html",
         ".github/workflows/selfhost-smoke.yml",
         ".github/workflows/npm-worker-publish.yml",
         "docs/WORKER_PACKAGE_RELEASE.md",
@@ -55,10 +58,15 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "推荐方式：直接给另一个 agent 一份部署提示词" in readme
     assert "docs/AI_DEPLOYMENT_RUNBOOK.md" in readme
     assert "docs/DEPLOYMENT_BRIEF.example.json" in readme
-    assert "没有 VM：直接跑在自己的电脑上" in readme
+    assert "先选一种 server 安装模式，再抄对应命令" in readme
+    assert "本机模式：一条命令拉起本地控制台" in readme
     assert "https://myagenthub.dev/install.sh" in readme
+    assert "https://myagenthub.dev/install/" in readme
     assert "npx agenthub-worker" in readme
     assert "Docker 模式" in readme
+    assert "VM 模式" in readme
+    assert "npm run local:dev" in readme
+    assert "http://localhost:43073" in readme
     assert "Tailscale-first 私有模式" in readme
     assert "Local server mode" in readme
     assert "Android APK" in readme
@@ -72,13 +80,28 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Personal Agent Control Plane" in readme_en
     assert "Codex, Claude, Kimi, OpenCode" in readme_en
     assert "Recommended: deploy from an agent-friendly prompt" in readme_en
-    assert "No VM: run AgentHub on your own machine" in readme_en
+    assert "Choose one server install mode first, then copy the matching command" in readme_en
+    assert "Local mode: one command for the local control plane" in readme_en
     assert "https://myagenthub.dev/install.sh" in readme_en
+    assert "https://myagenthub.dev/install/" in readme_en
     assert "npx agenthub-worker" in readme_en
     assert "Docker mode" in readme_en
+    assert "VM mode" in readme_en
+    assert "npm run local:dev" in readme_en
+    assert "http://localhost:43073" in readme_en
     assert "Tailscale-first private mode" in readme_en
     assert "Community welcome" in readme_en
     assert "中文 README" in readme_en
+
+    website_index = (REPO_ROOT / "website" / "index.html").read_text(encoding="utf-8")
+    website_install = (REPO_ROOT / "website" / "install" / "index.html").read_text(encoding="utf-8")
+    assert 'href="/install/"' in website_index
+    assert "先选安装模式" in website_index
+    assert "本机模式" in website_install
+    assert "Docker 模式" in website_install
+    assert "VM 模式" in website_install
+    assert "npm run local:dev" in website_install
+    assert "http://localhost:43073" in website_install
 
     assert (REPO_ROOT / ".github" / "CODEOWNERS").is_file()
     assert (REPO_ROOT / ".github" / "pull_request_template.md").is_file()
@@ -95,6 +118,8 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     tailscale = (REPO_ROOT / "docs" / "TAILSCALE_PRIVATE_MODE.md").read_text(encoding="utf-8")
     troubleshooting = (REPO_ROOT / "docs" / "SELF_HOST_TROUBLESHOOTING.md").read_text(encoding="utf-8")
     worker_release = (REPO_ROOT / "docs" / "WORKER_PACKAGE_RELEASE.md").read_text(encoding="utf-8")
+    windows_worker = (REPO_ROOT / "workers" / "local-windows" / "agenthub_windows_worker" / "main.py").read_text(encoding="utf-8")
+    linux_worker = (REPO_ROOT / "workers" / "local-linux" / "agenthub_linux_worker" / "main.py").read_text(encoding="utf-8")
 
     for expected in [
         '"mode": "public_relay"',
@@ -123,6 +148,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "OPENAI_API_KEY",
         "AGENTHUB_OPENAI_ASR_BASE_URL",
         "AGENTHUB_OPENAI_ASR_MODEL",
+        "http://localhost:43073",
     ]:
         assert expected in config_reference
 
@@ -134,6 +160,9 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "Linux",
         "Tailscale",
         "CONFIGURATION_REFERENCE.md",
+        "npm run local:dev",
+        "http://localhost:43073",
+        "http://127.0.0.1:43080",
     ]:
         assert expected in local_server
 
@@ -212,6 +241,9 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "id-token: write",
     ]:
         assert expected in worker_release
+
+    assert "http://127.0.0.1:43080" in windows_worker
+    assert "http://127.0.0.1:43080" in linux_worker
 
 
 def test_contributing_covers_platform_scope_and_prompts() -> None:
@@ -480,6 +512,30 @@ def test_render_deployment_brief_renders_example_and_reports_missing_fields() ->
     assert "install-selfhost-linux.sh" in example.stdout
     assert "check-selfhost.sh" in example.stdout
     assert "Add Worker" in example.stdout
+
+    with tempfile.TemporaryDirectory(prefix="agenthub-local-brief-") as temp_dir:
+        local_brief = Path(temp_dir) / "local-brief.json"
+        local_brief.write_text(
+            json.dumps(
+                {
+                    "mode": "local_laptop",
+                    "voice": {"provider": "none"},
+                    "workers": {"windows": True, "workspace_roots": ["E:/Work"]},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        local_result = subprocess.run(
+            ["python", str(script_path), "--brief", str(local_brief)],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "npm run local:dev" in local_result.stdout
+        assert "http://localhost:43073" in local_result.stdout
+        assert "http://127.0.0.1:43080/healthz" in local_result.stdout
 
     with tempfile.TemporaryDirectory(prefix="agenthub-brief-") as temp_dir:
         broken_brief = Path(temp_dir) / "brief.json"

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     bootstrap_token: str | None = None
     worker_registration_token: str | None = None
     cookie_secure: bool = True
-    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:5173"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["http://localhost:43073"])
     rate_limit_enabled: bool = True
     login_rate_limit_count: Annotated[int, Field(ge=1)] = 5
     login_rate_limit_window_seconds: Annotated[int, Field(ge=1)] = 300

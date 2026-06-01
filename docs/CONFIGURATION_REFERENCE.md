@@ -15,7 +15,7 @@ AgentHub supports three primary install modes:
 Use this when you only want to run AgentHub on your own workstation.
 
 - Run API and Web on the same laptop or desktop.
-- Use `http://localhost:5173` or a LAN/Tailscale URL.
+- Use `http://localhost:43073` or a LAN/Tailscale URL.
 - Good for one-user private control and local testing.
 
 ### 2. Docker self-host mode
@@ -201,6 +201,11 @@ For server envs:
 ```env
 AGENTHUB_ENVIRONMENT=production
 ```
+
+For the local laptop server preset, the default local addresses are:
+
+- `http://localhost:43073` for Web/UI
+- `http://127.0.0.1:43080` for the API
 
 For secrets in AgentHub UI:
 

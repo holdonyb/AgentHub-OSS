@@ -23,8 +23,8 @@ This document is about the server role. It is separate from the currently publis
 
 ```text
 laptop or desktop
-  ├─ FastAPI API
-  ├─ built Web console
+  ├─ FastAPI API on 43080
+  ├─ Vite Web console on 43073
   ├─ optional local worker
   └─ Tailscale address
 
@@ -49,13 +49,12 @@ copy .env.example .env
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r apps/api/requirements.txt
 npm install
-npm run api:dev
-npm run web:dev
+npm run local:dev
 ```
 
 Then open the Web console locally and point Android or Windows desktop at either:
 
-- `http://localhost:5173` for local-only testing
+- `http://localhost:43073` for local-only testing
 - your Tailscale URL for remote access from phone or another machine
 
 Android behavior:
@@ -72,14 +71,13 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r apps/api/requirements.txt
 npm install
-npm run api:dev
-npm run web:dev
+npm run local:dev
 ```
 
-For the first local smoke, use the Vite dev server as the user-facing entrypoint:
+For the first local smoke, use the local preset as the user-facing entrypoint:
 
-- Web/UI entrypoint: `http://localhost:5173`
-- backend/API entrypoint: `http://127.0.0.1:8000`
+- Web/UI entrypoint: `http://localhost:43073`
+- backend/API entrypoint: `http://127.0.0.1:43080`
 
 The API port is backend-only in this mode. Android, Windows desktop, and browser users should point at the Web entrypoint, not the raw API port.
 
@@ -95,11 +93,11 @@ This is the simplest remote-control path when you do not have a VM.
 Typical examples:
 
 ```text
-http://100.x.y.z:5173
+http://100.x.y.z:43073
 https://agenthub.tailnet-name.ts.net
 ```
 
-If you use HTTPS on the tailnet hostname, prefer that over raw IP. That HTTPS hostname assumes you are fronting the local API and built Web console with your own reverse proxy; the bare `npm run web:dev` path exposes `5173`, not `8019`.
+If you use HTTPS on the tailnet hostname, prefer that over raw IP. That HTTPS hostname assumes you are fronting the local API and Web console with your own reverse proxy; the bare `npm run local:dev` path exposes `43073` for the browser and `43080` for the backend.
 
 On Android:
 
@@ -149,3 +147,17 @@ bash scripts/check-selfhost.sh --base-url https://agenthub.example.com --expect-
 ```
 
 Replace the URL with your own local reverse proxy or Tailscale hostname.
+
+## Advanced: run the two processes manually
+
+If you do not want the unified launcher, the equivalent manual commands are:
+
+```powershell
+npm run api:dev
+npm run web:dev
+```
+
+In that shape, the defaults are still:
+
+- Web/UI: `http://localhost:43073`
+- API: `http://127.0.0.1:43080`

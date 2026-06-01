@@ -46,11 +46,23 @@ Tips:
 
 ## Getting Started
 
-Choose one server install mode first:
+Choose one server install mode first, then copy the matching command:
 
-- **Local mode.** Run AgentHub directly on your own Windows, macOS, or Linux machine.
-- **Docker mode.** Use `docker compose` to start an API + Web reverse-proxy stack on one host.
-- **VM mode.** Use a Linux VM with HTTPS, nginx, and certbot for a long-running public entry.
+| Mode | Best for | Default entry | First command |
+| --- | --- | --- | --- |
+| **Local mode** | One main machine, fast private setup | `http://localhost:43073` | `npm run local:dev` |
+| **Docker mode** | Existing Docker host, less host-native setup | `http://localhost:8080` | `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` |
+| **VM mode** | Always-on HTTPS entry | `https://agenthub.example.com` | `curl -fsSL https://myagenthub.dev/install.sh | bash` |
+
+Full guides:
+
+- [Local server mode](docs/LOCAL_SERVER_MODE.md)
+- [Docker self-host mode](docs/DOCKER_SELFHOST_MODE.md)
+- [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
+
+Website install chooser:
+
+- `https://myagenthub.dev/install/`
 
 ### Install workers directly with npm / npx
 
@@ -82,20 +94,22 @@ After deployment:
 - it then opens the login page for that server
 - this is not passwordless access; it is server selection first, normal login second
 
-### No VM: run AgentHub on your own machine
+### Local mode: one command for the local control plane
 
-Use this when you already have Tailscale and want phone access to local agents without standing up a public VM.
+Use this when you already have Tailscale and want phone access to local agents without standing up a public VM. The default local ports are:
+
+- Web/UI: `http://localhost:43073`
+- API/healthz: `http://127.0.0.1:43080`
 
 ```powershell
 copy .env.example .env
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r apps/api/requirements.txt
 npm install
-npm run api:dev
-npm run web:dev
+npm run local:dev
 ```
 
-Open `http://localhost:5173`, create the first owner with `AGENTHUB_BOOTSTRAP_TOKEN`, then point Android or Windows desktop at your local or Tailscale URL.
+Open `http://localhost:43073`, create the first owner with `AGENTHUB_BOOTSTRAP_TOKEN`, then point Android or Windows desktop at your local or Tailscale URL.
 
 Guide: [Local server mode](docs/LOCAL_SERVER_MODE.md)
 
@@ -139,6 +153,10 @@ sudo bash scripts/install-selfhost-linux.sh \
 ```
 
 Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
+
+If you want a fuller chooser page before picking one of the three paths, use:
+
+- `https://myagenthub.dev/install/`
 
 ## Supported Surface
 

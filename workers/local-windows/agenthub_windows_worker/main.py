@@ -91,7 +91,7 @@ def _generate_worker_token() -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AgentHub Windows worker")
-    parser.add_argument("--api-url", default=os.getenv("AGENTHUB_API_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--api-url", default=os.getenv("AGENTHUB_API_URL", "http://127.0.0.1:43080"))
     parser.add_argument("--connection-mode", default=os.getenv("AGENTHUB_CONNECTION_MODE", "private"))
     parser.add_argument("--worker-id", default=os.getenv("AGENTHUB_WORKER_ID", socket.gethostname()))
     parser.add_argument("--worker-token")
