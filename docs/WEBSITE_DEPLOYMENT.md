@@ -8,6 +8,7 @@ This page covers the public root-domain website for the open-source AgentHub rep
 - `www.myagenthub.dev`: redirect to `myagenthub.dev`
 - `docs.myagenthub.dev`: redirect to GitHub docs
 - `app.myagenthub.dev`: placeholder page for the future hosted surface
+- `myagenthub.dev/release/`: versioned public release notes and checksum handoff
 - `canary.myagenthub.dev`: your disposable Ubuntu self-host smoke environment
 
 Do not point `canary` at the same machine as the public website if you want self-host smoke results to mean anything.
@@ -64,6 +65,7 @@ Edit:
 - `website/index.html`
 - `website/download/index.html`
 - `website/app/index.html`
+- `website/release/index.html`
 - `website/styles.css`
 
 Then run the same deploy script again.

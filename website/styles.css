@@ -303,6 +303,41 @@ pre {
   border-color: rgba(37, 99, 235, 0.28);
 }
 
+.release-table-wrap {
+  margin-top: 22px;
+  overflow-x: auto;
+}
+
+.release-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 760px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.release-table th,
+.release-table td {
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.release-table th {
+  background: var(--panel-alt);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.release-table code {
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  word-break: break-all;
+}
+
 .install-chooser {
   grid-template-columns: 1fr;
 }

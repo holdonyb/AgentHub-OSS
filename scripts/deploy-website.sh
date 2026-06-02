@@ -117,7 +117,7 @@ if [[ -z "$cert_dir" ]]; then
   cert_dir="/etc/letsencrypt/live/$domain"
 fi
 
-mkdir -p "$site_root/app" "$site_root/download" "$site_root/assets"
+mkdir -p "$site_root/app" "$site_root/download" "$site_root/release" "$site_root/assets"
 cp "$source_root/website/styles.css" "$site_root/styles.css"
 cp "$source_root/scripts/install.sh" "$site_root/install.sh"
 chmod +x "$site_root/install.sh"
@@ -139,6 +139,11 @@ replace_placeholder \
 replace_placeholder \
   "$source_root/website/download/index.html" \
   "$site_root/download/index.html" \
+  "__AGENTHUB_GITHUB_REPO__" "$github_repo"
+
+replace_placeholder \
+  "$source_root/website/release/index.html" \
+  "$site_root/release/index.html" \
   "__AGENTHUB_GITHUB_REPO__" "$github_repo"
 
 site_conf="$nginx_available_dir/agenthub-website.conf"

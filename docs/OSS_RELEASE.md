@@ -74,7 +74,12 @@ The audit blocks common leaks such as:
 6. review diff in `AgentHub-OSS`
 7. if publishing the worker package, run `npm run worker:version:check`
 8. if publishing the worker package by tag, use `worker-vX.Y.Z`
-9. push public repo and tag release
+9. update the public release surfaces together:
+   - GitHub Release body
+   - `website/release/index.html`
+   - `website/download/index.html`
+   - README links if the route set changed
+10. push public repo and tag release
 
 ## Validation
 
