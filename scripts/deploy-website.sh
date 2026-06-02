@@ -123,6 +123,7 @@ cp "$source_root/scripts/install.sh" "$site_root/install.sh"
 chmod +x "$site_root/install.sh"
 cp "$source_root/docs/assets/agenthub-readme-hero.png" "$site_root/assets/agenthub-readme-hero.png"
 cp "$source_root/docs/assets/agenthub-architecture-overview.png" "$site_root/assets/agenthub-architecture-overview.png"
+cp "$source_root/docs/assets/agenthub-release-showcase.svg" "$site_root/assets/agenthub-release-showcase.svg"
 cp "$source_root/assets/brand/agenthub-mark.svg" "$site_root/assets/agenthub-mark.svg"
 cp "$source_root/assets/brand/agenthub-icon.png" "$site_root/assets/agenthub-icon.png"
 
