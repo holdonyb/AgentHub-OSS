@@ -62,6 +62,7 @@ Expected:
 Edit:
 
 - `website/index.html`
+- `website/download/index.html`
 - `website/app/index.html`
 - `website/styles.css`
 

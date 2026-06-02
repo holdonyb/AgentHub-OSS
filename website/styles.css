@@ -238,6 +238,40 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.download-grid {
+  margin-top: 22px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.download-card {
+  padding: 20px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+}
+
+.download-kicker {
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.download-meta {
+  margin-top: 14px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stack-links {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+
 .mode-links {
   margin-top: 18px;
 }
@@ -299,6 +333,7 @@ pre {
 @media (max-width: 900px) {
   .hero-grid,
   .card-grid,
+  .download-grid,
   .mode-grid,
   .steps,
   .link-grid {
