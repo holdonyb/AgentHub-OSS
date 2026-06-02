@@ -63,6 +63,7 @@ Full guides:
 Website install chooser:
 
 - `https://myagenthub.dev/install/`
+- `https://myagenthub.dev/download/`
 
 ### Install workers directly with npm / npx
 
@@ -157,6 +158,7 @@ Guide: [Self-host quickstart](docs/SELF_HOST_QUICKSTART.md)
 If you want a fuller chooser page before picking one of the three paths, use:
 
 - `https://myagenthub.dev/install/`
+- `https://myagenthub.dev/download/`
 
 ## Supported Surface
 

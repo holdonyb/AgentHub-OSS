@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentHub 下载 | APK / Windows / Worker Bundles</title>
+    <meta
+      name="description"
+      content="从 AgentHub 官网下载 Android APK、Windows Desktop、Windows/Linux worker bundle 和 SHA256 校验文件。"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="brand">
+          <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
+          <div>
+            <div class="eyebrow">Release Downloads</div>
+            <h1>先拿客户端，再接自己的 server</h1>
+          </div>
+        </div>
+        <p class="lead">
+          这里提供公开 release 的稳定入口。Android、Windows Desktop、Windows/Linux worker bundle 和 SHA256
+          校验文件都从这里分发；真正的登录和数据仍然走你自己 self-host 的 AgentHub server。
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/install/">先选安装模式</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">查看 GitHub Release</a>
+          <a class="button" href="/">返回首页</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="band">
+          <div class="section-copy">
+            <h2>下载 release 资产</h2>
+            <p>这些链接都固定指向最新 release 的同名文件，适合放在官网、群聊、文档和演示视频里直接引用。</p>
+          </div>
+          <div class="download-grid">
+            <article class="download-card">
+              <div class="download-kicker">Android</div>
+              <h3>APK 客户端</h3>
+              <p>用于手机上查看 session、发回复、处理审批、收通知。首启先填写你自己的 AgentHub server URL。</p>
+              <div class="download-meta">文件：<code>agenthub-android-release.apk</code></div>
+              <div class="hero-actions">
+                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-android-release.apk">下载 APK</a>
+              </div>
+            </article>
+            <article class="download-card">
+              <div class="download-kicker">Windows Desktop</div>
+              <h3>桌面客户端</h3>
+              <p>用于 Windows 原生桌面接入。同样首启先填写 server URL，再进入登录页。由于 EXE 文件名带版本号，这里稳定跳到最新 release 页面。</p>
+              <div class="download-meta">入口：<code>latest release page</code></div>
+              <div class="hero-actions">
+                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">打开 release 页面</a>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>装 worker</h2>
+            <p>如果 server 已经起来，优先用 `agenthub-worker`。如果你更喜欢手工安装，也可以直接下载 bundle。</p>
+          </div>
+          <div class="download-grid">
+            <article class="download-card">
+              <div class="download-kicker">Recommended</div>
+              <h3>npx / npm 安装</h3>
+              <p>公开安装入口已经收敛成 unscoped 包名，后续文档和 runbook 都默认这条路径。</p>
+              <pre><code>npx agenthub-worker doctor
+npx agenthub-worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform windows --worker-id workstation-01 --workspace-root E:/Work</code></pre>
+            </article>
+            <article class="download-card">
+              <div class="download-kicker">Manual bundles</div>
+              <h3>Windows / Linux worker bundle</h3>
+              <p>适合你要把 worker 资产单独留档、手工分发，或者在没有 npm 的环境里解压安装。</p>
+              <div class="stack-links">
+                <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-windows.zip">下载 Windows worker bundle</a>
+                <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-linux.tar.gz">下载 Linux worker bundle</a>
+                <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/worker-bundles-manifest.json">查看 worker bundle manifest</a>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>校验、文档和下一步</h2>
+            <p>下载之后，下一步不是共享登录页，而是选自己的 server 形态，再按文档把 owner、worker 和客户端接起来。</p>
+          </div>
+          <div class="link-grid">
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS">SHA256SUMS</a>
+            <a class="link-card" href="/install/">先选安装模式</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">VM 部署指南</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/LOCAL_SERVER_MODE.md">本机模式指南</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/DOCKER_SELFHOST_MODE.md">Docker 模式指南</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/TAILSCALE_PRIVATE_MODE.md">Tailscale private mode</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

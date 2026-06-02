@@ -41,6 +41,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "deploy/docker/Dockerfile.web",
         "deploy/docker/nginx-selfhost.conf",
         "deploy/nginx/agenthub-selfhost.conf.template",
+        "website/download/index.html",
         "website/install/index.html",
         ".github/workflows/selfhost-smoke.yml",
         ".github/workflows/npm-worker-publish.yml",
@@ -94,9 +95,15 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "中文 README" in readme_en
 
     website_index = (REPO_ROOT / "website" / "index.html").read_text(encoding="utf-8")
+    website_download = (REPO_ROOT / "website" / "download" / "index.html").read_text(encoding="utf-8")
     website_install = (REPO_ROOT / "website" / "install" / "index.html").read_text(encoding="utf-8")
+    assert 'href="/download/"' in website_index
     assert 'href="/install/"' in website_index
     assert "先选安装模式" in website_index
+    assert "下载 release 资产" in website_download
+    assert "agenthub-android-release.apk" in website_download
+    assert "agenthub-worker-windows.zip" in website_download
+    assert "SHA256SUMS" in website_download
     assert "本机模式" in website_install
     assert "Docker 模式" in website_install
     assert "VM 模式" in website_install
