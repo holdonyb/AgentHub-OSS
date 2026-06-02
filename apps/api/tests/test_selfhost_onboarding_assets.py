@@ -43,6 +43,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "deploy/nginx/agenthub-selfhost.conf.template",
         "website/download/index.html",
         "website/install/index.html",
+        "website/release/index.html",
         ".github/workflows/selfhost-smoke.yml",
         ".github/workflows/npm-worker-publish.yml",
         "docs/WORKER_PACKAGE_RELEASE.md",
@@ -63,6 +64,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "本机模式：一条命令拉起本地控制台" in readme
     assert "https://myagenthub.dev/install.sh" in readme
     assert "https://myagenthub.dev/install/" in readme
+    assert "https://myagenthub.dev/release/" in readme
     assert "npx agenthub-worker" in readme
     assert "Docker 模式" in readme
     assert "VM 模式" in readme
@@ -85,6 +87,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Local mode: one command for the local control plane" in readme_en
     assert "https://myagenthub.dev/install.sh" in readme_en
     assert "https://myagenthub.dev/install/" in readme_en
+    assert "https://myagenthub.dev/release/" in readme_en
     assert "npx agenthub-worker" in readme_en
     assert "Docker mode" in readme_en
     assert "VM mode" in readme_en
@@ -97,13 +100,18 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     website_index = (REPO_ROOT / "website" / "index.html").read_text(encoding="utf-8")
     website_download = (REPO_ROOT / "website" / "download" / "index.html").read_text(encoding="utf-8")
     website_install = (REPO_ROOT / "website" / "install" / "index.html").read_text(encoding="utf-8")
+    website_release = (REPO_ROOT / "website" / "release" / "index.html").read_text(encoding="utf-8")
     assert 'href="/download/"' in website_index
     assert 'href="/install/"' in website_index
+    assert 'href="/release/"' in website_index
     assert "先选安装模式" in website_index
     assert "下载 release 资产" in website_download
     assert "agenthub-android-release.apk" in website_download
     assert "agenthub-worker-windows.zip" in website_download
     assert "SHA256SUMS" in website_download
+    assert "AgentHub v0.1.1" in website_release
+    assert "AgentHub-0.1.1-x64.exe" in website_release
+    assert "cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4" in website_release
     assert "本机模式" in website_install
     assert "Docker 模式" in website_install
     assert "VM 模式" in website_install

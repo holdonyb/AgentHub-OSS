@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentHub v0.1.1 | Release Notes</title>
+    <meta
+      name="description"
+      content="AgentHub v0.1.1 release notes: self-hosted AI agent control plane with Local / Docker / VM install paths, Android APK, Windows Desktop, and Windows/Linux worker bundles."
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="brand">
+          <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
+          <div>
+            <div class="eyebrow">Public Release Notes</div>
+            <h1>AgentHub v0.1.1</h1>
+          </div>
+        </div>
+        <p class="lead">
+          这是第一轮公开可用版本。重点不是再加一层概念，而是把 self-host 控制面、worker 接入、Android、Windows Desktop、Docker 和 VM 这几条真实链路收口到能下载、能安装、能 smoke、能复现。
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/download/">下载当前版本</a>
+          <a class="button" href="/install/">安装模式选择页</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/tag/v0.1.1">GitHub Release</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="band">
+          <div class="section-copy">
+            <h2>这个版本交付了什么</h2>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <h3>三种 server 安装路径</h3>
+              <p>Local / Docker / VM 三条路径都已经有真实 smoke，不再只是脚本和文档存在。</p>
+            </article>
+            <article class="card">
+              <h3>多端入口</h3>
+              <p>Web、Android APK、Windows Desktop 都能接入同一个 self-host server，worker 继续跑在你自己的机器上。</p>
+            </article>
+            <article class="card">
+              <h3>公开下载面</h3>
+              <p>官网已经有自己的 `/download/` 和 `/install/` 页面，不再只是把人直接甩到 GitHub。</p>
+            </article>
+            <article class="card">
+              <h3>worker 安装收敛</h3>
+              <p>优先走 `npx agenthub-worker`，手工 bundle 路径继续保留，Windows / Linux 都覆盖。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>当前 release 资产</h2>
+            <p>下列文件与当前 GitHub Release 一致。官网保留这组显式文件名和 SHA256，方便分享和校验。</p>
+          </div>
+          <div class="release-table-wrap">
+            <table class="release-table">
+              <thead>
+                <tr>
+                  <th>资产</th>
+                  <th>用途</th>
+                  <th>SHA256</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-android-release.apk"><code>agenthub-android-release.apk</code></a></td>
+                  <td>Android 客户端</td>
+                  <td><code>cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4</code></td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/AgentHub-0.1.1-x64.exe"><code>AgentHub-0.1.1-x64.exe</code></a></td>
+                  <td>Windows Desktop</td>
+                  <td><code>1ae212f4f43d2348287d369ec1c219e69dfb663205e12003d34e26347f16c140</code></td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-worker-windows.zip"><code>agenthub-worker-windows.zip</code></a></td>
+                  <td>Windows worker bundle</td>
+                  <td><code>4d87b3348aa456386405c28813da2c2d7aa9338257b8f0835a14ce05df2facfb</code></td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-worker-linux.tar.gz"><code>agenthub-worker-linux.tar.gz</code></a></td>
+                  <td>Linux worker bundle</td>
+                  <td><code>c99952260556cb40b3277629818ec88600d7f03ba564c9e14ce195f29070c433</code></td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/SHA256SUMS"><code>SHA256SUMS</code></a></td>
+                  <td>全量校验文件</td>
+                  <td><code>937fd0de76ea1cd5f5c31a1bf5542f9f11c5cafed67011d63870e93c9a8490c1</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>真实界面</h2>
+            <p>当前对外展示仍然坚持用真实产品截图，而不是营销插画。重点是证明：它确实能跑，确实能接自己的机器。</p>
+          </div>
+          <div class="card-grid">
+            <article class="card">
+              <h3>多端会话控制</h3>
+              <img src="/assets/agenthub-readme-hero.png" alt="AgentHub desktop and mobile screenshots" class="architecture" />
+            </article>
+            <article class="card">
+              <h3>接入关系</h3>
+              <img src="/assets/agenthub-architecture-overview.png" alt="AgentHub architecture overview" class="architecture" />
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="section-copy">
+            <h2>接下来怎么走</h2>
+            <p>如果你只是想试用，先去 `/download/` 和 `/install/`。如果你要对外分享，这一页、README 和 GitHub Release 正文现在使用同一套对外表述。</p>
+          </div>
+          <div class="link-grid">
+            <a class="link-card" href="/download/">下载页</a>
+            <a class="link-card" href="/install/">安装模式选择页</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/SELF_HOST_QUICKSTART.md">Self-host quickstart</a>
+            <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/tree/main/docs/OPEN_SOURCE_LAUNCH.md">Open-source launch checklist</a>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

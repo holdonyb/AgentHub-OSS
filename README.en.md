@@ -64,6 +64,7 @@ Website install chooser:
 
 - `https://myagenthub.dev/install/`
 - `https://myagenthub.dev/download/`
+- `https://myagenthub.dev/release/`
 
 ### Install workers directly with npm / npx
 
@@ -159,6 +160,7 @@ If you want a fuller chooser page before picking one of the three paths, use:
 
 - `https://myagenthub.dev/install/`
 - `https://myagenthub.dev/download/`
+- `https://myagenthub.dev/release/`
 
 ## Supported Surface
 

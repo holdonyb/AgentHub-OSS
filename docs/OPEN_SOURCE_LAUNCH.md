@@ -87,6 +87,13 @@ Homepage must answer four questions immediately:
 3. Can I run it without a VM
 4. What should I download first
 
+Public release surfaces should stay aligned:
+
+- `README.md` / `README.en.md`
+- `https://myagenthub.dev/download/`
+- `https://myagenthub.dev/release/`
+- the current GitHub Release body
+
 ## Short announcement seed
 
 Use this as a base for HN, X, or community posts:
