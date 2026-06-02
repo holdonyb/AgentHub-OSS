@@ -52,6 +52,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     for relative_path in required_files:
         assert (REPO_ROOT / relative_path).is_file(), relative_path
 
+    assert (REPO_ROOT / "docs" / "assets" / "agenthub-release-showcase.svg").is_file()
+
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     readme_en = (REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
     assert "[简体中文](README.md) | [English](README.en.md)" in readme
@@ -109,9 +111,11 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "agenthub-android-release.apk" in website_download
     assert "agenthub-worker-windows.zip" in website_download
     assert "SHA256SUMS" in website_download
+    assert "Claude / Codex / Kimi" in website_download
     assert "AgentHub v0.1.1" in website_release
     assert "AgentHub-0.1.1-x64.exe" in website_release
     assert "cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4" in website_release
+    assert "Claude / Codex / Kimi" in website_release
     assert "本机模式" in website_install
     assert "Docker 模式" in website_install
     assert "VM 模式" in website_install

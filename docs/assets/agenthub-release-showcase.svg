@@ -1,0 +1,115 @@
+<svg width="1600" height="960" viewBox="0 0 1600 960" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#EEF4FF"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="960" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#0F172A" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      .title { font: 700 34px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #0F172A; }
+      .subtitle { font: 500 18px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #475569; }
+      .ui { font: 600 18px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #E2E8F0; }
+      .uiSmall { font: 500 15px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #94A3B8; }
+      .uiBody { font: 500 17px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #CBD5E1; }
+      .uiBodyDark { font: 600 16px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #0F172A; }
+      .chip { font: 700 14px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+      .kicker { font: 700 14px 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #2563EB; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="960" fill="url(#bg)"/>
+  <text x="96" y="92" class="title">AgentHub Public Release Showcase</text>
+  <text x="96" y="128" class="subtitle">真实项目截图风格示意：中英项目并存，Claude / Codex / Kimi 同时在线。</text>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="168" width="1060" height="676" rx="30" fill="#0F172A"/>
+    <rect x="72" y="168" width="1060" height="64" rx="30" fill="#111827"/>
+    <circle cx="116" cy="200" r="7" fill="#FB7185"/>
+    <circle cx="142" cy="200" r="7" fill="#FBBF24"/>
+    <circle cx="168" cy="200" r="7" fill="#4ADE80"/>
+    <text x="208" y="206" class="ui">AgentHub · Session Inbox</text>
+
+    <rect x="96" y="256" width="278" height="560" rx="22" fill="#111827"/>
+    <text x="124" y="294" class="ui">Sessions</text>
+    <rect x="112" y="320" width="246" height="72" rx="18" fill="#172554"/>
+    <text x="132" y="350" class="ui">数采平台开发</text>
+    <text x="132" y="374" class="uiSmall">Codex · win-kimi-smoke-01 · 2 min ago</text>
+    <rect x="286" y="336" width="56" height="24" rx="12" fill="#1D4ED8"/>
+    <text x="300" y="352" class="chip" fill="#DBEAFE">Codex</text>
+
+    <rect x="112" y="404" width="246" height="72" rx="18" fill="#172033"/>
+    <text x="132" y="434" class="ui">AI Native Workspace</text>
+    <text x="132" y="458" class="uiSmall">Claude · gpu-server · waiting approval</text>
+    <rect x="276" y="420" width="66" height="24" rx="12" fill="#7C3AED"/>
+    <text x="289" y="436" class="chip" fill="#F3E8FF">Claude</text>
+
+    <rect x="112" y="488" width="246" height="72" rx="18" fill="#172033"/>
+    <text x="132" y="518" class="ui">Customer Support RAG</text>
+    <text x="132" y="542" class="uiSmall">Kimi · bj-vm-02 · synced</text>
+    <rect x="292" y="504" width="50" height="24" rx="12" fill="#0F766E"/>
+    <text x="308" y="520" class="chip" fill="#CCFBF1">Kimi</text>
+
+    <rect x="112" y="572" width="246" height="72" rx="18" fill="#172033"/>
+    <text x="132" y="602" class="ui">双语官网发布页</text>
+    <text x="132" y="626" class="uiSmall">Codex · local-laptop · ready</text>
+    <rect x="286" y="588" width="56" height="24" rx="12" fill="#1D4ED8"/>
+    <text x="300" y="604" class="chip" fill="#DBEAFE">Codex</text>
+
+    <rect x="112" y="656" width="246" height="72" rx="18" fill="#172033"/>
+    <text x="132" y="686" class="ui">Launch notes / 发布文案</text>
+    <text x="132" y="710" class="uiSmall">Claude · docs.myagenthub.dev</text>
+    <rect x="276" y="672" width="66" height="24" rx="12" fill="#7C3AED"/>
+    <text x="289" y="688" class="chip" fill="#F3E8FF">Claude</text>
+
+    <rect x="400" y="256" width="708" height="560" rx="22" fill="#111827"/>
+    <text x="428" y="294" class="ui">AI Native Workspace · Claude</text>
+    <text x="946" y="294" class="uiSmall">running · gpu-server</text>
+
+    <rect x="428" y="330" width="652" height="88" rx="20" fill="#0B1220"/>
+    <text x="452" y="362" class="uiBody">请把 release 页面、下载页和 README 的口径统一，不要让用户先掉进 GitHub。</text>
+    <text x="452" y="390" class="uiSmall">owner · zh-CN · 10:21</text>
+
+    <rect x="428" y="438" width="652" height="110" rx="20" fill="#172554"/>
+    <text x="452" y="470" class="uiBody">已同步三条公开入口：</text>
+    <text x="452" y="500" class="uiBody">1. /download/ 负责 APK / EXE / worker bundles / SHA256</text>
+    <text x="452" y="528" class="uiBody">2. /install/ 负责 Local / Docker / VM 选择</text>
+    <text x="452" y="556" class="uiBody">3. /release/ 负责版本说明、截图和 release 资产列表</text>
+
+    <rect x="428" y="578" width="652" height="98" rx="20" fill="#0B1220"/>
+    <text x="452" y="610" class="uiBody">English note: the current release keeps claims narrow and verifiable.</text>
+    <text x="452" y="638" class="uiBody">Phone controls local sessions. Docker and VM paths both have real smoke coverage.</text>
+
+    <rect x="428" y="698" width="652" height="94" rx="20" fill="#052E2B"/>
+    <text x="452" y="732" class="uiBody">Artifacts synced:</text>
+    <text x="452" y="760" class="uiBody">agenthub-android-release.apk · AgentHub-0.1.1-x64.exe · worker bundles · SHA256SUMS</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1180" y="220" width="340" height="620" rx="38" fill="#0F172A"/>
+    <rect x="1204" y="248" width="292" height="544" rx="28" fill="#111827"/>
+    <text x="1228" y="290" class="ui">Phone Control</text>
+    <rect x="1228" y="320" width="244" height="72" rx="18" fill="#172554"/>
+    <text x="1248" y="350" class="ui">数采平台开发</text>
+    <text x="1248" y="374" class="uiSmall">Codex · needs reply</text>
+    <rect x="1404" y="336" width="52" height="24" rx="12" fill="#1D4ED8"/>
+    <text x="1418" y="352" class="chip" fill="#DBEAFE">Codex</text>
+
+    <rect x="1228" y="408" width="244" height="110" rx="18" fill="#0B1220"/>
+    <text x="1248" y="438" class="uiBody">“把 release 页面和下载页统一。”</text>
+    <text x="1248" y="468" class="uiBody">“Also keep English and Chinese</text>
+    <text x="1248" y="494" class="uiBody">copy aligned.”</text>
+
+    <rect x="1228" y="534" width="244" height="116" rx="18" fill="#172033"/>
+    <text x="1248" y="566" class="uiBody">Queued → Running → Synced</text>
+    <text x="1248" y="596" class="uiSmall">Claude / Codex / Kimi timeline</text>
+    <text x="1248" y="624" class="uiSmall">APK · Windows Desktop · Worker</text>
+
+    <rect x="1228" y="670" width="244" height="86" rx="18" fill="#052E2B"/>
+    <text x="1248" y="704" class="uiBody">release v0.1.1</text>
+    <text x="1248" y="732" class="uiSmall">myagenthub.dev/download/</text>
+  </g>
+
+  <text x="96" y="900" class="subtitle">Bilingual project names and mixed runtimes: 数采平台开发 / 双语官网发布页 / AI Native Workspace / Customer Support RAG / Launch notes.</text>
+</svg>
