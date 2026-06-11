@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case
+from sqlalchemy.orm import load_only
 
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role
@@ -18,6 +19,7 @@ from app.schemas import (
     SessionBtwIn,
     SessionControlsIn,
     SessionCreateIn,
+    SessionFastToggleIn,
     SessionFileListIn,
     SessionFileReadIn,
     SessionForkIn,
@@ -29,6 +31,7 @@ from app.services import (
     SESSION_STATES,
     expire_superseded_pending_permissions,
     job_out,
+    session_summary_out,
     session_out,
     strip_ansi,
     sync_session_from_timeline,
@@ -54,6 +57,31 @@ ALLOWED_ATTACHMENT_TYPES = {
     "text/plain",
     "text/xml",
 }
+
+SESSION_LIST_LOAD_ONLY = (
+    AgentSession.space_id,
+    AgentSession.session_id,
+    AgentSession.backend,
+    AgentSession.worker_id,
+    AgentSession.workspace_root,
+    AgentSession.project_name,
+    AgentSession.namespace,
+    AgentSession.mode,
+    AgentSession.runtime_session_ref,
+    AgentSession.status,
+    AgentSession.title,
+    AgentSession.display_title,
+    AgentSession.custom_title,
+    AgentSession.heuristic_title,
+    AgentSession.llm_title,
+    AgentSession.activity_summary,
+    AgentSession.last_message,
+    AgentSession.last_activity_at,
+    AgentSession.last_role,
+    AgentSession.controls_json,
+    AgentSession.archived_at,
+    AgentSession.updated_at,
+)
 
 
 def _is_machine_title(value: str) -> bool:
@@ -143,6 +171,15 @@ def _require_worker_backend_available(db: DbSession, space_id: str | None, worke
 
 def _require_worker_backend(db: DbSession, session: AgentSession) -> None:
     _require_worker_backend_available(db, session.space_id, session.worker_id, session.backend)
+
+
+def _require_codex_native_fast(db: DbSession, session: AgentSession) -> None:
+    _require_worker_backend(db, session)
+    if session.backend.strip().lower() != "codex":
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Native fast mode is only available for Codex sessions", "code": "FAST_MODE_UNAVAILABLE"},
+        )
 
 
 def _active_session_input_job_status(db: DbSession, session_id: str, space_id: str | None) -> str | None:
@@ -445,7 +482,7 @@ def list_sessions(
 ):
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
-    query = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id)
+    query = db.query(AgentSession).options(load_only(*SESSION_LIST_LOAD_ONLY)).filter(AgentSession.space_id == actor.space_id)
     query = query.filter(AgentSession.archived_at.is_not(None) if archived else AgentSession.archived_at.is_(None))
     if backend:
         query = query.filter(AgentSession.backend == backend)
@@ -474,7 +511,7 @@ def list_sessions(
                 ]
             ).lower()
         ]
-    return {"items": [session_out(session) for session in sessions]}
+    return {"items": [session_summary_out(session) for session in sessions]}
 
 
 def _require_session(db: DbSession, space_id: str | None, session_id: str) -> AgentSession:
@@ -912,6 +949,80 @@ def send_session_input(
     )
     db.commit()
     return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/fast/refresh")
+def refresh_session_fast_mode(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = _require_session(db, actor.space_id, session_id)
+    _require_codex_native_fast(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_fast_state_refresh",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+            "runtime_session_ref": session.runtime_session_ref,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.fast_refresh",
+        payload={"session_id": session.session_id},
+    )
+    db.commit()
+    return {"job": job_out(job), "session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/fast")
+def toggle_session_fast_mode(
+    session_id: str,
+    payload: SessionFastToggleIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = _require_session(db, actor.space_id, session_id)
+    _require_codex_native_fast(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_fast_toggle",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "enabled": payload.enabled,
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+            "runtime_session_ref": session.runtime_session_ref,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.fast_toggle",
+        payload={"session_id": session.session_id, "enabled": payload.enabled},
+    )
+    db.commit()
+    return {"job": job_out(job), "session": session_out(session)}
 
 
 @router.post("/api/sessions/{session_id}/rename")

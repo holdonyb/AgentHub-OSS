@@ -831,6 +831,20 @@ describe('AgentHub console', () => {
     expect(screen.getByText('继续执行')).toBeInTheDocument();
   });
 
+  it('does not keep the first screen loading while audit events are slow', async () => {
+    const defaultFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/events')) return new Promise<Response>(() => undefined);
+      return defaultFetch(input, init);
+    }));
+
+    render(<App />);
+
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+  });
+
   it('inserts account quick replies into the composer', async () => {
     render(<App />);
 
@@ -4239,6 +4253,141 @@ describe('AgentHub console', () => {
       );
     });
     expect(screen.getByLabelText('回复当前会话')).toHaveValue('');
+  });
+
+  it('does not enqueue native fast state refresh just by opening a codex session', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    const fastRefreshCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith('/api/sessions/sess-1/fast/refresh'));
+    expect(fastRefreshCalls).toHaveLength(0);
+  });
+
+  it('refreshes native fast state through selected session delta without a heavy session reload', async () => {
+    const counters = {
+      sessions: 0,
+      fastRefresh: 0,
+      sessionDelta: 0,
+    };
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) {
+        counters.sessions += 1;
+        return jsonResponse(sessionPayload);
+      }
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/sess-1/fast/refresh')) {
+        counters.fastRefresh += 1;
+        return jsonResponse({
+          job: { job_id: 'job-fast-refresh', kind: 'session_fast_state_refresh', status: 'queued' },
+          session: sessionPayload.items[0],
+        });
+      }
+      if (url.includes('/api/sync/session/sess-1')) {
+        counters.sessionDelta += 1;
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            runtime_metadata: {
+              fast_mode: {
+                state: 'disabled',
+                supported: true,
+                observed_at: '2026-04-26T10:02:00Z',
+              },
+            },
+          },
+          jobs: [{ job_id: 'job-fast-refresh', kind: 'session_fast_state_refresh', status: 'succeeded' }],
+        });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /模型与工具/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '同步快速状态' }));
+
+    await waitFor(() => {
+      expect(counters.fastRefresh).toBe(1);
+      expect(counters.sessionDelta).toBeGreaterThanOrEqual(1);
+    });
+    expect(counters.sessions).toBe(1);
+    await waitFor(() => expect(screen.getAllByText(/快速已关/).length).toBeGreaterThan(0));
+  });
+
+  it('does not render an extra fast hint line when the codex session is simply not in /fast', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    expect(screen.queryByText('当前不是 /fast')).not.toBeInTheDocument();
+    expect(screen.queryByText('当前状态读不到，但可以强制切换一次')).not.toBeInTheDocument();
+  });
+
+  it('marks native fast mode unavailable when refresh fails because the thread cannot be resumed', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/sess-1/fast/refresh')) {
+        return jsonResponse({
+          job: { job_id: 'job-fast-refresh-fail', kind: 'session_fast_state_refresh', status: 'queued' },
+          session: sessionPayload.items[0],
+        });
+      }
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          jobs: [
+            {
+              job_id: 'job-fast-refresh-fail',
+              kind: 'session_fast_state_refresh',
+              status: 'failed',
+              error_text: "codex app-server thread/resume failed: {'code': -32600, 'message': 'thread not found'}",
+            },
+          ],
+        });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /模型与工具/ }));
+    fireEvent.click(await screen.findByRole('button', { name: '同步快速状态' }));
+
+    await waitFor(() => expect(screen.getAllByText(/快速不可用/).length).toBeGreaterThan(0));
+    expect(screen.queryByText('当前状态读不到，但可以强制切换一次')).not.toBeInTheDocument();
   });
 
   it('polls per-session delta endpoints and skips heavy refreshes on idle sync', async () => {

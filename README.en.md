@@ -65,6 +65,7 @@ Website install chooser:
 - `https://myagenthub.dev/install/`
 - `https://myagenthub.dev/download/`
 - `https://myagenthub.dev/release/`
+- `https://myagenthub.dev/press/`
 
 ### Install workers directly with npm / npx
 
@@ -190,6 +191,7 @@ If you want a fuller chooser page before picking one of the three paths, use:
 - [Testing](docs/TESTING.md)
 - [OSS release flow](docs/OSS_RELEASE.md)
 - [Open-source launch checklist](docs/OPEN_SOURCE_LAUNCH.md)
+- [Launch copy](docs/LAUNCH_COPY.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## Build

@@ -37,12 +37,11 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
         if (AgentHubServerConfig.loadServerUrl(this) == null) {
             startActivity(new Intent(this, ServerSetupActivity.class));
             finish();
-            return;
         }
-        super.onCreate(savedInstanceState);
     }
 
     @Override

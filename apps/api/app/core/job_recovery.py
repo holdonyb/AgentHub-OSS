@@ -168,7 +168,90 @@ def recover_stale_running_jobs(db: Session, worker_id: str, space_id: str | None
     return _recover_job_rows(db, running_jobs, worker_id_for_event=worker_id)
 
 
+def _recover_disconnected_worker_jobs(db: Session, worker: Worker, now: datetime) -> int:
+    settings = get_settings()
+    running_jobs = (
+        db.query(Job)
+        .filter(Job.space_id == worker.space_id)
+        .filter(Job.status == "running")
+        .filter(Job.claimed_at.is_not(None))
+        .filter(Job.worker_id == worker.worker_id)
+        .all()
+    )
+    recovered = 0
+    for job in running_jobs:
+        assert job.claimed_at is not None
+        if job.claimed_at + timedelta(seconds=settings.orphaned_claimed_job_grace_seconds) > now:
+            continue
+        job.status = "failed"
+        job.error_text = (
+            f"Worker heartbeat expired after {settings.heartbeat_offline_seconds} seconds; "
+            "released to unblock queued input."
+        )
+        job.completed_at = now
+        job.updated_at = now
+        recovered += 1
+        if job.target_session_id and _job_updates_target_session(job):
+            session = (
+                db.query(AgentSession)
+                .filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id)
+                .one_or_none()
+            )
+            if session:
+                session.status = _session_status_after_stale_job(db, session)
+                session.updated_at = now
+        write_event(
+            db,
+            space_id=job.space_id,
+            actor_type="system",
+            actor_id="worker-heartbeat-recovery",
+            source_type="job",
+            source_id=job.job_id,
+            event_type="job.fail_worker_offline",
+            level="warning",
+            payload={
+                "worker_id": worker.worker_id,
+                "kind": job.kind,
+                "heartbeat_offline_seconds": settings.heartbeat_offline_seconds,
+            },
+        )
+    return recovered
+
+
+def recover_disconnected_workers_for_space(db: Session, space_id: str | None) -> int:
+    settings = get_settings()
+    now = utcnow()
+    cutoff = now - timedelta(seconds=settings.heartbeat_offline_seconds)
+    stale_workers = (
+        db.query(Worker)
+        .filter(Worker.space_id == space_id)
+        .filter(Worker.status != "offline")
+        .filter(Worker.last_heartbeat_at.is_not(None))
+        .filter(Worker.last_heartbeat_at < cutoff)
+        .all()
+    )
+    changed = 0
+    for worker in stale_workers:
+        worker.status = "offline"
+        worker.updated_at = now
+        changed += 1
+        changed += _recover_disconnected_worker_jobs(db, worker, now)
+        write_event(
+            db,
+            space_id=worker.space_id,
+            actor_type="system",
+            actor_id="worker-heartbeat-recovery",
+            source_type="worker",
+            source_id=worker.worker_id,
+            event_type="worker.offline_heartbeat_expired",
+            level="warning",
+            payload={"heartbeat_offline_seconds": settings.heartbeat_offline_seconds},
+        )
+    return changed
+
+
 def recover_stale_running_jobs_for_space(db: Session, space_id: str | None) -> int:
+    recovered = recover_disconnected_workers_for_space(db, space_id)
     worker_ids = [
         row[0]
         for row in db.query(Worker.worker_id)
@@ -186,4 +269,4 @@ def recover_stale_running_jobs_for_space(db: Session, space_id: str | None) -> i
         query = query.filter((Job.worker_id.in_(worker_ids)) | (Job.worker_id.is_(None)))
     else:
         query = query.filter(Job.worker_id.is_(None))
-    return _recover_job_rows(db, query.all(), worker_id_for_event="unassigned")
+    return recovered + _recover_job_rows(db, query.all(), worker_id_for_event="unassigned")

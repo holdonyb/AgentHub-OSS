@@ -18,7 +18,8 @@ from app.services import ALLOWED_JOB_KINDS, ensure_codex_plan_exit_permission, j
 router = APIRouter()
 PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
 PLAN_CHOICE_RE = re.compile(r"^\s*(?:[-*]|\d+[\.)、]|[A-Za-z][\.)、]|[一二三四五六七八九十]+[、\.)])\s*(?P<label>.+?)\s*$")
-SIDECAR_JOB_KINDS = {"file_list", "file_read", "session_btw"}
+SIDECAR_JOB_KINDS = {"file_list", "file_read", "session_btw", "session_fast_state_refresh", "session_fast_toggle"}
+FAST_SESSION_JOB_KINDS = {"session_fast_state_refresh", "session_fast_toggle"}
 
 
 def _assert_worker_binding(actor: Actor, worker_id: str) -> Worker:
@@ -125,6 +126,10 @@ def _job_updates_target_session(job: Job) -> bool:
     return job.kind == "session_input"
 
 
+def _job_updates_runtime_metadata(job: Job) -> bool:
+    return job.kind in FAST_SESSION_JOB_KINDS
+
+
 def _touch_session_activity(
     session: AgentSession,
     *,
@@ -168,6 +173,27 @@ def _attach_btw_result(db: DbSession, job: Job, session: AgentSession, result_te
         space_id=session.space_id,
     )
     sync_session_from_timeline(db, session)
+
+
+def _update_fast_mode_runtime_metadata(session: AgentSession, job: Job, result_text: str, *, at: datetime) -> None:
+    payload = loads_json(result_text, {})
+    if not isinstance(payload, dict):
+        payload = {}
+    current = loads_json(session.runtime_metadata_json, {})
+    if not isinstance(current, dict):
+        current = {}
+    fast_mode = {
+        "state": str(payload.get("state") or "unknown"),
+        "service_tier": payload.get("service_tier"),
+        "reasoning_effort": payload.get("reasoning_effort"),
+        "raw": payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
+        "job_id": job.job_id,
+        "observed_at": at.isoformat().replace("+00:00", "Z"),
+        "supported": session.backend.strip().lower() == "codex",
+    }
+    current["fast_mode"] = fast_mode
+    session.runtime_metadata_json = dumps_json(current)
+    session.updated_at = at
 
 
 def _recover_stale_running_jobs(db: DbSession, worker_id: str, space_id: str | None = None) -> int:
@@ -379,6 +405,10 @@ def complete_job(
             _attach_btw_result(db, job, session, payload.result_text or "")
             session.status = preserved_status
             _touch_session_activity(session, at=now)
+    elif job.target_session_id and _job_updates_runtime_metadata(job):
+        session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
+        if session:
+            _update_fast_mode_runtime_metadata(session, job, payload.result_text or "", at=now)
     elif job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
@@ -425,6 +455,23 @@ def fail_job(
     now = utcnow()
     job.completed_at = now
     job.updated_at = now
+    if job.target_session_id and _job_updates_runtime_metadata(job):
+        session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
+        if session:
+            _update_fast_mode_runtime_metadata(
+                session,
+                job,
+                dumps_json(
+                    {
+                        "state": "unknown",
+                        "service_tier": None,
+                        "reasoning_effort": None,
+                        "raw": {},
+                        "error": payload.error_text,
+                    }
+                ),
+                at=now,
+            )
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:

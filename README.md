@@ -65,6 +65,7 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 - `https://myagenthub.dev/install/`
 - `https://myagenthub.dev/download/`
 - `https://myagenthub.dev/release/`
+- `https://myagenthub.dev/press/`
 
 ### 装 worker：直接走 npm / npx
 
@@ -191,6 +192,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 - [Testing](docs/TESTING.md)
 - [OSS release flow](docs/OSS_RELEASE.md)
 - [Open-source launch checklist](docs/OPEN_SOURCE_LAUNCH.md)
+- [Launch copy](docs/LAUNCH_COPY.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## 构建

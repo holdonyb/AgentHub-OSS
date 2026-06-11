@@ -35,6 +35,15 @@ RULES = (
     AuditRule("private-publish-script", ("publish-apk.ps1", "deploy-vm.ps1")),
 )
 
+OWNER_HANDLE_ALLOWLIST = (
+    "github.com/holdonyb/AgentHub-OSS",
+    "github.com/holdonyb/AgentHub-OSS.git",
+    "github.com/holdonyb/AgentHub-OSS/issues",
+    "git+https://github.com/holdonyb/AgentHub-OSS.git",
+    "holdonyb/AgentHub-OSS",
+    "Organization or user: holdonyb",
+)
+
 
 def iter_candidate_files(root: Path, extra_excludes: set[str]) -> Iterable[Path]:
     excluded = DEFAULT_EXCLUDES | extra_excludes
@@ -66,6 +75,8 @@ def audit_file(path: Path) -> list[tuple[str, int, str]]:
     for index, line in enumerate(lines, start=1):
         for rule in RULES:
             if rule.label == "owner-handle" and path.name == "CODEOWNERS":
+                continue
+            if rule.label == "owner-handle" and any(snippet in line for snippet in OWNER_HANDLE_ALLOWLIST):
                 continue
             for pattern in rule.patterns:
                 if pattern in line:

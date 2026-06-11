@@ -238,6 +238,7 @@ def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
     assert codex_features["plan_exit"] is True
     assert codex_features["goal"] is True
     assert codex_features["native_goal_command"] is True
+    assert codex_features["native_fast_mode"] is True
 
     claude_features = by_backend["claude"]["features"]
     assert claude_features["interaction_bridge"] == "compatibility"

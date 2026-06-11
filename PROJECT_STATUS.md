@@ -8,6 +8,8 @@ AgentHub-OSS is the public self-hosted distribution of AgentHub. It packages the
 
 The public repo already builds and documents the core self-hosted product surface. In this round, the repo gained an initial public website surface under `website/`, a website nginx deployment template, a website deployment script, and a safer self-host smoke path that can validate a disposable VM by raw IP with a self-signed certificate before DNS is ready. The public entry site is live on `https://myagenthub.dev`, with `https://www.myagenthub.dev` covered by the same certificate, `docs.myagenthub.dev` redirecting to GitHub docs, `app.myagenthub.dev` serving a placeholder hosted-entry page, and the root domain now expected to hand users off through dedicated `/install/`, `/download/`, and `/release/` website routes instead of dropping them straight into GitHub.
 
+The public website surface now also includes `/press/`, which packages launch copy, website links, and reusable screenshot assets into one public-facing press kit. That page is meant to keep README, website, GitHub Release text, and community posts aligned without re-drafting the same positioning each time.
+
 The canary deployment has now been moved onto `gpu-server` after the previous Beijing VM hit an upstream domain-level ingress problem that broke public TLS only when accessed through `canary.myagenthub.dev`. The public canary remains exposed at `https://canary.myagenthub.dev`, but it now shares the stable public edge with the website host while keeping a separate AgentHub install root and API service. During that migration, the self-host nginx template was corrected so `/.well-known/acme-challenge/` stays reachable over plain HTTP instead of being swallowed by the port-80 HTTPS redirect, which makes fresh Let's Encrypt issuance reliable on new hosts.
 
 This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `agenthub-worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, an official Docker self-host stack under `deploy/docker-compose.selfhost.yml`, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release through Trusted Publishing or an npm automation token, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
@@ -105,6 +107,7 @@ bash scripts/check-selfhost.sh \
 - `docs/DOCKER_SELFHOST_MODE.md`: operator guide for the official compose path
 - `deploy/nginx/agenthub-website.conf.template`: nginx vhost template for `myagenthub.dev`, `www`, `docs`, and `app`
 - `website/`: static public website source
+- `docs/LAUNCH_COPY.md`: channel-ready public launch copy aligned with the website and Release text
 - `docs/WEBSITE_DEPLOYMENT.md`: public website deployment guide
 - `docs/SELF_HOST_QUICKSTART.md`: self-host flow including raw-IP precheck path
 - `docs/TESTING.md`: live release-gate guidance
@@ -128,6 +131,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-31: Fixed the worker publish workflow to branch on a job-level `NODE_AUTH_TOKEN` env wrapper instead of reading `secrets.NPM_TOKEN` directly inside step `if` guards, which avoids false-failure workflow parses on ordinary `main` pushes.
 - 2026-05-31: Ran a full remote Docker smoke on `gpu-server`: `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` completed, `/healthz`, `/`, and `/downloads/workers/worker-bundles-manifest.json` all returned `200`, then the temporary stack was torn down. That smoke also exposed a real operator-UX bug in `AGENTHUB_CORS_ORIGINS`, which is now normalized from single-origin and compose-style bracketed values instead of requiring strict JSON parsing.
 - 2026-06-01: Promoted local mode into a first-class preset with `npm run local:dev`, a dedicated website install chooser, and unified defaults of `http://localhost:43073` for Web/UI plus `http://127.0.0.1:43080` for the API. The local-mode smoke remains the same dev shape, but the operator-facing install surface is now aligned across README, docs, website, and local worker defaults.
+- 2026-06-06: Added a public `/press/` page plus `docs/LAUNCH_COPY.md`, so the website, README, GitHub Release body, and community launch copy share one stable wording surface.
 
 ## Next Step
 

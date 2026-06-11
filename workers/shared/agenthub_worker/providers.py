@@ -307,6 +307,7 @@ PROVIDERS = {
             "app_server_target": True,
             "native_plan_mode": True,
             "native_goal_command": True,
+            "native_fast_mode": True,
             "interaction_bridge": "native",
             "request_user_input": True,
             "approvals": True,

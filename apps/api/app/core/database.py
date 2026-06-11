@@ -25,6 +25,7 @@ def init_database(engine: Engine) -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_compatible_columns(engine)
+    _ensure_compatible_indexes(engine)
     _bootstrap_default_space(engine)
 
 
@@ -81,6 +82,32 @@ def _ensure_compatible_columns(engine: Engine) -> None:
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE agent_sessions ADD COLUMN {name} {ddl}"))
     Base.metadata.create_all(bind=engine)
+
+
+def _ensure_compatible_indexes(engine: Engine) -> None:
+    """Add query-shaping indexes that older SQLite installs may be missing."""
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    index_statements = {
+        "events": [
+            "CREATE INDEX IF NOT EXISTS ix_events_space_created_at ON events (space_id, created_at DESC)",
+        ],
+        "jobs": [
+            "CREATE INDEX IF NOT EXISTS ix_jobs_space_created_at ON jobs (space_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS ix_jobs_space_target_updated_at ON jobs (space_id, target_session_id, updated_at DESC)",
+        ],
+        "agent_timeline": [
+            "CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_created_seq ON agent_timeline (space_id, session_id, created_at DESC, seq DESC)",
+        ],
+    }
+    with engine.begin() as conn:
+        for table_name, statements in index_statements.items():
+            if table_name not in table_names:
+                continue
+            for statement in statements:
+                conn.execute(text(statement))
 
 
 def _bootstrap_default_space(engine: Engine) -> None:

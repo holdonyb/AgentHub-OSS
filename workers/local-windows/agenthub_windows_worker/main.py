@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import secrets
 import socket
@@ -18,6 +19,7 @@ for extra_path in (
         sys.path.insert(0, extra_path_str)
 
 from agenthub_worker.client import AgentHubClient
+from agenthub_worker.codex_maintenance import promote_exec_sessions_for_desktop
 from agenthub_worker.paths import default_agent_session_roots
 from agenthub_worker.runtime import WorkerRuntime, run_forever
 from agenthub_windows_worker.discovery import discover_capabilities, discover_sessions
@@ -89,6 +91,21 @@ def _generate_worker_token() -> str:
     return f"ahw_{secrets.token_hex(24)}"
 
 
+def _run_maintenance(args: argparse.Namespace) -> int:
+    if args.maintenance_command != "promote-codex-exec":
+        raise SystemExit(f"Unsupported maintenance command: {args.maintenance_command}")
+    result = promote_exec_sessions_for_desktop(
+        target_cwd=args.target_cwd or "",
+        codex_home=args.codex_home,
+        source_cwd_prefix=args.source_cwd_prefix,
+        thread_ids=args.thread_id,
+        all_exec=args.all_exec,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AgentHub Windows worker")
     parser.add_argument("--api-url", default=os.getenv("AGENTHUB_API_URL", "http://127.0.0.1:43080"))
@@ -115,8 +132,17 @@ def main() -> None:
         type=float,
         default=float(os.getenv("AGENTHUB_WORKER_HEARTBEAT_SECONDS", "30")),
     )
+    parser.add_argument("--maintenance-command")
+    parser.add_argument("--target-cwd")
+    parser.add_argument("--source-cwd-prefix")
+    parser.add_argument("--thread-id", action="append")
+    parser.add_argument("--codex-home")
+    parser.add_argument("--all-exec", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
+    if args.maintenance_command:
+        raise SystemExit(_run_maintenance(args))
     workspace_roots = _workspace_roots(args.workspace_roots)
     capabilities = discover_capabilities()
     reachable_backends = [name for name, available in capabilities.items() if available]

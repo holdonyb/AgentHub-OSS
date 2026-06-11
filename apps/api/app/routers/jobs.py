@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import load_only
 
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role
@@ -8,9 +9,25 @@ from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json
 from app.models import AgentPermission, AgentSession, Job, utcnow
 from app.schemas import JobCreateIn
-from app.services import ALLOWED_JOB_KINDS, job_out
+from app.services import ALLOWED_JOB_KINDS, job_out, job_summary_out
 
 router = APIRouter()
+JOB_LIST_LOAD_ONLY = (
+    Job.space_id,
+    Job.job_id,
+    Job.kind,
+    Job.target_session_id,
+    Job.worker_id,
+    Job.backend,
+    Job.workspace_root,
+    Job.namespace,
+    Job.priority,
+    Job.status,
+    Job.payload_json,
+    Job.error_text,
+    Job.created_at,
+    Job.updated_at,
+)
 
 
 def _session_has_job_status(db: DbSession, session: AgentSession, status: str) -> bool:
@@ -82,8 +99,15 @@ def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer")),
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
     bounded_limit = max(1, min(limit, 500))
-    jobs = db.query(Job).filter(Job.space_id == actor.space_id).order_by(Job.created_at.desc()).limit(bounded_limit).all()
-    return {"items": [job_out(job) for job in jobs]}
+    jobs = (
+        db.query(Job)
+        .options(load_only(*JOB_LIST_LOAD_ONLY))
+        .filter(Job.space_id == actor.space_id)
+        .order_by(Job.created_at.desc())
+        .limit(bounded_limit)
+        .all()
+    )
+    return {"items": [job_summary_out(job) for job in jobs]}
 
 
 @router.post("/api/jobs/{job_id}/cancel")

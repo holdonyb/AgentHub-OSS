@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role, require_worker
+from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json
 from app.core.security import generate_token, hash_token
 from app.core.settings_store import default_worker_runtime_defaults, get_worker_runtime_defaults
@@ -176,6 +177,8 @@ def heartbeat_worker(
 
 @router.get("/api/workers")
 def list_workers(db: DbSession, actor: Actor = Depends(require_min_role("viewer"))):
+    if recover_stale_running_jobs_for_space(db, actor.space_id):
+        db.commit()
     workers = (
         db.query(Worker)
         .filter(Worker.space_id == actor.space_id)

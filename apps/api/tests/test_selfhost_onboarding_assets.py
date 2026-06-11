@@ -25,9 +25,9 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "docs/SELF_HOST_QUICKSTART.md",
         "docs/TAILSCALE_PRIVATE_MODE.md",
         "docs/SELF_HOST_TROUBLESHOOTING.md",
-        "scripts/export-oss.ps1",
         "scripts/audit-public-export.py",
         "scripts/check-worker-package-version.mjs",
+        "scripts/install-hooks.ps1",
         "scripts/install.sh",
         "scripts/install-selfhost-linux.sh",
         "scripts/run-local-dev.mjs",
@@ -43,7 +43,9 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "deploy/nginx/agenthub-selfhost.conf.template",
         "website/download/index.html",
         "website/install/index.html",
+        "website/press/index.html",
         "website/release/index.html",
+        "docs/LAUNCH_COPY.md",
         ".github/workflows/selfhost-smoke.yml",
         ".github/workflows/npm-worker-publish.yml",
         "docs/WORKER_PACKAGE_RELEASE.md",
@@ -67,6 +69,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "https://myagenthub.dev/install.sh" in readme
     assert "https://myagenthub.dev/install/" in readme
     assert "https://myagenthub.dev/release/" in readme
+    assert "https://myagenthub.dev/press/" in readme
     assert "npx agenthub-worker" in readme
     assert "Docker 模式" in readme
     assert "VM 模式" in readme
@@ -90,6 +93,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "https://myagenthub.dev/install.sh" in readme_en
     assert "https://myagenthub.dev/install/" in readme_en
     assert "https://myagenthub.dev/release/" in readme_en
+    assert "https://myagenthub.dev/press/" in readme_en
     assert "npx agenthub-worker" in readme_en
     assert "Docker mode" in readme_en
     assert "VM mode" in readme_en
@@ -102,9 +106,11 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     website_index = (REPO_ROOT / "website" / "index.html").read_text(encoding="utf-8")
     website_download = (REPO_ROOT / "website" / "download" / "index.html").read_text(encoding="utf-8")
     website_install = (REPO_ROOT / "website" / "install" / "index.html").read_text(encoding="utf-8")
+    website_press = (REPO_ROOT / "website" / "press" / "index.html").read_text(encoding="utf-8")
     website_release = (REPO_ROOT / "website" / "release" / "index.html").read_text(encoding="utf-8")
     assert 'href="/download/"' in website_index
     assert 'href="/install/"' in website_index
+    assert 'href="/press/"' in website_index
     assert 'href="/release/"' in website_index
     assert "先选安装模式" in website_index
     assert "下载 release 资产" in website_download
@@ -116,6 +122,9 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "AgentHub-0.1.1-x64.exe" in website_release
     assert "cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4" in website_release
     assert "Claude / Codex / Kimi" in website_release
+    assert "Launch copy, links, and assets" in website_press
+    assert "docs/LAUNCH_COPY.md" in website_press
+    assert "中文长版" in website_press
     assert "本机模式" in website_install
     assert "Docker 模式" in website_install
     assert "VM 模式" in website_install
@@ -133,6 +142,7 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
     docker_mode = (REPO_ROOT / "docs" / "DOCKER_SELFHOST_MODE.md").read_text(encoding="utf-8")
     local_server = (REPO_ROOT / "docs" / "LOCAL_SERVER_MODE.md").read_text(encoding="utf-8")
     open_source_launch = (REPO_ROOT / "docs" / "OPEN_SOURCE_LAUNCH.md").read_text(encoding="utf-8")
+    launch_copy = (REPO_ROOT / "docs" / "LAUNCH_COPY.md").read_text(encoding="utf-8")
     quickstart = (REPO_ROOT / "docs" / "SELF_HOST_QUICKSTART.md").read_text(encoding="utf-8")
     tailscale = (REPO_ROOT / "docs" / "TAILSCALE_PRIVATE_MODE.md").read_text(encoding="utf-8")
     troubleshooting = (REPO_ROOT / "docs" / "SELF_HOST_TROUBLESHOOTING.md").read_text(encoding="utf-8")
@@ -202,8 +212,19 @@ def test_selfhost_docs_cover_from_empty_vm_to_worker_smoke() -> None:
         "Android APK",
         "Windows desktop",
         "Hacker News",
+        "docs/LAUNCH_COPY.md",
     ]:
         assert expected in open_source_launch
+
+    for expected in [
+        "Chinese Launch Post",
+        "English Launch Post",
+        "X Post",
+        "Hacker News",
+        "https://myagenthub.dev/release/",
+        "Claude / Codex / Kimi",
+    ]:
+        assert expected in launch_copy
 
     for expected in [
         "Docker self-host mode",
@@ -284,8 +305,8 @@ def test_contributing_covers_platform_scope_and_prompts() -> None:
 
 
 def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
-    export_ps1 = (REPO_ROOT / "scripts" / "export-oss.ps1").read_text(encoding="utf-8")
     export_audit = (REPO_ROOT / "scripts" / "audit-public-export.py").read_text(encoding="utf-8")
+    install_hooks = (REPO_ROOT / "scripts" / "install-hooks.ps1").read_text(encoding="utf-8")
     wrapper_script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     install_script = (REPO_ROOT / "scripts" / "install-selfhost-linux.sh").read_text(encoding="utf-8")
     check_sh = (REPO_ROOT / "scripts" / "check-selfhost.sh").read_text(encoding="utf-8")
@@ -302,15 +323,14 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     publish_workflow = (REPO_ROOT / ".github" / "workflows" / "npm-worker-publish.yml").read_text(encoding="utf-8")
     nginx_template = (REPO_ROOT / "deploy" / "nginx" / "agenthub-selfhost.conf.template").read_text(encoding="utf-8")
 
-    assert "param(" in export_ps1
-    assert "AgentHub-OSS" in export_ps1
-    assert ".git" in export_ps1
-    assert "audit-public-export.py" in export_ps1
-    assert "robocopy" in export_ps1
-
     assert "private-domain" in export_audit
     assert ("agenthub" + ".ifix.xin") in export_audit
     assert ("publish" + "-apk.ps1") in export_audit
+    assert "OWNER_HANDLE_ALLOWLIST" in export_audit
+    assert "AgentHub-OSS" in export_audit
+
+    assert "pre-commit" in install_hooks
+    assert "audit-public-export.py" in install_hooks
 
     assert "set -Eeuo pipefail" in wrapper_script
     assert "install-selfhost-linux.sh" in wrapper_script
