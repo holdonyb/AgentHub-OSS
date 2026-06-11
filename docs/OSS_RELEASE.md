@@ -1,92 +1,66 @@
 # AgentHub OSS Release
 
-Use this flow when you want to refresh the public `AgentHub-OSS` repo from the private source tree without leaking private deployment details.
+`AgentHub-OSS` is now the only product trunk.
 
-## Source and Target
+There is no private-to-public export step anymore. Product code lands here first, is reviewed here, and releases from here. The private side is a thin `AgentHub-overlay` repo for deploy scripts, secret-handling conventions, and private strategy docs.
 
-- private source repo: `E:\Work\AgentHub`
-- isolated export worktree: use the current feature branch or `origin/main`
-- public target repo: `E:\Work\AgentHub-OSS`
+## Repo Roles
 
-## Export Command
+- `AgentHub-OSS`: product code, tests, public docs, release assets
+- `AgentHub-overlay`: private deploy scripts, env examples, private planning docs
 
-From the private repo:
+Do not reintroduce an export flow that rewrites this repo from a private source tree.
 
-```powershell
-.\scripts\export-oss.ps1 -TargetRoot E:\Work\AgentHub-OSS
-```
+## Release Flow
 
-What the export does:
+1. Land product changes on a feature branch in `AgentHub-OSS`.
+2. Run the public validation gates:
+   - `python scripts/audit-public-export.py --root .`
+   - `npm run api:test`
+   - `npm run web:test`
+   - `npm run web:build`
+   - `npm run desktop:test`
+   - `npm run mobile:test`
+3. Merge to `main` through a pull request.
+4. Release from `main`:
+   - GitHub Release
+   - website `/release/`
+   - website `/download/`
+   - worker package if version changed
 
-- preserves the target `.git`
-- clears old tracked content
-- copies the source tree with `robocopy`
-- excludes obvious private runtime directories
-- excludes private deploy helper scripts
-- preserves OSS-specific files already curated in `AgentHub-OSS`
-- runs `scripts/audit-public-export.py`
+## Audit Gate
 
-## Preserved OSS Files
-
-The export keeps the public-facing versions of:
-
-- `README.md`
-- `CONTRIBUTING.md`
-- `CHANGELOG.md`
-- `CODE_OF_CONDUCT.md`
-- `LICENSE`
-- `PROVENANCE.md`
-- `SECURITY.md`
-- `.github/workflows/ci.yml`
-- `.github/workflows/android-apk.yml`
-- `.github/workflows/secret-scan.yml`
-
-These files are intentionally treated as OSS overlay files instead of being overwritten blindly from the private repo.
-
-Worker-package release helpers that should also stay curated on the OSS side:
-
-- `.github/workflows/npm-worker-publish.yml`
-- `docs/WORKER_PACKAGE_RELEASE.md`
-- `scripts/check-worker-package-version.mjs`
-
-## Audit
-
-Run audit manually if needed:
+Install the local pre-commit hook:
 
 ```powershell
-python .\scripts\audit-public-export.py --root E:\Work\AgentHub-OSS
+.\scripts\install-hooks.ps1
 ```
 
-The audit blocks common leaks such as:
+The hook and CI both run:
 
-- a private production domain literal
-- a maintainer-specific handle literal
-- private deploy env names
-- private publish or deploy script names
+```powershell
+python .\scripts\audit-public-export.py --root .
+```
 
-## Recommended Release Loop
+The audit is now an entry gate for OSS work, not an export-stage cleanup tool.
 
-1. update private `main`
-2. verify tests on the private repo
-3. export into `AgentHub-OSS`
-4. run audit
-5. run public CI and build checks in `AgentHub-OSS`
-6. review diff in `AgentHub-OSS`
-7. if publishing the worker package, run `npm run worker:version:check`
-8. if publishing the worker package by tag, use `worker-vX.Y.Z`
-9. update the public release surfaces together:
-   - GitHub Release body
-   - `website/release/index.html`
-   - `website/download/index.html`
-   - README links if the route set changed
-10. push public repo and tag release
+## Overlay Use
+
+Use the overlay repo only for:
+
+- VM deploy scripts
+- traffic monitor scripts
+- APK publish helpers
+- private docs such as rotation and strategy notes
+
+Overlay must not contain product code.
 
 ## Validation
 
-Minimum checks after export:
+Minimum release checks:
 
 ```powershell
-git -C E:\Work\AgentHub-OSS status --short
-python E:\Work\AgentHub-OSS\scripts\audit-public-export.py --root E:\Work\AgentHub-OSS
-npm --prefix E:\Work\AgentHub-OSS run web:build
+python .\scripts\audit-public-export.py --root .
+npm run web:build
+git diff --check
 ```
