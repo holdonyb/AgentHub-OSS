@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from agenthub_worker import executor
+from agenthub_worker import codex_app_server, executor
 from agenthub_worker.executor import build_backend_command, build_session_start_command, execute_job
 
 
@@ -250,6 +250,184 @@ def test_codex_yolo_omits_conflicting_sandbox_and_approval_flags() -> None:
     assert "--dangerously-bypass-approvals-and-sandbox" in codex
     assert "--ask-for-approval" not in codex
     assert "--sandbox" not in codex
+
+
+def test_session_fast_state_refresh_reads_native_codex_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_read(job: dict[str, object], *, timeout_seconds: int) -> dict[str, object]:
+        observed_calls.append(("read", {"timeout_seconds": timeout_seconds, "job_id": job.get("job_id")}))
+        return {
+            "state": "enabled",
+            "service_tier": "priority",
+            "reasoning_effort": "minimal",
+            "raw": {"settings": {"serviceTier": "priority", "reasoningEffort": "minimal"}},
+        }
+
+    monkeypatch.setattr(executor, "read_codex_fast_mode", fake_read)
+
+    result = execute_job(
+        {
+            "job_id": "job-fast-refresh",
+            "kind": "session_fast_state_refresh",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"timeout_seconds": 42},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["state"] == "enabled"
+    assert payload["service_tier"] == "priority"
+    assert payload["reasoning_effort"] == "minimal"
+    assert observed_calls == [("read", {"timeout_seconds": 60, "job_id": "job-fast-refresh"})]
+
+
+def test_session_fast_toggle_updates_native_codex_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_toggle(job: dict[str, object], *, enabled: bool, timeout_seconds: int) -> dict[str, object]:
+        observed_calls.append(
+            (
+                "toggle",
+                {
+                    "enabled": enabled,
+                    "timeout_seconds": timeout_seconds,
+                    "job_id": job.get("job_id"),
+                },
+            )
+        )
+        return {
+            "state": "disabled",
+            "service_tier": "default",
+            "reasoning_effort": None,
+            "raw": {"settings": {"serviceTier": "default"}},
+        }
+
+    monkeypatch.setattr(executor, "toggle_codex_fast_mode", fake_toggle)
+
+    result = execute_job(
+        {
+            "job_id": "job-fast-toggle",
+            "kind": "session_fast_toggle",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"enabled": False, "timeout_seconds": 33},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["state"] == "disabled"
+    assert payload["service_tier"] == "default"
+    assert observed_calls == [("toggle", {"enabled": False, "timeout_seconds": 60, "job_id": "job-fast-toggle"})]
+
+
+def test_codex_fast_toggle_uses_resolved_thread_id_from_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = codex_app_server.CodexAppServerClient(executable="codex")
+    observed_calls: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(client, "initialize", lambda: None)
+
+    def fake_request(method: str, params: dict[str, object] | None, *, timeout_seconds: int) -> dict[str, object]:
+        observed_calls.append((method, dict(params or {})))
+        if method == "thread/resume" and len(observed_calls) == 1:
+            return {
+                "thread": {
+                    "id": "native-thread-123",
+                    "settings": {"serviceTier": "default"},
+                }
+            }
+        if method == "thread/settings/update":
+            return {"ok": True}
+        if method == "thread/resume" and len(observed_calls) == 3:
+            return {
+                "thread": {
+                    "id": "native-thread-123",
+                    "settings": {"serviceTier": "priority", "reasoningEffort": "minimal"},
+                }
+            }
+        raise AssertionError(f"unexpected request call: {method} #{len(observed_calls)}")
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    result = client.toggle_fast_mode(
+        {
+            "job_id": "job-fast-toggle",
+            "kind": "session_fast_toggle",
+            "backend": "codex",
+            "target_session_id": "agenthub-session-id",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"enabled": True, "runtime_session_ref": "codex/sess-fast.jsonl"},
+        },
+        enabled=True,
+        timeout_seconds=45,
+    )
+
+    assert result["state"] == "enabled"
+    assert observed_calls == [
+        (
+            "thread/resume",
+            {
+                "threadId": "agenthub-session-id",
+                "cwd": "E:/work/AgentHub",
+                "persistExtendedHistory": True,
+            },
+        ),
+        (
+            "thread/settings/update",
+            {
+                "threadId": "native-thread-123",
+                "cwd": "E:/work/AgentHub",
+                "serviceTier": "fast",
+            },
+        ),
+        (
+            "thread/resume",
+            {
+                "threadId": "native-thread-123",
+                "cwd": "E:/work/AgentHub",
+                "persistExtendedHistory": True,
+            },
+        ),
+    ]
+
+
+def test_codex_fast_toggle_falls_back_to_runtime_session_ref_when_resume_has_no_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = codex_app_server.CodexAppServerClient(executable="codex")
+    observed_calls: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(client, "initialize", lambda: None)
+
+    def fake_request(method: str, params: dict[str, object] | None, *, timeout_seconds: int) -> dict[str, object]:
+        observed_calls.append((method, dict(params or {})))
+        if method == "thread/resume" and len(observed_calls) == 1:
+            return {"settings": {"serviceTier": "default"}}
+        if method == "thread/settings/update":
+            return {"ok": True}
+        if method == "thread/resume" and len(observed_calls) == 3:
+            return {"settings": {"serviceTier": "default"}}
+        raise AssertionError(f"unexpected request call: {method} #{len(observed_calls)}")
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    client.toggle_fast_mode(
+        {
+            "job_id": "job-fast-toggle",
+            "kind": "session_fast_toggle",
+            "backend": "codex",
+            "target_session_id": "agenthub-session-id",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"enabled": False, "runtime_session_ref": "codex-native-thread-id"},
+        },
+        enabled=False,
+        timeout_seconds=45,
+    )
+
+    assert observed_calls[1][1]["threadId"] == "codex-native-thread-id"
 
 
 def test_file_list_returns_workspace_entries_without_shell(tmp_path: Path) -> None:

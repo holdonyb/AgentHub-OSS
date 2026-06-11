@@ -18,6 +18,7 @@ from app.schemas import (
     SessionBtwIn,
     SessionControlsIn,
     SessionCreateIn,
+    SessionFastToggleIn,
     SessionFileListIn,
     SessionFileReadIn,
     SessionForkIn,
@@ -143,6 +144,15 @@ def _require_worker_backend_available(db: DbSession, space_id: str | None, worke
 
 def _require_worker_backend(db: DbSession, session: AgentSession) -> None:
     _require_worker_backend_available(db, session.space_id, session.worker_id, session.backend)
+
+
+def _require_codex_native_fast(db: DbSession, session: AgentSession) -> None:
+    _require_worker_backend(db, session)
+    if session.backend.strip().lower() != "codex":
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Native fast mode is only available for Codex sessions", "code": "FAST_MODE_UNAVAILABLE"},
+        )
 
 
 def _active_session_input_job_status(db: DbSession, session_id: str, space_id: str | None) -> str | None:
@@ -912,6 +922,80 @@ def send_session_input(
     )
     db.commit()
     return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/fast/refresh")
+def refresh_session_fast_mode(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = _require_session(db, actor.space_id, session_id)
+    _require_codex_native_fast(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_fast_state_refresh",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+            "runtime_session_ref": session.runtime_session_ref,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.fast_refresh",
+        payload={"session_id": session.session_id},
+    )
+    db.commit()
+    return {"job": job_out(job), "session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/fast")
+def toggle_session_fast_mode(
+    session_id: str,
+    payload: SessionFastToggleIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = _require_session(db, actor.space_id, session_id)
+    _require_codex_native_fast(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="session_fast_toggle",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "enabled": payload.enabled,
+            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+            "runtime_session_ref": session.runtime_session_ref,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="session.fast_toggle",
+        payload={"session_id": session.session_id, "enabled": payload.enabled},
+    )
+    db.commit()
+    return {"job": job_out(job), "session": session_out(session)}
 
 
 @router.post("/api/sessions/{session_id}/rename")

@@ -21,6 +21,8 @@ ALLOWED_JOB_KINDS = {
     "session_start",
     "session_fork",
     "session_btw",
+    "session_fast_state_refresh",
+    "session_fast_toggle",
     "session_discovery",
     "observer",
     "reflector",

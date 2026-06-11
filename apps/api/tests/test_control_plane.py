@@ -123,6 +123,123 @@ def test_sync_status_changes_only_when_relevant_state_changes(client: TestClient
     assert changed_payload["workers_digest"] == first_payload["workers_digest"]
 
 
+def test_operator_can_enqueue_session_fast_refresh_and_toggle_jobs(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-fast",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-fast",
+            "status": "ready",
+            "title": "Fast state",
+            "last_message": "",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    refresh = client.post("/api/sessions/sess-fast/fast/refresh", headers=headers)
+    assert refresh.status_code == 200, refresh.text
+    assert refresh.json()["job"]["kind"] == "session_fast_state_refresh"
+    claimed_refresh = client.post(
+        "/api/internal/jobs/claim",
+        headers=worker_headers,
+        json={"worker_id": worker_id},
+    )
+    assert claimed_refresh.status_code == 200, claimed_refresh.text
+    assert claimed_refresh.json()["job"]["payload"]["runtime_session_ref"] == "codex/sess-fast"
+
+    toggle = client.post("/api/sessions/sess-fast/fast", headers=headers, json={"enabled": True})
+    assert toggle.status_code == 200, toggle.text
+    assert toggle.json()["job"]["kind"] == "session_fast_toggle"
+    assert toggle.json()["job"]["target_session_id"] == "sess-fast"
+    claimed_toggle = client.post(
+        "/api/internal/jobs/claim",
+        headers=worker_headers,
+        json={"worker_id": worker_id},
+    )
+    assert claimed_toggle.status_code == 200, claimed_toggle.text
+    assert claimed_toggle.json()["job"]["payload"]["runtime_session_ref"] == "codex/sess-fast"
+
+
+def test_fast_job_completion_updates_session_runtime_metadata(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-fast-complete",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-fast-complete",
+            "status": "ready",
+            "title": "Fast completion",
+            "last_message": "",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    toggle = client.post("/api/sessions/sess-fast-complete/fast", headers=headers, json={"enabled": True})
+    assert toggle.status_code == 200, toggle.text
+    job_id = toggle.json()["job"]["job_id"]
+
+    claimed = client.post(
+        "/api/internal/jobs/claim",
+        headers=worker_headers,
+        json={"worker_id": worker_id},
+    )
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json()["job"]["job_id"] == job_id
+
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "result_text": dumps_json(
+                {
+                    "state": "enabled",
+                    "service_tier": "priority",
+                    "reasoning_effort": "minimal",
+                    "raw": {"settings": {"serviceTier": "priority", "reasoningEffort": "minimal"}},
+                }
+            ),
+        },
+    )
+    assert completed.status_code == 200, completed.text
+
+    listed = client.get("/api/sessions/sess-fast-complete", headers=headers)
+    assert listed.status_code == 200, listed.text
+    fast_mode = listed.json()["session"]["runtime_metadata"]["fast_mode"]
+    assert fast_mode["state"] == "enabled"
+    assert fast_mode["service_tier"] == "priority"
+    assert fast_mode["reasoning_effort"] == "minimal"
+
+
 def test_inbox_sync_returns_only_changed_sessions_and_archive_removals(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

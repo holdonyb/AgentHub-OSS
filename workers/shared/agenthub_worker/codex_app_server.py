@@ -53,6 +53,11 @@ def _session_id(job: dict[str, Any]) -> str:
     return session_id
 
 
+def _runtime_session_ref(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    return str(payload.get("runtime_session_ref") or "").strip()
+
+
 def _workspace_root(job: dict[str, Any]) -> str:
     return str(job.get("workspace_root") or ".").strip() or "."
 
@@ -131,10 +136,10 @@ def build_collaboration_mode(job: dict[str, Any], *, collaboration_mode: str = "
     }
 
 
-def build_thread_resume_params(job: dict[str, Any]) -> dict[str, Any]:
+def build_thread_resume_params(job: dict[str, Any], *, thread_id: str | None = None) -> dict[str, Any]:
     controls = _controls(job)
     params: dict[str, Any] = {
-        "threadId": _session_id(job),
+        "threadId": thread_id or _session_id(job),
         "cwd": _workspace_root(job),
         "persistExtendedHistory": True,
     }
@@ -148,6 +153,55 @@ def build_thread_resume_params(job: dict[str, Any]) -> dict[str, Any]:
     if sandbox:
         params["sandbox"] = sandbox
     return params
+
+
+def _extract_thread_settings(result: dict[str, Any]) -> dict[str, Any]:
+    candidates: list[Any] = [result.get("settings"), result.get("threadSettings")]
+    thread = result.get("thread")
+    if isinstance(thread, dict):
+        candidates.extend([thread.get("settings"), thread.get("threadSettings"), thread])
+    candidates.append(result)
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            return candidate
+    return {}
+
+
+def _extract_thread_id(result: dict[str, Any]) -> str | None:
+    candidates: list[Any] = [
+        result.get("threadId"),
+        result.get("conversationId"),
+        result.get("id"),
+    ]
+    thread = result.get("thread")
+    if isinstance(thread, dict):
+        candidates.extend([thread.get("threadId"), thread.get("conversationId"), thread.get("id")])
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _normalize_fast_state(result: dict[str, Any]) -> dict[str, Any]:
+    settings = _extract_thread_settings(result)
+    service_tier_raw = settings.get("serviceTier")
+    reasoning_effort_raw = settings.get("reasoningEffort")
+    service_tier = str(service_tier_raw).strip() if service_tier_raw is not None else None
+    reasoning_effort = str(reasoning_effort_raw).strip() if reasoning_effort_raw is not None else None
+    normalized_service_tier = service_tier.lower() if service_tier else None
+    if normalized_service_tier == "priority":
+        state = "enabled"
+    elif normalized_service_tier in {"default", "standard", ""} or service_tier is None:
+        state = "disabled"
+    else:
+        state = "unknown"
+    return {
+        "state": state,
+        "service_tier": service_tier,
+        "reasoning_effort": reasoning_effort,
+        "raw": result,
+    }
 
 
 def build_turn_start_params(job: dict[str, Any], *, collaboration_mode: str = "plan") -> dict[str, Any]:
@@ -437,6 +491,30 @@ class CodexAppServerClient:
         self.request("thread/resume", build_thread_resume_params(job), timeout_seconds=timeout_seconds)
         self.request("turn/start", build_turn_start_params(job, collaboration_mode=collaboration_mode), timeout_seconds=timeout_seconds)
         return self._wait_for_turn(job, collaboration_mode=collaboration_mode, client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
+
+    def read_fast_mode(self, job: dict[str, Any], *, timeout_seconds: int) -> dict[str, Any]:
+        self.initialize()
+        result = self.request("thread/resume", build_thread_resume_params(job), timeout_seconds=timeout_seconds)
+        return _normalize_fast_state(result)
+
+    def toggle_fast_mode(self, job: dict[str, Any], *, enabled: bool, timeout_seconds: int) -> dict[str, Any]:
+        self.initialize()
+        resume_result = self.request("thread/resume", build_thread_resume_params(job), timeout_seconds=timeout_seconds)
+        resolved_thread_id = _extract_thread_id(resume_result) or _runtime_session_ref(job) or _session_id(job)
+        update_params: dict[str, Any] = {
+            "threadId": resolved_thread_id,
+            "cwd": _workspace_root(job),
+            "serviceTier": "fast" if enabled else None,
+        }
+        if not enabled:
+            update_params["reasoningEffort"] = None
+        self.request("thread/settings/update", update_params, timeout_seconds=timeout_seconds)
+        result = self.request(
+            "thread/resume",
+            build_thread_resume_params(job, thread_id=resolved_thread_id),
+            timeout_seconds=timeout_seconds,
+        )
+        return _normalize_fast_state(result)
 
     def run_plan_turn(
         self,
@@ -751,3 +829,13 @@ def run_codex_turn(
         )
     _publish_plan_timeline(client, _session_id(job), result)
     return result.text
+
+
+def read_codex_fast_mode(job: dict[str, Any], *, timeout_seconds: int = 3600) -> dict[str, Any]:
+    with CodexAppServerClient() as app_server:
+        return app_server.read_fast_mode(job, timeout_seconds=timeout_seconds)
+
+
+def toggle_codex_fast_mode(job: dict[str, Any], *, enabled: bool, timeout_seconds: int = 3600) -> dict[str, Any]:
+    with CodexAppServerClient() as app_server:
+        return app_server.toggle_fast_mode(job, enabled=enabled, timeout_seconds=timeout_seconds)

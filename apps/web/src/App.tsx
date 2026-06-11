@@ -93,6 +93,7 @@ type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi' | 'opencode';
 type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
 type ReplyMode = 'direct' | 'plan';
+type FastModeState = 'enabled' | 'disabled' | 'unknown' | 'unavailable';
 type PermissionAction = 'allow' | 'deny' | 'answer';
 type NotificationState = NotificationPermission | 'unsupported';
 type LaunchMode = 'none' | 'start' | 'fork';
@@ -196,6 +197,16 @@ interface ControlsDraft {
   secret_refs: string;
   secret_environment: string;
   secret_namespace: string;
+}
+
+interface SessionFastModeSnapshot {
+  state: FastModeState;
+  service_tier?: string | null;
+  reasoning_effort?: string | null;
+  supported: boolean;
+  observed_at?: string | null;
+  error_code?: string | null;
+  error_text?: string | null;
 }
 
 interface PermissionChoice {
@@ -559,6 +570,76 @@ const TIMELINE_DISPLAY_DUPLICATE_WINDOW_MS = 2_000;
 
 function replyModeLabel(locale: LocaleCode, mode: ReplyMode) {
   return mode === 'plan' ? t(locale, 'plan') : t(locale, 'direct');
+}
+
+function sessionFastMode(session?: AgentSession | null): SessionFastModeSnapshot {
+  if (!session || session.backend.toLowerCase() !== 'codex') {
+    return { state: 'unavailable', supported: false };
+  }
+  const raw = session.runtime_metadata?.fast_mode;
+  if (!raw || typeof raw !== 'object') {
+    return { state: 'unknown', supported: true };
+  }
+  const data = raw as Record<string, unknown>;
+  const state = String(data.state ?? 'unknown').toLowerCase();
+  const supported = data.supported !== false;
+  const errorCode = typeof data.error_code === 'string' ? String(data.error_code) : null;
+  const errorText = typeof data.error_text === 'string' ? String(data.error_text) : null;
+  return {
+    state: state === 'enabled' || state === 'disabled' ? state : state === 'unavailable' || !supported ? 'unavailable' : 'unknown',
+    service_tier: typeof data.service_tier === 'string' ? String(data.service_tier) : null,
+    reasoning_effort:
+      typeof data.reasoning_effort === 'string'
+        ? String(data.reasoning_effort)
+        : null,
+    supported,
+    observed_at: typeof data.observed_at === 'string' ? String(data.observed_at) : null,
+    error_code: errorCode,
+    error_text: errorText,
+  };
+}
+
+function fastModeLabel(locale: LocaleCode, snapshot: SessionFastModeSnapshot) {
+  if (snapshot.state === 'enabled') return pickLocale(locale, '快速已开', 'Fast on');
+  if (snapshot.state === 'disabled') return pickLocale(locale, '快速已关', 'Fast off');
+  if (snapshot.state === 'unavailable') return pickLocale(locale, '快速不可用', 'Fast unavailable');
+  return pickLocale(locale, '快速未知', 'Fast unknown');
+}
+
+function fastModeHint(locale: LocaleCode, snapshot: SessionFastModeSnapshot) {
+  if (snapshot.state === 'enabled') {
+    return pickLocale(
+      locale,
+      `原生 /fast 已开启${snapshot.reasoning_effort ? ` · ${snapshot.reasoning_effort}` : ''}`,
+      `Native /fast is enabled${snapshot.reasoning_effort ? ` · ${snapshot.reasoning_effort}` : ''}`,
+    );
+  }
+  if (snapshot.state === 'unavailable') {
+    if (snapshot.error_code === 'thread_not_found') {
+      return pickLocale(locale, '这个会话没有绑定可恢复的原生 Codex 线程，不能直接读取或切换 /fast', 'This session is not bound to a resumable native Codex thread, so /fast cannot be read or toggled directly');
+    }
+    return pickLocale(locale, '这个会话当前不能直接读取或切换原生 /fast', 'This session cannot read or toggle native /fast right now');
+  }
+  return null;
+}
+
+function fastModeFailureMetadata(errorText: string | null | undefined) {
+  const detail = String(errorText || '').trim();
+  const lowered = detail.toLowerCase();
+  if (lowered.includes('thread not found')) {
+    return {
+      state: 'unavailable',
+      supported: false,
+      error_code: 'thread_not_found',
+      error_text: detail,
+    } as const;
+  }
+  return {
+    state: 'unknown',
+    supported: true,
+    error_code: 'read_failed',
+    error_text: detail || null,
+  } as const;
 }
 
 const fullAccessControls = {
@@ -2301,6 +2382,7 @@ function App() {
   const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('focus');
   const [replyMode, setReplyMode] = useState<ReplyMode>('direct');
+  const [isFastModePending, setIsFastModePending] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>('sessions');
   const [mobileSessionActionsOpen, setMobileSessionActionsOpen] = useState(false);
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
@@ -2363,6 +2445,7 @@ function App() {
     scrollTop: number;
   } | null>(null);
   const pendingOptimisticTimelineRef = useRef<Record<string, AgentTimelineItem[]>>({});
+  const fastRefreshRequestedRef = useRef<Set<string>>(new Set());
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -2438,6 +2521,7 @@ function App() {
       sessions[0],
     [filteredSessions, selectedId, sessions],
   );
+  const selectedFastMode = useMemo(() => sessionFastMode(selectedSession), [selectedSession]);
 
   function updateControlsDraft(updater: ControlsDraft | ((current: ControlsDraft) => ControlsDraft)) {
     controlsDirtyRef.current = true;
@@ -2866,6 +2950,32 @@ function App() {
     const next = new Map(current.map((permission) => [permission.permission_id, permission]));
     incoming.forEach((permission) => next.set(permission.permission_id, permission));
     return Array.from(next.values());
+  }
+
+  function patchSessionFastMode(
+    current: AgentSession[],
+    sessionId: string,
+    patch: Record<string, unknown>,
+  ) {
+    return current.map((session) => {
+      if (session.session_id !== sessionId) return session;
+      const runtimeMetadata =
+        session.runtime_metadata && typeof session.runtime_metadata === 'object'
+          ? (session.runtime_metadata as Record<string, unknown>)
+          : {};
+      return {
+        ...session,
+        runtime_metadata: {
+          ...runtimeMetadata,
+          fast_mode: {
+            ...(runtimeMetadata.fast_mode && typeof runtimeMetadata.fast_mode === 'object'
+              ? (runtimeMetadata.fast_mode as Record<string, unknown>)
+              : {}),
+            ...patch,
+          },
+        },
+      };
+    });
   }
 
   function replaceSessionJobs(current: Job[], sessionId: string, incoming: Job[]) {
@@ -4262,9 +4372,87 @@ function App() {
       latestPayload = await loadSessionDelta(sessionId);
       const matched = latestPayload.jobs.find((job) => job.job_id === jobId);
       if (matched && !['queued', 'running'].includes(matched.status)) return matched;
-      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      }
     }
     return latestPayload?.jobs.find((job) => job.job_id === jobId) ?? null;
+  }
+
+  async function refreshSelectedSessionFastMode(options?: { silent?: boolean; force?: boolean }) {
+    if (!selectedSession || !canOperate(user)) return;
+    if (selectedSession.backend.toLowerCase() !== 'codex') return;
+    if (isFastModePending) return;
+    const requestKey = selectedSession.session_id;
+    if (!options?.force && fastRefreshRequestedRef.current.has(requestKey)) return;
+    fastRefreshRequestedRef.current.add(requestKey);
+    setIsFastModePending(true);
+    if (!options?.silent) setNotice(pickLocale(locale, '正在读取原生 /fast 状态', 'Reading native /fast state'));
+    try {
+      const response = await apiPost<{ job: Job; session: AgentSession }>(
+        `/api/sessions/${selectedSession.session_id}/fast/refresh`,
+        {},
+        csrfToken,
+      );
+      setSessions((current) => mergeSessionList(current, [response.session], []));
+      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 12, delayMs: 1000 });
+      if (finished?.status === 'failed') {
+        setSessions((current) => patchSessionFastMode(current, selectedSession.session_id, fastModeFailureMetadata(finished.error_text)));
+        setNotice(finished.error_text || pickLocale(locale, '读取 /fast 状态失败', 'Failed to read /fast state'));
+      } else if (!finished || ['queued', 'running'].includes(finished.status)) {
+        if (!options?.silent) {
+          setNotice(pickLocale(locale, '已提交 /fast 状态同步，稍后更新', 'Fast state sync queued; it will update shortly'));
+        }
+      } else if (!options?.silent) {
+        setNotice(pickLocale(locale, '已刷新 /fast 状态', 'Fast state refreshed'));
+      }
+    } catch (error) {
+      if (!options?.silent) setNotice(`读取 /fast 状态失败：${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setIsFastModePending(false);
+    }
+  }
+
+  async function handleToggleFastMode(enabled: boolean, options?: { silent?: boolean }) {
+    if (!selectedSession || !canOperate(user)) return;
+    if (selectedSession.backend.toLowerCase() !== 'codex') {
+      setNotice(pickLocale(locale, '只有 Codex session 支持原生 /fast', 'Only Codex sessions support native /fast'));
+      return;
+    }
+    if (isFastModePending) return;
+    setIsFastModePending(true);
+    setNotice(
+      enabled
+        ? pickLocale(locale, '正在开启原生 /fast', 'Enabling native /fast')
+        : pickLocale(locale, '正在关闭原生 /fast', 'Disabling native /fast'),
+    );
+    try {
+      const response = await apiPost<{ job: Job; session: AgentSession }>(
+        `/api/sessions/${selectedSession.session_id}/fast`,
+        { enabled },
+        csrfToken,
+      );
+      setSessions((current) => mergeSessionList(current, [response.session], []));
+      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 12, delayMs: 1000 });
+      if (finished?.status === 'failed') {
+        setSessions((current) => patchSessionFastMode(current, selectedSession.session_id, fastModeFailureMetadata(finished.error_text)));
+        setNotice(finished.error_text || pickLocale(locale, '切换 /fast 失败', 'Failed to toggle /fast'));
+        return;
+      }
+      if (!finished || ['queued', 'running'].includes(finished.status)) {
+        setNotice(pickLocale(locale, '已提交 /fast 切换，稍后更新状态', 'Fast toggle queued; state will update shortly'));
+        return;
+      }
+      setNotice(
+        enabled
+          ? pickLocale(locale, '原生 /fast 已开启', 'Native /fast enabled')
+          : pickLocale(locale, '原生 /fast 已关闭', 'Native /fast disabled'),
+      );
+    } catch (error) {
+      setNotice(`切换 /fast 失败：${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setIsFastModePending(false);
+    }
   }
 
   function insertSlashCommand(option: SlashCommandOption) {
@@ -5180,6 +5368,16 @@ function App() {
                       {replyModeLabel(locale, mode)}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className={selectedFastMode.state === 'enabled' ? 'selected' : ''}
+                    aria-pressed={selectedFastMode.state === 'enabled'}
+                    onClick={() => void handleToggleFastMode(selectedFastMode.state !== 'enabled')}
+                    disabled={!canReply || selectedFastMode.state === 'unavailable' || isFastModePending}
+                    title={fastModeHint(locale, selectedFastMode) ?? undefined}
+                  >
+                    {isFastModePending ? pickLocale(locale, '快速处理中', 'Fast...') : pickLocale(locale, '快速', 'Fast')}
+                  </button>
                   <span className="reply-mode-hint">{replyModeHint(replyMode, selectedSession, selectedProvider, locale)}</span>
                 </div>
                 <textarea
@@ -5461,6 +5659,35 @@ function App() {
                       {pickLocale(locale, '应用全权限', 'Apply Full Access')}
                     </button>
                   </div>
+                  {selectedSession?.backend.toLowerCase() === 'codex' && (
+                    <div className="control-summary">
+                      <span>
+                        <Activity size={15} />
+                        {pickLocale(locale, '原生 /fast：', 'Native /fast: ')}
+                        {fastModeLabel(locale, selectedFastMode)}
+                      </span>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => void refreshSelectedSessionFastMode({ force: true })}
+                          disabled={!canOperate(user) || isFastModePending}
+                        >
+                          {pickLocale(locale, '同步快速状态', 'Sync Fast State')}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-action"
+                          onClick={() => void handleToggleFastMode(selectedFastMode.state !== 'enabled')}
+                          disabled={!canOperate(user) || isFastModePending}
+                        >
+                          {selectedFastMode.state === 'enabled'
+                            ? pickLocale(locale, '关闭快速', 'Disable Fast')
+                            : pickLocale(locale, '开启快速', 'Enable Fast')}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   <div className="control-fields">
                     <label>
                       {pickLocale(locale, '模型', 'Model')}

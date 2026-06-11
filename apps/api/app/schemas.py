@@ -13,6 +13,8 @@ JobKind = Literal[
     "session_start",
     "session_fork",
     "session_btw",
+    "session_fast_state_refresh",
+    "session_fast_toggle",
     "session_discovery",
     "observer",
     "reflector",
@@ -346,6 +348,10 @@ class SessionControlsIn(BaseModel):
     secret_refs: list[str] | None = None
     secret_environment: str | None = None
     secret_namespace: str | None = None
+
+
+class SessionFastToggleIn(BaseModel):
+    enabled: bool
 
 
 class SessionAttachmentIn(BaseModel):

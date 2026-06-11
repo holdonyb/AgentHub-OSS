@@ -14,7 +14,13 @@ import subprocess
 import tempfile
 from typing import Any
 
-from agenthub_worker.codex_app_server import resolve_codex_executable, run_codex_plan_turn, run_codex_turn
+from agenthub_worker.codex_app_server import (
+    read_codex_fast_mode,
+    resolve_codex_executable,
+    run_codex_plan_turn,
+    run_codex_turn,
+    toggle_codex_fast_mode,
+)
 from agenthub_worker.discovery import (
     discover_opencode_sessions,
     parse_claude_jsonl,
@@ -1042,6 +1048,19 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
         return _execute_file_list(job)
     if kind == "file_read":
         return _execute_file_read(job)
+    if kind == "session_fast_state_refresh":
+        backend = str(job.get("backend") or "").lower()
+        if backend != "codex":
+            raise ValueError("session_fast_state_refresh is only supported for codex")
+        timeout_seconds = _job_timeout_seconds(payload)
+        return _json_result(read_codex_fast_mode(job, timeout_seconds=timeout_seconds))
+    if kind == "session_fast_toggle":
+        backend = str(job.get("backend") or "").lower()
+        if backend != "codex":
+            raise ValueError("session_fast_toggle is only supported for codex")
+        timeout_seconds = _job_timeout_seconds(payload)
+        enabled = bool(payload.get("enabled"))
+        return _json_result(toggle_codex_fast_mode(job, enabled=enabled, timeout_seconds=timeout_seconds))
     if kind == "session_input":
         backend = str(job.get("backend") or "").lower()
         secret_env = _resolve_job_secrets(client, job, payload)
