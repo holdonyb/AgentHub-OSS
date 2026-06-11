@@ -831,6 +831,20 @@ describe('AgentHub console', () => {
     expect(screen.getByText('继续执行')).toBeInTheDocument();
   });
 
+  it('does not keep the first screen loading while audit events are slow', async () => {
+    const defaultFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/events')) return new Promise<Response>(() => undefined);
+      return defaultFetch(input, init);
+    }));
+
+    render(<App />);
+
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+  });
+
   it('inserts account quick replies into the composer', async () => {
     render(<App />);
 

@@ -303,6 +303,128 @@ def test_inbox_sync_returns_only_changed_sessions_and_archive_removals(client: T
     assert removed_payload["removed_session_ids"] == ["sess-beta"]
 
 
+def test_session_lists_return_compact_runtime_metadata_but_detail_keeps_full_payload(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    runtime_metadata = {
+        "fast_mode": {
+            "state": "enabled",
+            "service_tier": "priority",
+            "reasoning_effort": "minimal",
+        },
+        "messages": [
+            {"kind": "assistant_message", "role": "assistant", "text": "x" * 4000, "created_at": "2026-05-01T10:00:00Z"}
+        ],
+        "nested": {"huge": "y" * 4000},
+    }
+    metadata = {"large_blob": "z" * 4000, "project": {"name": "AgentHub"}}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-compact-list",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-compact-list",
+            "status": "ready",
+            "title": "Compact list payload",
+            "last_message": "ready",
+            "runtime_metadata": runtime_metadata,
+            "metadata": metadata,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    listed = client.get("/api/sessions", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_session = next(item for item in listed.json()["items"] if item["session_id"] == "sess-compact-list")
+    assert listed_session["runtime_metadata"] == {}
+    assert listed_session["metadata"] == {}
+
+    inbox_sync = client.get("/api/sync/inbox", headers=headers)
+    assert inbox_sync.status_code == 200, inbox_sync.text
+    synced_session = next(item for item in inbox_sync.json()["items"] if item["session_id"] == "sess-compact-list")
+    assert synced_session["runtime_metadata"] == {}
+    assert synced_session["metadata"] == {}
+
+    detail = client.get("/api/sessions/sess-compact-list", headers=headers)
+    assert detail.status_code == 200, detail.text
+    full_session = detail.json()["session"]
+    assert full_session["runtime_metadata"]["messages"][0]["text"] == runtime_metadata["messages"][0]["text"]
+    assert full_session["runtime_metadata"]["nested"]["huge"] == runtime_metadata["nested"]["huge"]
+    assert full_session["metadata"]["large_blob"] == metadata["large_blob"]
+
+
+def test_job_list_returns_compact_results_but_session_sync_keeps_full_job_output(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-job-compact",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-job-compact",
+            "status": "ready",
+            "title": "Compact job list",
+            "last_message": "ready",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    huge_result = "R" * 4000
+    huge_error = "E" * 4000
+    with client.app.state.SessionLocal() as db:
+        job = Job(
+            space_id=created.json()["session"]["space_id"],
+            kind="session_input",
+            target_session_id="sess-job-compact",
+            worker_id=worker["worker"]["worker_id"],
+            backend="codex",
+            workspace_root="E:/work/AgentHub",
+            namespace="default",
+            status="failed",
+            payload_json=dumps_json({"prompt": "继续执行", "attachments": [{"filename": "image.png"}]}),
+            result_text=huge_result,
+            error_text=huge_error,
+            created_by="usr_owner",
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.job_id
+
+    listed = client.get("/api/jobs", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_job = next(item for item in listed.json()["items"] if item["job_id"] == job_id)
+    assert listed_job["payload"]["prompt"] == "继续执行"
+    assert listed_job["result_text"] is None
+    assert listed_job["error_text"].startswith("E" * 50)
+    assert len(listed_job["error_text"]) <= 400
+
+    synced = client.get("/api/sync/session/sess-job-compact", headers=headers)
+    assert synced.status_code == 200, synced.text
+    synced_job = next(item for item in synced.json()["jobs"] if item["job_id"] == job_id)
+    assert synced_job["result_text"] == huge_result
+    assert synced_job["error_text"] == huge_error
+
+
 def test_session_sync_returns_only_new_timeline_rows_and_recent_session_jobs(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

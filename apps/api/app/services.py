@@ -182,6 +182,38 @@ def session_out(session: AgentSession) -> dict[str, Any]:
     }
 
 
+def session_summary_out(session: AgentSession) -> dict[str, Any]:
+    preferred_title = session.custom_title or session.llm_title or session.display_title or session.heuristic_title or session.title
+    display_title = _safe_session_title(session, preferred_title)
+    activity_summary = session.activity_summary or session.last_message or "当前空闲"
+    return {
+        "space_id": session.space_id,
+        "session_id": session.session_id,
+        "backend": session.backend,
+        "worker_id": session.worker_id,
+        "workspace_root": session.workspace_root,
+        "project_name": session.project_name,
+        "namespace": session.namespace,
+        "mode": session.mode,
+        "runtime_session_ref": session.runtime_session_ref,
+        "status": session.status,
+        "title": display_title,
+        "display_title": display_title,
+        "custom_title": session.custom_title,
+        "heuristic_title": session.heuristic_title,
+        "llm_title": session.llm_title,
+        "activity_summary": strip_ansi(activity_summary),
+        "last_message": strip_ansi(session.last_message),
+        "last_activity_at": session.last_activity_at,
+        "last_role": session.last_role,
+        "controls": loads_json(session.controls_json, {}),
+        "runtime_metadata": {},
+        "metadata": {},
+        "archived_at": session.archived_at,
+        "updated_at": session.updated_at,
+    }
+
+
 def timeline_item_out(item: AgentTimeline) -> dict[str, Any]:
     return {
         "space_id": item.space_id,
@@ -889,6 +921,31 @@ def job_out(job: Job, *, include_private_payload: bool = False) -> dict[str, Any
         "payload": payload,
         "result_text": strip_ansi(job.result_text or "") if job.result_text is not None else None,
         "error_text": strip_ansi(job.error_text or "") if job.error_text is not None else None,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def job_summary_out(job: Job, *, include_private_payload: bool = False) -> dict[str, Any]:
+    raw_payload = loads_json(job.payload_json, {})
+    payload = sanitize_text(raw_payload) if include_private_payload else redact_payload(raw_payload)
+    queue_reason, queue_reason_text = _job_queue_reason(job, payload)
+    return {
+        "space_id": job.space_id,
+        "job_id": job.job_id,
+        "kind": job.kind,
+        "target_session_id": job.target_session_id,
+        "worker_id": job.worker_id,
+        "backend": job.backend,
+        "workspace_root": job.workspace_root,
+        "namespace": job.namespace,
+        "priority": job.priority,
+        "status": job.status,
+        "queue_reason": queue_reason,
+        "queue_reason_text": queue_reason_text,
+        "payload": payload,
+        "result_text": None,
+        "error_text": _compact(job.error_text or "", 400) if job.error_text is not None else None,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }

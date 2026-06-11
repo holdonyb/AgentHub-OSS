@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case
+from sqlalchemy.orm import load_only
 
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role
@@ -30,6 +31,7 @@ from app.services import (
     SESSION_STATES,
     expire_superseded_pending_permissions,
     job_out,
+    session_summary_out,
     session_out,
     strip_ansi,
     sync_session_from_timeline,
@@ -55,6 +57,31 @@ ALLOWED_ATTACHMENT_TYPES = {
     "text/plain",
     "text/xml",
 }
+
+SESSION_LIST_LOAD_ONLY = (
+    AgentSession.space_id,
+    AgentSession.session_id,
+    AgentSession.backend,
+    AgentSession.worker_id,
+    AgentSession.workspace_root,
+    AgentSession.project_name,
+    AgentSession.namespace,
+    AgentSession.mode,
+    AgentSession.runtime_session_ref,
+    AgentSession.status,
+    AgentSession.title,
+    AgentSession.display_title,
+    AgentSession.custom_title,
+    AgentSession.heuristic_title,
+    AgentSession.llm_title,
+    AgentSession.activity_summary,
+    AgentSession.last_message,
+    AgentSession.last_activity_at,
+    AgentSession.last_role,
+    AgentSession.controls_json,
+    AgentSession.archived_at,
+    AgentSession.updated_at,
+)
 
 
 def _is_machine_title(value: str) -> bool:
@@ -455,7 +482,7 @@ def list_sessions(
 ):
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
-    query = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id)
+    query = db.query(AgentSession).options(load_only(*SESSION_LIST_LOAD_ONLY)).filter(AgentSession.space_id == actor.space_id)
     query = query.filter(AgentSession.archived_at.is_not(None) if archived else AgentSession.archived_at.is_(None))
     if backend:
         query = query.filter(AgentSession.backend == backend)
@@ -484,7 +511,7 @@ def list_sessions(
                 ]
             ).lower()
         ]
-    return {"items": [session_out(session) for session in sessions]}
+    return {"items": [session_summary_out(session) for session in sessions]}
 
 
 def _require_session(db: DbSession, space_id: str | None, session_id: str) -> AgentSession:

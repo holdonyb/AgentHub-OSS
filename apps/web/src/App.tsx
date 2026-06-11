@@ -2446,6 +2446,7 @@ function App() {
   } | null>(null);
   const pendingOptimisticTimelineRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const fastRefreshRequestedRef = useRef<Set<string>>(new Set());
+  const eventsLoadingRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -3061,6 +3062,17 @@ function App() {
     return payload;
   }
 
+  async function loadEvents() {
+    if (eventsLoadingRef.current) return;
+    eventsLoadingRef.current = true;
+    try {
+      const payload = await apiGet<{ items: Event[] }>('/api/events');
+      setEvents(payload.items);
+    } finally {
+      eventsLoadingRef.current = false;
+    }
+  }
+
   async function loadData(
     nextCsrf?: string,
     nextUser: User | null = user,
@@ -3068,11 +3080,10 @@ function App() {
     options: { background?: boolean } = {},
   ) {
     const sessionsPath = archiveView === 'archived' ? '/api/sessions?archived=true' : '/api/sessions';
-    const [sessionPayload, workerPayload, jobPayload, eventPayload, schedulePayload, providerPayload, permissionPayload] = await Promise.all([
+    const [sessionPayload, workerPayload, jobPayload, schedulePayload, providerPayload, permissionPayload] = await Promise.all([
       apiGet<{ items: AgentSession[] }>(sessionsPath),
       apiGet<{ items: Worker[] }>('/api/workers'),
       apiGet<{ items: Job[] }>('/api/jobs'),
-      options.background ? Promise.resolve({ items: events }) : apiGet<{ items: Event[] }>('/api/events'),
       apiGet<{ items: Schedule[] }>('/api/schedules'),
       apiGet<{ items: ProviderSnapshot[] }>('/api/providers'),
       apiGet<{ items: AgentPermission[] }>('/api/permissions'),
@@ -3089,7 +3100,6 @@ function App() {
     setSessions(sessionPayload.items);
     setWorkers(workerPayload.items);
     setJobs(jobPayload.items);
-    setEvents(eventPayload.items);
     setSchedules(schedulePayload.items);
     setProviders(providerPayload.items);
     setPermissions(permissionPayload.items);
@@ -3346,6 +3356,11 @@ function App() {
   }, [loadState]);
 
   useEffect(() => {
+    if (loadState !== 'ready') return;
+    void loadEvents().catch(() => undefined);
+  }, [loadState]);
+
+  useEffect(() => {
     if (loadState !== 'ready') return undefined;
     let stopped = false;
     let inFlight = false;
@@ -3416,6 +3431,7 @@ function App() {
     setNotice('正在后台刷新，当前会话不会被切换');
     try {
       await loadData();
+      void loadEvents().catch(() => undefined);
       setNotice('后台刷新完成');
     } catch (error) {
       setNotice(`刷新失败：${error instanceof Error ? error.message : '未知错误'}`);

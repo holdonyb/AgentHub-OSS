@@ -6,15 +6,40 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, or_
+from sqlalchemy.orm import load_only
 
 from app.core.deps import Actor, DbSession, require_min_role
 from app.core.json import dumps_json
 from app.models import AgentPermission, AgentSession, AgentTimeline, Job, ProviderSnapshot, Schedule, Worker
 from app.schemas import InboxSyncOut, PermissionSyncOut, SessionSyncOut, SyncStatusOut
-from app.services import job_out, permission_out, session_out, timeline_item_out
+from app.services import job_out, permission_out, session_out, session_summary_out, timeline_item_out
 
 router = APIRouter()
 EPOCH_UTC = datetime.fromtimestamp(0, tz=timezone.utc)
+SESSION_SYNC_LOAD_ONLY = (
+    AgentSession.space_id,
+    AgentSession.session_id,
+    AgentSession.backend,
+    AgentSession.worker_id,
+    AgentSession.workspace_root,
+    AgentSession.project_name,
+    AgentSession.namespace,
+    AgentSession.mode,
+    AgentSession.runtime_session_ref,
+    AgentSession.status,
+    AgentSession.title,
+    AgentSession.display_title,
+    AgentSession.custom_title,
+    AgentSession.heuristic_title,
+    AgentSession.llm_title,
+    AgentSession.activity_summary,
+    AgentSession.last_message,
+    AgentSession.last_activity_at,
+    AgentSession.last_role,
+    AgentSession.controls_json,
+    AgentSession.archived_at,
+    AgentSession.updated_at,
+)
 
 
 def _iso(value: Any) -> str:
@@ -179,7 +204,7 @@ def _decode_cursor(cursor: str | None) -> tuple[datetime, str]:
 
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
     updated_after, session_after = _decode_cursor(cursor)
-    query = db.query(AgentSession).filter(AgentSession.space_id == space_id)
+    query = db.query(AgentSession).options(load_only(*SESSION_SYNC_LOAD_ONLY)).filter(AgentSession.space_id == space_id)
     if cursor:
         query = query.filter(
             or_(
@@ -257,7 +282,7 @@ def get_inbox_sync(
 ) -> InboxSyncOut:
     rows = _session_delta_query(db, actor.space_id, cursor).limit(limit).all()
     items = [
-        session_out(session)
+        session_summary_out(session)
         for session in rows
         if (session.archived_at is not None) == archived
     ]
