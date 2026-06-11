@@ -25,9 +25,9 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "docs/SELF_HOST_QUICKSTART.md",
         "docs/TAILSCALE_PRIVATE_MODE.md",
         "docs/SELF_HOST_TROUBLESHOOTING.md",
-        "scripts/export-oss.ps1",
         "scripts/audit-public-export.py",
         "scripts/check-worker-package-version.mjs",
+        "scripts/install-hooks.ps1",
         "scripts/install.sh",
         "scripts/install-selfhost-linux.sh",
         "scripts/run-local-dev.mjs",
@@ -305,8 +305,8 @@ def test_contributing_covers_platform_scope_and_prompts() -> None:
 
 
 def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
-    export_ps1 = (REPO_ROOT / "scripts" / "export-oss.ps1").read_text(encoding="utf-8")
     export_audit = (REPO_ROOT / "scripts" / "audit-public-export.py").read_text(encoding="utf-8")
+    install_hooks = (REPO_ROOT / "scripts" / "install-hooks.ps1").read_text(encoding="utf-8")
     wrapper_script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     install_script = (REPO_ROOT / "scripts" / "install-selfhost-linux.sh").read_text(encoding="utf-8")
     check_sh = (REPO_ROOT / "scripts" / "check-selfhost.sh").read_text(encoding="utf-8")
@@ -323,15 +323,14 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     publish_workflow = (REPO_ROOT / ".github" / "workflows" / "npm-worker-publish.yml").read_text(encoding="utf-8")
     nginx_template = (REPO_ROOT / "deploy" / "nginx" / "agenthub-selfhost.conf.template").read_text(encoding="utf-8")
 
-    assert "param(" in export_ps1
-    assert "AgentHub-OSS" in export_ps1
-    assert ".git" in export_ps1
-    assert "audit-public-export.py" in export_ps1
-    assert "robocopy" in export_ps1
-
     assert "private-domain" in export_audit
     assert ("agenthub" + ".ifix.xin") in export_audit
     assert ("publish" + "-apk.ps1") in export_audit
+    assert "OWNER_HANDLE_ALLOWLIST" in export_audit
+    assert "AgentHub-OSS" in export_audit
+
+    assert "pre-commit" in install_hooks
+    assert "audit-public-export.py" in install_hooks
 
     assert "set -Eeuo pipefail" in wrapper_script
     assert "install-selfhost-linux.sh" in wrapper_script
