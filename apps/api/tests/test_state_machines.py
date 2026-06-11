@@ -360,6 +360,88 @@ def test_listing_jobs_fails_stale_running_job_without_worker_heartbeat(client: T
         assert session.status == "ready"
 
 
+def test_listing_sessions_releases_running_job_when_worker_heartbeat_expired(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "offline-worker-running-session",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "runtime_session_ref": "codex/offline-worker-running-session.jsonl",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    first = client.post("/api/sessions/offline-worker-running-session/input", json={"prompt": "第一条"}, headers=headers)
+    assert first.status_code == 200, first.text
+    claimed_first = client.post("/api/internal/jobs/claim", json={"worker_id": worker_id}, headers=worker_headers)
+    assert claimed_first.status_code == 200, claimed_first.text
+    first_job_id = claimed_first.json()["job"]["job_id"]
+
+    second = client.post("/api/sessions/offline-worker-running-session/input", json={"prompt": "第二条"}, headers=headers)
+    assert second.status_code == 200, second.text
+    second_job_id = second.json()["job"]["job_id"]
+
+    with client.app.state.SessionLocal() as db:
+        from app.models import Worker
+
+        db_worker = db.query(Worker).filter(Worker.worker_id == worker_id).one()
+        db_worker.status = "online"
+        db_worker.last_heartbeat_at = utcnow() - timedelta(seconds=240)
+        first_job = db.query(Job).filter(Job.job_id == first_job_id).one()
+        first_job.claimed_at = utcnow() - timedelta(seconds=180)
+        first_job.updated_at = first_job.claimed_at
+        db.commit()
+
+    listed = client.get("/api/sessions", headers=headers)
+    assert listed.status_code == 200, listed.text
+
+    with client.app.state.SessionLocal() as db:
+        from app.models import Worker
+
+        db_worker = db.query(Worker).filter(Worker.worker_id == worker_id).one()
+        first_job = db.query(Job).filter(Job.job_id == first_job_id).one()
+        second_job = db.query(Job).filter(Job.job_id == second_job_id).one()
+        session = db.query(AgentSession).filter(AgentSession.session_id == "offline-worker-running-session").one()
+        assert db_worker.status == "offline"
+        assert first_job.status == "failed"
+        assert "heartbeat expired" in str(first_job.error_text)
+        assert second_job.status == "queued"
+        assert session.status == "queued"
+
+
+def test_listing_workers_marks_expired_heartbeat_offline(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+
+    with client.app.state.SessionLocal() as db:
+        from app.models import Worker
+
+        db_worker = db.query(Worker).filter(Worker.worker_id == worker_id).one()
+        db_worker.status = "online"
+        db_worker.last_heartbeat_at = utcnow() - timedelta(seconds=240)
+        db.commit()
+
+    listed = client.get("/api/workers", headers=headers)
+
+    assert listed.status_code == 200, listed.text
+    listed_worker = next(item for item in listed.json()["items"] if item["worker_id"] == worker_id)
+    assert listed_worker["status"] == "offline"
+
+
 def test_stale_runtime_running_session_does_not_block_queued_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

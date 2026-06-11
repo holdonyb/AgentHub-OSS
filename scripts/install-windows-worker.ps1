@@ -214,8 +214,20 @@ if ($StartAtLogOn) {
 
 $actionArgument = '-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $loopPath
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $actionArgument
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -StartWhenAvailable
-$trigger = if ($useStartupTrigger) { New-ScheduledTaskTrigger -AtStartup } else { New-ScheduledTaskTrigger -AtLogOn }
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -RestartCount 999 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit (New-TimeSpan -Days 30) `
+    -MultipleInstances IgnoreNew
+$primaryTrigger = if ($useStartupTrigger) { New-ScheduledTaskTrigger -AtStartup } else { New-ScheduledTaskTrigger -AtLogOn }
+$watchdogTrigger = New-ScheduledTaskTrigger -Once `
+    -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+$triggers = @($primaryTrigger, $watchdogTrigger)
 $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 if ($useStartupTrigger) {
@@ -225,7 +237,7 @@ if ($useStartupTrigger) {
         Register-ScheduledTask `
             -TaskName $taskName `
             -Action $action `
-            -Trigger $trigger `
+            -Trigger $triggers `
             -Settings $settings `
             -User $credential.UserName `
             -Password $password `
@@ -242,7 +254,7 @@ if ($useStartupTrigger) {
     Register-ScheduledTask `
         -TaskName $taskName `
         -Action $action `
-        -Trigger $trigger `
+        -Trigger $triggers `
         -Settings $settings `
         -Principal $principal `
         -Force | Out-Null
