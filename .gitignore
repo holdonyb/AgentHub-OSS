@@ -20,3 +20,5 @@ data/
 apps/mobile/android/app/*.jks
 apps/mobile/android/app/*.keystore
 .gstack/
+
+.worktrees/
