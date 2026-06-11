@@ -339,7 +339,7 @@ Public relay verification:
 
 ```powershell
 curl -X POST https://agenthub.example.com/api/worker/enroll -H "Content-Type: application/json" -d "{}"
-curl -X POST https://agenthub.example.com/api/worker/jobs/claim -H "Authorization: Bearer replace-with-worker-token" -H "Content-Type: application/json" -d "{}"
+curl -X POST https://agenthub.example.com/api/worker/jobs/claim -H "Authorization: Bearer <worker-token>" -H "Content-Type: application/json" -d "{}"
 ```
 
 Expected:
