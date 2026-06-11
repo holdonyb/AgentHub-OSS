@@ -117,13 +117,18 @@ if [[ -z "$cert_dir" ]]; then
   cert_dir="/etc/letsencrypt/live/$domain"
 fi
 
-mkdir -p "$site_root/app" "$site_root/download" "$site_root/release" "$site_root/assets"
+mkdir -p "$site_root/app" "$site_root/download" "$site_root/install" "$site_root/release" "$site_root/press" "$site_root/assets"
 cp "$source_root/website/styles.css" "$site_root/styles.css"
 cp "$source_root/scripts/install.sh" "$site_root/install.sh"
 chmod +x "$site_root/install.sh"
 cp "$source_root/docs/assets/agenthub-readme-hero.png" "$site_root/assets/agenthub-readme-hero.png"
 cp "$source_root/docs/assets/agenthub-architecture-overview.png" "$site_root/assets/agenthub-architecture-overview.png"
 cp "$source_root/docs/assets/agenthub-release-showcase.svg" "$site_root/assets/agenthub-release-showcase.svg"
+cp "$source_root/docs/assets/agenthub-android-login-raw.png" "$site_root/assets/agenthub-android-login-raw.png"
+cp "$source_root/docs/assets/agenthub-android-approval-real.png" "$site_root/assets/agenthub-android-approval-real.png"
+cp "$source_root/docs/assets/agenthub-web-approval-real.png" "$site_root/assets/agenthub-web-approval-real.png"
+cp "$source_root/docs/assets/agenthub-web-codex-real.png" "$site_root/assets/agenthub-web-codex-real.png"
+cp "$source_root/docs/assets/agenthub-web-worker-status-real.png" "$site_root/assets/agenthub-web-worker-status-real.png"
 cp "$source_root/assets/brand/agenthub-mark.svg" "$site_root/assets/agenthub-mark.svg"
 cp "$source_root/assets/brand/agenthub-icon.png" "$site_root/assets/agenthub-icon.png"
 
@@ -143,8 +148,18 @@ replace_placeholder \
   "__AGENTHUB_GITHUB_REPO__" "$github_repo"
 
 replace_placeholder \
+  "$source_root/website/install/index.html" \
+  "$site_root/install/index.html" \
+  "__AGENTHUB_GITHUB_REPO__" "$github_repo"
+
+replace_placeholder \
   "$source_root/website/release/index.html" \
   "$site_root/release/index.html" \
+  "__AGENTHUB_GITHUB_REPO__" "$github_repo"
+
+replace_placeholder \
+  "$source_root/website/press/index.html" \
+  "$site_root/press/index.html" \
   "__AGENTHUB_GITHUB_REPO__" "$github_repo"
 
 site_conf="$nginx_available_dir/agenthub-website.conf"

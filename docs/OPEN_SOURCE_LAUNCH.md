@@ -92,7 +92,10 @@ Public release surfaces should stay aligned:
 - `README.md` / `README.en.md`
 - `https://myagenthub.dev/download/`
 - `https://myagenthub.dev/release/`
+- `https://myagenthub.dev/press/`
 - the current GitHub Release body
+
+Channel-ready wording lives in `docs/LAUNCH_COPY.md`. Treat that file as the source of truth for short post variants, HN seed text, and friend-group copy.
 
 ## Short announcement seed
 
