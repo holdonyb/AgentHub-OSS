@@ -278,6 +278,55 @@ def test_claude_jsonl_ignores_local_command_echo_entries(tmp_path: Path) -> None
     assert session.last_message == "真正的回复内容"
 
 
+def test_claude_jsonl_preserves_tool_calls_and_structured_tool_results(tmp_path: Path) -> None:
+    fixture = tmp_path / "claude-tooling.jsonl"
+    fixture.write_text(
+        '{"sessionId":"claude-3","cwd":"E:/Work","type":"summary","summary":"Autopilot run"}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_task_create","name":"TaskCreate","input":{"subject":"A/V:旁白长则冻帧延长视频","description":"补齐媒体链路","activeForm":"创建任务"}}]}}\n'
+        '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_task_create","type":"tool_result","content":"Task #7 created successfully: A/V:旁白长则冻帧延长视频"}]},"toolUseResult":{"task":{"id":"7","subject":"A/V:旁白长则冻帧延长视频"}}}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash","name":"Bash","input":{"command":"pytest -q","description":"run tests"}}]}}\n'
+        '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_bash","type":"tool_result","content":"12 passed in 6.79s","is_error":false}]},"toolUseResult":{"stdout":"test updated\\n12 passed in 6.79s","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_task_update","name":"TaskUpdate","input":{"taskId":"7","status":"in_progress"}}]}}\n'
+        '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_task_update","type":"tool_result","content":"Updated task #7 status"}]},"toolUseResult":{"success":true,"taskId":"7","updatedFields":["status"],"statusChange":{"from":"pending","to":"in_progress"}}}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_reject","name":"Bash","input":{"command":"git status"}}]}}\n'
+        '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_reject","type":"tool_result","content":"The user doesn\'t want to proceed with this tool use.","is_error":true}]},"toolUseResult":"User rejected tool use"}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"我先继续修剩下的缺口。"}]}}\n',
+        encoding="utf-8",
+    )
+
+    session = parse_claude_jsonl(fixture)
+
+    timeline = session.runtime_metadata["timeline"]
+    assert [item["item_type"] for item in timeline] == [
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "tool_call",
+        "assistant_message",
+    ]
+    assert timeline[0]["tool_name"] == "TaskCreate"
+    assert "A/V:旁白长则冻帧延长视频" in timeline[0]["text"]
+    assert timeline[1]["tool_call_id"] == "toolu_task_create"
+    assert "#7" in timeline[1]["text"]
+    assert timeline[2]["tool_name"] == "Bash"
+    assert "pytest -q" in timeline[2]["text"]
+    assert timeline[3]["tool_call_id"] == "toolu_bash"
+    assert "12 passed in 6.79s" in timeline[3]["text"]
+    assert "test updated" in timeline[3]["text"]
+    assert timeline[4]["tool_name"] == "TaskUpdate"
+    assert "taskId: 7" in timeline[5]["text"]
+    assert "status: pending -> in_progress" in timeline[5]["text"]
+    assert timeline[6]["tool_name"] == "Bash"
+    assert "git status" in timeline[6]["text"]
+    assert "User rejected tool use" in timeline[7]["text"]
+    assert timeline[-1]["text"] == "我先继续修剩下的缺口。"
+    assert session.last_message == "我先继续修剩下的缺口。"
+
+
 def test_kimi_wire_session_parses_user_assistant_and_state(tmp_path: Path) -> None:
     session_dir = tmp_path / ".kimi" / "sessions" / "workspace-hash" / "session-uuid"
     session_dir.mkdir(parents=True)
