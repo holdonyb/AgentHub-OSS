@@ -2380,6 +2380,8 @@ function App() {
   const [query, setQuery] = useState('');
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
   const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
+  const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('focus');
   const [replyMode, setReplyMode] = useState<ReplyMode>('direct');
   const [isFastModePending, setIsFastModePending] = useState(false);
@@ -2514,6 +2516,11 @@ function App() {
       })
       .sort((left, right) => sessionTimestamp(right) - sessionTimestamp(left));
   }, [providerFilter, query, sessions]);
+
+  const selectedVisibleSessionIds = useMemo(
+    () => filteredSessions.map((session) => session.session_id).filter((sessionId) => selectedSessionIds.has(sessionId)),
+    [filteredSessions, selectedSessionIds],
+  );
 
   const selectedSession = useMemo(
     () =>
@@ -2685,6 +2692,14 @@ function App() {
     selectedIdRef.current = nextSelectedId;
     setSelectedId(nextSelectedId);
   }, [filteredSessions, sessions]);
+
+  useEffect(() => {
+    const visibleIds = new Set(filteredSessions.map((session) => session.session_id));
+    setSelectedSessionIds((current) => {
+      const next = new Set(Array.from(current).filter((sessionId) => visibleIds.has(sessionId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [filteredSessions]);
 
   async function copyTextToClipboard(value: string, successMessage: string) {
     if (!value.trim()) return;
@@ -3467,6 +3482,8 @@ function App() {
   async function switchSessionArchiveView(view: SessionArchiveView) {
     if (view === sessionArchiveView) return;
     setSessionArchiveView(view);
+    setSessionSelectionMode(false);
+    setSelectedSessionIds(new Set());
     selectedIdRef.current = null;
     setSelectedId(null);
     try {
@@ -3586,18 +3603,40 @@ function App() {
     await loadData();
   }
 
-  async function handleArchiveSession(archive: boolean) {
-    if (!selectedSession || !canOperate(user)) return;
+  function archiveConfirmMessage(count: number, archive: boolean) {
+    if (archive) {
+      return count === 1
+        ? t(locale, 'confirmArchiveSingle')
+        : t(locale, 'confirmArchiveMany', { count: String(count) });
+    }
+    return count === 1
+      ? t(locale, 'confirmRestoreSingle')
+      : t(locale, 'confirmRestoreMany', { count: String(count) });
+  }
+
+  async function archiveSessions(sessionIds: string[], archive: boolean) {
+    if (sessionIds.length === 0 || !canOperate(user)) return;
+    if (!window.confirm(archiveConfirmMessage(sessionIds.length, archive))) return;
     const action = archive ? 'archive' : 'unarchive';
     try {
-      await apiPost<{ session: AgentSession }>(
-        `/api/sessions/${selectedSession.session_id}/${action}`,
-        {},
-        csrfToken,
+      for (const sessionId of sessionIds) {
+        await apiPost<{ session: AgentSession }>(`/api/sessions/${sessionId}/${action}`, {}, csrfToken);
+      }
+      if (selectedSession && sessionIds.includes(selectedSession.session_id)) {
+        selectedIdRef.current = null;
+        setSelectedId(null);
+      }
+      setSessionSelectionMode(false);
+      setSelectedSessionIds(new Set());
+      setNotice(
+        archive
+          ? sessionIds.length > 1
+            ? t(locale, 'sessionsArchived', { count: String(sessionIds.length) })
+            : t(locale, 'sessionArchived')
+          : sessionIds.length > 1
+            ? t(locale, 'sessionsRestored', { count: String(sessionIds.length) })
+            : t(locale, 'sessionRestored'),
       );
-      selectedIdRef.current = null;
-      setSelectedId(null);
-      setNotice(archive ? t(locale, 'sessionArchived') : t(locale, 'sessionRestored'));
       await loadData(undefined, user, sessionArchiveView);
     } catch (error) {
       setNotice(
@@ -3605,9 +3644,35 @@ function App() {
           action: archive ? t(locale, 'archive') : t(locale, 'restore'),
           message: error instanceof Error ? error.message : t(locale, 'unknownError'),
         }),
-        );
-      }
+      );
     }
+  }
+
+  async function handleArchiveSession(archive: boolean) {
+    if (!selectedSession || !canOperate(user)) return;
+    await archiveSessions([selectedSession.session_id], archive);
+  }
+
+  async function handleBatchArchiveSessions(archive: boolean) {
+    if (!canOperate(user) || selectedVisibleSessionIds.length === 0) return;
+    await archiveSessions(selectedVisibleSessionIds, archive);
+  }
+
+  function toggleSessionSelection(sessionId: string) {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  }
+
+  function setAllVisibleSessionsSelected(selected: boolean) {
+    setSelectedSessionIds(selected ? new Set(filteredSessions.map((session) => session.session_id)) : new Set());
+  }
 
   async function handleCancelCurrentJob() {
     if (!selectedSession || !selectedCancelableJob || !canOperate(user)) return;
@@ -5107,34 +5172,96 @@ function App() {
             <span>{text.sortRecent}</span>
             <SlidersHorizontal size={15} />
           </div>
+          {canOperate(user) && (
+            <div className="session-bulk-toolbar" role="group" aria-label={t(locale, 'sessionBulkActions')}>
+              {sessionSelectionMode ? (
+                <>
+                  <button type="button" onClick={() => setAllVisibleSessionsSelected(true)}>
+                    {t(locale, 'selectAllVisible')}
+                  </button>
+                  <button type="button" onClick={() => setAllVisibleSessionsSelected(false)}>
+                    {t(locale, 'clearSelection')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleBatchArchiveSessions(sessionArchiveView !== 'archived')}
+                    disabled={selectedVisibleSessionIds.length === 0}
+                  >
+                    {sessionArchiveView === 'archived' ? t(locale, 'restoreSelected') : t(locale, 'archiveSelected')}
+                  </button>
+                  <span className="session-bulk-count">
+                    {t(locale, 'selectedCount', { count: String(selectedVisibleSessionIds.length) })}
+                  </span>
+                  <button
+                    type="button"
+                    className="session-bulk-cancel"
+                    onClick={() => {
+                      setSessionSelectionMode(false);
+                      setSelectedSessionIds(new Set());
+                    }}
+                  >
+                    {t(locale, 'cancelSelection')}
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setSessionSelectionMode(true)}>
+                  {t(locale, 'selectSessions')}
+                </button>
+              )}
+            </div>
+          )}
           {filteredSessions.length === 0 && (
             <p className="empty">{sessionArchiveView === 'archived' ? t(locale, 'noArchivedSessions') : t(locale, 'noSessions')}</p>
           )}
           {filteredSessions.map((session) => (
-            <button
-              key={session.session_id}
-              className={`session-row ${session.session_id === selectedSession?.session_id ? 'selected' : ''}`}
-              onClick={() => openSession(session.session_id)}
-            >
-              <span className={`status-dot ${statusClass(session.status)}`} />
-              <span className="session-row-body">
-                <span className="session-row-top">
-                  <strong>{sessionTitle(session)}</strong>
-                  <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status, locale)}</span>
-                </span>
-                <span className="session-row-meta">
-                  <span className="backend-mark">
-                    <TerminalSquare size={14} />
-                    {backendLabel(session.backend)}
+            <div key={session.session_id} className="session-row-shell">
+              {sessionSelectionMode && (
+                <button
+                  type="button"
+                  className={`session-select-toggle ${selectedSessionIds.has(session.session_id) ? 'selected' : ''}`}
+                  aria-label={t(locale, 'toggleSessionSelection', { title: sessionTitle(session) })}
+                  aria-pressed={selectedSessionIds.has(session.session_id)}
+                  onClick={() => toggleSessionSelection(session.session_id)}
+                >
+                  {selectedSessionIds.has(session.session_id) ? '✓' : ''}
+                </button>
+              )}
+              <button
+                type="button"
+                className={`session-row ${session.session_id === selectedSession?.session_id ? 'selected' : ''}`}
+                onClick={() => openSession(session.session_id)}
+              >
+                <span className={`status-dot ${statusClass(session.status)}`} />
+                <span className="session-row-body">
+                  <span className="session-row-top">
+                    <strong>{sessionTitle(session)}</strong>
+                    <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status, locale)}</span>
                   </span>
-                  <span>{session.project_name} / {session.namespace}</span>
-                  <small>{formatRelative(session.last_activity_at, locale) || formatWhen(session.last_activity_at)}</small>
+                  <span className="session-row-meta">
+                    <span className="backend-mark">
+                      <TerminalSquare size={14} />
+                      {backendLabel(session.backend)}
+                    </span>
+                    <span>{session.project_name} / {session.namespace}</span>
+                    <small>{formatRelative(session.last_activity_at, locale) || formatWhen(session.last_activity_at)}</small>
+                  </span>
+                  <span className="session-row-bottom">
+                    <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
+                  </span>
                 </span>
-                <span className="session-row-bottom">
-                  <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
-                </span>
-              </span>
-            </button>
+              </button>
+              {canOperate(user) && (
+                <button
+                  type="button"
+                  className="session-row-quick-action"
+                  aria-label={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
+                  title={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
+                  onClick={() => void archiveSessions([session.session_id], sessionArchiveView !== 'archived')}
+                >
+                  {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
+                </button>
+              )}
+            </div>
           ))}
         </aside>
 
