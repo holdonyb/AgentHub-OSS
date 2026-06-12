@@ -665,6 +665,7 @@ describe('AgentHub console', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.stubGlobal('confirm', vi.fn(() => true));
     nativeNotifications.notifyNativePendingPermission.mockResolvedValue('unsupported');
     nativeNotifications.notifyNativeStatus.mockResolvedValue('unsupported');
     nativeNotifications.requestNativeNotificationPermission.mockResolvedValue('unsupported');
@@ -1177,14 +1178,59 @@ describe('AgentHub console', () => {
     expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '归档会话' }));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-1/archive', expect.any(Object)));
+    expect(window.confirm).toHaveBeenCalledWith('确认归档这个会话？');
     expect(await screen.findByText('暂无会话。')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^归档$/ }));
     expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '恢复会话' }));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-1/unarchive', expect.any(Object)));
+    expect(window.confirm).toHaveBeenCalledWith('确认恢复这个会话？');
     fireEvent.click(screen.getByRole('button', { name: /^收件箱$/ }));
     expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+  }, 10000);
+
+  it('archives multiple visible sessions from the session list with confirmation', async () => {
+    let activeSessions = [...twoSessionPayload.items];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse({ items: activeSessions });
+      if (url.endsWith('/api/sessions?archived=true')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/sess-1/archive')) {
+        activeSessions = activeSessions.filter((session) => session.session_id !== 'sess-1');
+        return jsonResponse({ session: { ...twoSessionPayload.items[0], archived_at: '2026-05-14T10:00:00Z' } });
+      }
+      if (url.endsWith('/api/sessions/sess-2/archive')) {
+        activeSessions = activeSessions.filter((session) => session.session_id !== 'sess-2');
+        return jsonResponse({ session: { ...twoSessionPayload.items[1], archived_at: '2026-05-14T10:01:00Z' } });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '批量选择' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择会话：修复移动控制台' }));
+    fireEvent.click(screen.getByRole('button', { name: '选择会话：同步状态验证' }));
+    fireEvent.click(screen.getByRole('button', { name: '归档选中' }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-1/archive', expect.any(Object)));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-2/archive', expect.any(Object)));
+    expect(window.confirm).toHaveBeenCalledWith('确认归档选中的 2 个会话？');
+    expect(await screen.findByText('暂无会话。')).toBeInTheDocument();
   }, 10000);
 
   it('shows slash commands and inserts the goal command template', async () => {
