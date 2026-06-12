@@ -43,6 +43,14 @@ ACK_TITLES = {
     "收到",
     "回复了",
 }
+CLAUDE_LOCAL_COMMAND_TAGS = (
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+)
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -172,6 +180,99 @@ def _timestamp(value: Any, fallback: datetime) -> datetime:
 def _compact(value: str, limit: int = 140) -> str:
     compacted = " ".join(value.split())
     return f"{compacted[: limit - 3]}..." if len(compacted) > limit else compacted
+
+
+def _clean_claude_display_text(value: str) -> str:
+    lines: list[str] = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if any(tag in lower for tag in CLAUDE_LOCAL_COMMAND_TAGS):
+            continue
+        if lower.startswith("[tool_use]"):
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines).strip()
+
+
+def _claude_tool_input_text(value: Any) -> str:
+    if isinstance(value, dict):
+        ordered_parts: list[str] = []
+        for key in ("subject", "description", "activeForm", "command", "file_path", "path", "taskId", "status"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                ordered_parts.append(f"{key}: {candidate.strip()}")
+        for key, candidate in value.items():
+            if key in {"subject", "description", "activeForm", "command", "file_path", "path", "taskId", "status"}:
+                continue
+            if isinstance(candidate, (str, int, float, bool)) and str(candidate).strip():
+                ordered_parts.append(f"{key}: {candidate}")
+        return "\n".join(ordered_parts)
+    return _text_from_content(value)
+
+
+def _claude_tool_call_text(item: dict[str, Any]) -> str:
+    tool_name = str(item.get("name") or "tool").strip() or "tool"
+    detail = _claude_tool_input_text(item.get("input"))
+    return f"调用工具: {tool_name}" if not detail else f"调用工具: {tool_name}\n{detail[:2000]}"
+
+
+def _should_hide_claude_tool_call(item: dict[str, Any]) -> bool:
+    return str(item.get("name") or "").strip().lower() == "agent"
+
+
+def _claude_tool_result_text(item: dict[str, Any], row: dict[str, Any]) -> str:
+    detail = _clean_claude_display_text(_text_from_content(item.get("content")))
+    result = row.get("toolUseResult")
+    if isinstance(result, dict):
+        if isinstance(result.get("task"), dict):
+            task = result["task"]
+            task_id = str(task.get("id") or "").strip()
+            subject = str(task.get("subject") or "").strip()
+            task_line = " ".join(part for part in (f"#{task_id}" if task_id else "", subject) if part).strip()
+            if task_line:
+                detail = task_line if not detail else f"{detail}\n{task_line}"
+        elif isinstance(result.get("file"), dict):
+            file_info = result["file"]
+            file_path = str(file_info.get("filePath") or "").strip()
+            file_content = _text_from_content(file_info.get("content"))
+            file_parts = [part for part in (f"file: {file_path}" if file_path else "", file_content) if part]
+            if file_parts:
+                joined = "\n".join(file_parts)
+                detail = joined if not detail else f"{detail}\n{joined}"
+        elif any(isinstance(result.get(key), str) and str(result.get(key)).strip() for key in ("stdout", "stderr")):
+            stdout = str(result.get("stdout") or "").strip()
+            stderr = str(result.get("stderr") or "").strip()
+            output_parts = []
+            if stdout:
+                output_parts.append(stdout)
+            if stderr:
+                output_parts.append(f"stderr:\n{stderr}")
+            if output_parts:
+                joined = "\n".join(output_parts)
+                detail = joined if not detail else f"{detail}\n{joined}"
+        elif result.get("success") is not None:
+            success = "success" if result.get("success") else "failed"
+            task_id = str(result.get("taskId") or "").strip()
+            updated_fields = result.get("updatedFields")
+            status_change = result.get("statusChange")
+            parts = [f"success: {success}"]
+            if task_id:
+                parts.append(f"taskId: {task_id}")
+            if isinstance(updated_fields, list) and updated_fields:
+                parts.append(f"updatedFields: {', '.join(str(field) for field in updated_fields)}")
+            if isinstance(status_change, dict):
+                before = str(status_change.get("from") or "").strip()
+                after = str(status_change.get("to") or "").strip()
+                if before or after:
+                    parts.append(f"status: {before or '?'} -> {after or '?'}")
+            joined = "\n".join(parts)
+            detail = joined if not detail else f"{detail}\n{joined}"
+    elif isinstance(result, str) and result.strip():
+        detail = result.strip() if not detail else f"{detail}\n{result.strip()}"
+    return "工具结果:" if not detail else f"工具结果:\n{detail[:4000]}"
 
 
 def _is_uuidish(value: str) -> bool:
@@ -592,6 +693,7 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
     workspace_root = ""
     messages: list[dict[str, Any]] = []
     explicit_title = ""
+    hidden_tool_call_ids: set[str] = set()
     for row in rows:
         timestamp = _timestamp(row.get("timestamp"), fallback_mtime)
         session_id = str(row.get("sessionId") or row.get("session_id") or session_id)
@@ -602,8 +704,42 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
         if row_type in {"assistant", "user"}:
             message_payload = row.get("message") if isinstance(row.get("message"), dict) else {}
             role = str(message_payload.get("role") or row_type)
-            text = _text_from_content(message_payload.get("content") or row.get("content"))
-            if item := _message(session_id, role, text, timestamp, role):
+            content = message_payload.get("content") or row.get("content")
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for content_item in content:
+                    if not isinstance(content_item, dict):
+                        text_parts.append(str(content_item))
+                        continue
+                    item_type = str(content_item.get("type") or "").strip().lower()
+                    if item_type == "tool_use":
+                        tool_call_id = str(content_item.get("id") or "").strip()
+                        if _should_hide_claude_tool_call(content_item):
+                            if tool_call_id:
+                                hidden_tool_call_ids.add(tool_call_id)
+                            continue
+                        if item := _message(session_id, "system", _claude_tool_call_text(content_item), timestamp, "action"):
+                            item["tool_name"] = str(content_item.get("name") or "").strip()
+                            item["tool_call_id"] = tool_call_id
+                            messages.append(item)
+                        continue
+                    if item_type == "tool_result":
+                        tool_call_id = str(content_item.get("tool_use_id") or content_item.get("id") or "").strip()
+                        if tool_call_id and tool_call_id in hidden_tool_call_ids:
+                            continue
+                        if item := _message(session_id, "system", _claude_tool_result_text(content_item, row), timestamp, "action"):
+                            item["tool_call_id"] = tool_call_id
+                            if isinstance(row.get("sourceToolAssistantUUID"), str):
+                                item["payload"] = {"source_tool_assistant_uuid": row["sourceToolAssistantUUID"]}
+                            messages.append(item)
+                        continue
+                    if item_type == "thinking":
+                        continue
+                    text_parts.append(_text_from_content(content_item))
+                text = _clean_claude_display_text("\n".join(part for part in text_parts if part))
+            else:
+                text = _clean_claude_display_text(_text_from_content(content))
+            if text and (item := _message(session_id, role, text, timestamp, role)):
                 messages.append(item)
         elif row_type == "system" and row.get("subtype") in {"api_error", "stop_hook_summary"}:
             text = _text_from_content(row.get("summary") or row.get("message") or row.get("error") or row.get("cause") or "")
