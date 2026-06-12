@@ -43,6 +43,14 @@ ACK_TITLES = {
     "收到",
     "回复了",
 }
+CLAUDE_LOCAL_COMMAND_TAGS = (
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+)
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -172,6 +180,21 @@ def _timestamp(value: Any, fallback: datetime) -> datetime:
 def _compact(value: str, limit: int = 140) -> str:
     compacted = " ".join(value.split())
     return f"{compacted[: limit - 3]}..." if len(compacted) > limit else compacted
+
+
+def _clean_claude_display_text(value: str) -> str:
+    lines: list[str] = []
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if any(tag in lower for tag in CLAUDE_LOCAL_COMMAND_TAGS):
+            continue
+        if lower.startswith("[tool_use]"):
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines).strip()
 
 
 def _is_uuidish(value: str) -> bool:
@@ -602,7 +625,9 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
         if row_type in {"assistant", "user"}:
             message_payload = row.get("message") if isinstance(row.get("message"), dict) else {}
             role = str(message_payload.get("role") or row_type)
-            text = _text_from_content(message_payload.get("content") or row.get("content"))
+            text = _clean_claude_display_text(_text_from_content(message_payload.get("content") or row.get("content")))
+            if not text:
+                continue
             if item := _message(session_id, role, text, timestamp, role):
                 messages.append(item)
         elif row_type == "system" and row.get("subtype") in {"api_error", "stop_hook_summary"}:
