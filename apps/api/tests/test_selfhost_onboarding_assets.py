@@ -114,7 +114,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert 'href="/press/"' in website_index
     assert 'href="/release/"' in website_index
     assert 'href="/assets/agenthub-mark.svg"' in website_index
-    assert 'AgentHub mark' in web_favicon
+    assert 'AgentHub terminal mark' in web_favicon
+    assert '#111827' in web_favicon
     assert 'agenthub-icon-mask' not in web_favicon
     assert "先选安装模式" in website_index
     assert "下载 release 资产" in website_download
