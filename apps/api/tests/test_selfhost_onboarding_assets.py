@@ -108,10 +108,14 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     website_install = (REPO_ROOT / "website" / "install" / "index.html").read_text(encoding="utf-8")
     website_press = (REPO_ROOT / "website" / "press" / "index.html").read_text(encoding="utf-8")
     website_release = (REPO_ROOT / "website" / "release" / "index.html").read_text(encoding="utf-8")
+    web_favicon = (REPO_ROOT / "apps" / "web" / "public" / "favicon.svg").read_text(encoding="utf-8")
     assert 'href="/download/"' in website_index
     assert 'href="/install/"' in website_index
     assert 'href="/press/"' in website_index
     assert 'href="/release/"' in website_index
+    assert 'href="/assets/agenthub-mark.svg"' in website_index
+    assert 'AgentHub mark' in web_favicon
+    assert 'agenthub-icon-mask' not in web_favicon
     assert "先选安装模式" in website_index
     assert "下载 release 资产" in website_download
     assert "agenthub-android-release.apk" in website_download

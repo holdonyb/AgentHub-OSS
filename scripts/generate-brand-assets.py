@@ -264,8 +264,8 @@ def replace_logo_in_docs(mark: Image.Image) -> None:
 def main() -> None:
     write_text(ROOT / "assets/brand/agenthub-icon.svg", ICON_SVG)
     write_text(ROOT / "assets/brand/agenthub-mark.svg", MARK_SVG)
-    write_text(ROOT / "apps/web/public/favicon.svg", ICON_SVG)
-    write_text(ROOT / "apps/mobile/android/app/src/main/assets/public/favicon.svg", ICON_SVG)
+    write_text(ROOT / "apps/web/public/favicon.svg", MARK_SVG)
+    write_text(ROOT / "apps/mobile/android/app/src/main/assets/public/favicon.svg", MARK_SVG)
     write_text(ROOT / "apps/mobile/android/app/src/main/res/drawable-v24/ic_launcher_foreground.xml", FOREGROUND_SVG)
     write_text(ROOT / "apps/mobile/android/app/src/main/res/drawable/ic_launcher_background.xml", BACKGROUND_VECTOR)
     write_text(ROOT / "apps/mobile/android/app/src/main/res/drawable/ic_stat_agenthub.xml", NOTIFICATION_VECTOR)

@@ -130,6 +130,7 @@ cp "$source_root/docs/assets/agenthub-web-approval-real.png" "$site_root/assets/
 cp "$source_root/docs/assets/agenthub-web-codex-real.png" "$site_root/assets/agenthub-web-codex-real.png"
 cp "$source_root/docs/assets/agenthub-web-worker-status-real.png" "$site_root/assets/agenthub-web-worker-status-real.png"
 cp "$source_root/assets/brand/agenthub-mark.svg" "$site_root/assets/agenthub-mark.svg"
+cp "$source_root/assets/brand/agenthub-mark.svg" "$site_root/favicon.svg"
 cp "$source_root/assets/brand/agenthub-icon.png" "$site_root/assets/agenthub-icon.png"
 
 replace_placeholder \

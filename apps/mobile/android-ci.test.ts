@@ -142,8 +142,9 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(launcher).toContain('@mipmap/ic_launcher_foreground');
     expect(foreground).toContain('#68C5FF');
     expect(notificationIcon).toContain('strokeWidth="2.8"');
-    expect(webFavicon).toContain('<title>AgentHub</title>');
-    expect(webFavicon).toContain('#68C5FF');
+    expect(webFavicon).toContain('<title>AgentHub mark</title>');
+    expect(webFavicon).toContain('#0D66D0');
+    expect(webFavicon).not.toContain('agenthub-icon-mask');
   });
 });
 

@@ -19,8 +19,9 @@ describe('mobile WebView layout guardrails', () => {
 
     expect(index).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg" />');
     expect(index).toContain('<meta name="theme-color" content="#0d66d0" />');
-    expect(favicon).toContain('<title>AgentHub</title>');
-    expect(favicon).toContain('#68C5FF');
+    expect(favicon).toContain('<title>AgentHub mark</title>');
+    expect(favicon).toContain('#0D66D0');
+    expect(favicon).not.toContain('agenthub-icon-mask');
   });
 
   it('keeps the fulltext reader above all mobile chrome', () => {
