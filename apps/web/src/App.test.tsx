@@ -895,6 +895,77 @@ describe('AgentHub console', () => {
     expect(transcript.scrollTop).toBe(1200);
   });
 
+  it('keeps the transcript pinned to the bottom when a synced reply arrives', async () => {
+    const counters = { inboxDelta: 0, sessionDelta: 0 };
+    let scrollHeight = 600;
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse(workersPayload);
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/inbox')) {
+        counters.inboxDelta += 1;
+        if (counters.inboxDelta < 2) return jsonResponse(inboxSyncPayload);
+        return jsonResponse({
+          ...inboxSyncPayload,
+          cursor: '2026-04-26T10:02:00Z|sess-1',
+          items: [{ ...sessionPayload.items[0], status: 'needs_reply', last_activity_at: '2026-04-26T10:02:00Z' }],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        counters.sessionDelta += 1;
+        if (counters.sessionDelta < 2) return jsonResponse(sessionSyncPayload);
+        scrollHeight = 780;
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: { ...sessionPayload.items[0], status: 'needs_reply', last_activity_at: '2026-04-26T10:02:00Z' },
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 3,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: '底部保持跟随的新回复',
+              created_at: '2026-04-26T10:02:00Z',
+            },
+          ],
+          next_after_seq: 3,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 300 });
+    Object.defineProperty(transcript, 'scrollTop', { configurable: true, writable: true, value: 300 });
+    fireEvent.scroll(transcript);
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(counters.inboxDelta).toBeGreaterThanOrEqual(1));
+
+    fireEvent.focus(window);
+    await waitFor(() => {
+      expect(counters.inboxDelta).toBeGreaterThanOrEqual(2);
+      expect(counters.sessionDelta).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByText('底部保持跟随的新回复')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Transcript').scrollTop).toBe(780));
+  });
+
   it('renders the transcript from older to newer so replies stay near the composer', async () => {
     render(<App />);
 
