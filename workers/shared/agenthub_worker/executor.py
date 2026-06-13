@@ -28,7 +28,12 @@ from agenthub_worker.discovery import (
     parse_kimi_session,
     recent_session_files,
 )
-from agenthub_worker.paths import default_agent_session_roots, normalize_workspace_root, project_name_from_root
+from agenthub_worker.paths import (
+    default_agent_session_roots,
+    infer_claude_workspace_root_from_runtime_ref,
+    normalize_workspace_root,
+    project_name_from_root,
+)
 
 
 ALLOWED_SANDBOX = {"read-only", "workspace-write", "danger-full-access"}
@@ -65,6 +70,16 @@ def _prompt(job: dict[str, Any]) -> str:
 def _payload(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("payload") or {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _effective_workspace_root(job: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+    effective = str(job.get("workspace_root") or ".").strip() or "."
+    backend = str(job.get("backend") or "").strip().lower()
+    if backend != "claude":
+        return effective
+    runtime_session_ref = str((payload or _payload(job)).get("runtime_session_ref") or "").strip()
+    inferred = infer_claude_workspace_root_from_runtime_ref(runtime_session_ref)
+    return inferred or effective
 
 
 def _json_result(value: dict[str, Any]) -> str:
@@ -252,7 +267,8 @@ def build_backend_command(
         raise ValueError("Only session_input jobs have backend commands")
     backend = str(job.get("backend") or "").lower()
     session_id = str(job.get("target_session_id") or "").strip()
-    workspace_root = str(job.get("workspace_root") or ".").strip() or "."
+    payload = _payload(job)
+    workspace_root = _effective_workspace_root(job, payload)
     prompt = _prompt(job)
     controls = _controls(job)
     model = _model_for_backend(backend, controls)
@@ -659,10 +675,11 @@ def _execute_session_btw(job: dict[str, Any], *, client: Any | None) -> str:
     try:
         args = build_session_start_command(job, output_file=output_file, prompt_override=_build_session_btw_prompt(job))
         timeout_seconds = _job_timeout_seconds(payload)
+        process_env = _backend_process_env(job, secret_env)
         if payload.get("dry_run"):
             return f"dry_run: {_format_command(args)}"
-        if secret_env:
-            return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file, env=secret_env)
+        if process_env:
+            return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file, env=process_env)
         return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
     finally:
         if output_file:
@@ -858,6 +875,18 @@ def _resolve_job_secrets(client: Any | None, job: dict[str, Any], payload: dict[
     return env
 
 
+def _backend_process_env(job: dict[str, Any], secret_env: dict[str, str]) -> dict[str, str] | None:
+    backend = str(job.get("backend") or "").lower()
+    if backend != "claude":
+        return secret_env or None
+    merged = dict(secret_env)
+    if "ANTHROPIC_API_KEY" not in merged and str(os.getenv("ANTHROPIC_API_KEY") or "").strip():
+        # Claude CLI should use the machine's interactive claude.ai subscription
+        # unless AgentHub explicitly injects an API key for this job.
+        merged["ANTHROPIC_API_KEY"] = ""
+    return merged or None
+
+
 def _safe_attachment_filename(value: Any) -> str:
     filename = str(value or "attachment.bin").replace("\\", "/").split("/")[-1].strip().strip(".")
     return filename[:180] or "attachment.bin"
@@ -976,6 +1005,7 @@ def _execute_codex_native_plan_cli_fallback(job: dict[str, Any], payload: dict[s
 
 def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], secret_env: dict[str, str]) -> str:
     backend = str(job.get("backend") or "").lower()
+    workspace_root = _effective_workspace_root(job, payload)
     output_file: str | None = None
     if backend == "codex" and not payload.get("dry_run"):
         fd, output_file = tempfile.mkstemp(prefix="agenthub-codex-", suffix=".txt")
@@ -984,20 +1014,22 @@ def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], sec
     try:
         attachments = _materialize_attachments(payload)
         job_for_command = _job_with_attachment_context(job, attachments)
+        job_for_command["workspace_root"] = workspace_root
         image_paths = [str(attachment.path) for attachment in attachments if attachment.is_image]
         args = build_backend_command(job_for_command, output_file=output_file, attachment_paths=image_paths)
         timeout_seconds = _job_timeout_seconds(payload)
+        process_env = _backend_process_env(job, secret_env)
         if payload.get("dry_run"):
             return f"dry_run: {_format_command(args)}"
-        if secret_env:
+        if process_env:
             return _run_backend_command(
                 args,
-                str(job.get("workspace_root") or "."),
+                workspace_root,
                 timeout_seconds,
                 output_file=output_file,
-                env=secret_env,
+                env=process_env,
             )
-        return _run_backend_command(args, str(job.get("workspace_root") or "."), timeout_seconds, output_file=output_file)
+        return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
     except RuntimeError as exc:
         if backend == "codex" and _is_codex_context_full_error(str(exc)):
             if output_file:
@@ -1007,17 +1039,17 @@ def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], sec
                 output_file=output_file,
                 attachment_paths=[str(attachment.path) for attachment in attachments if attachment.is_image],
             )
-            if secret_env:
+            if process_env:
                 return _run_backend_command(
                     fallback_args,
-                    str(job.get("workspace_root") or "."),
+                    workspace_root,
                     timeout_seconds,
                     output_file=output_file,
-                    env=secret_env,
+                    env=process_env,
                 )
             return _run_backend_command(
                 fallback_args,
-                str(job.get("workspace_root") or "."),
+                workspace_root,
                 timeout_seconds,
                 output_file=output_file,
             )

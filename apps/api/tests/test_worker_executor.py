@@ -1832,6 +1832,114 @@ def test_session_input_resolves_secret_refs_into_process_environment(monkeypatch
     assert captured["env"] == {"OPENAI_API_KEY": "sk-test", "KIMI_API_KEY": "kimi-test"}
 
 
+def test_claude_session_input_clears_inherited_anthropic_api_key_when_no_secret_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["args"] = args
+        captured["env"] = env
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad-inherited")
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-subscription",
+            "kind": "session_input",
+            "target_session_id": "sess-claude-subscription",
+            "backend": "claude",
+            "workspace_root": "E:/work",
+            "payload": {"prompt": "say hi"},
+        }
+    )
+
+    assert result == "ok"
+    assert captured["env"] == {"ANTHROPIC_API_KEY": ""}
+
+
+def test_claude_session_input_uses_runtime_ref_bucket_as_workspace_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["args"] = args
+        captured["cwd"] = cwd
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-runtime-ref",
+            "kind": "session_input",
+            "target_session_id": "05c07e97-bb7a-44a2-9849-98fb2d831bed",
+            "backend": "claude",
+            "workspace_root": "E:/work/开创力/课程创建Agent/.worktrees/courseagent-v2-foundation",
+            "payload": {
+                "prompt": "continue",
+                "runtime_session_ref": r"C:\Users\holdo\.claude\projects\E--work\05c07e97-bb7a-44a2-9849-98fb2d831bed.jsonl",
+            },
+        }
+    )
+
+    assert result == "ok"
+    assert captured["cwd"] == "E:/work"
+
+
+def test_claude_session_input_preserves_explicit_anthropic_api_key_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def resolve_secrets(self, refs: list[str], *, environment: str, namespace: str, job_id: str) -> dict[str, str]:
+            return {"ANTHROPIC_API_KEY": "sk-explicit"}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["env"] = env
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad-inherited")
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-explicit-key",
+            "kind": "session_input",
+            "target_session_id": "sess-claude-explicit-key",
+            "backend": "claude",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "say hi",
+                "controls": {"secret_refs": ["ANTHROPIC_API_KEY"]},
+            },
+        },
+        client=FakeClient(),
+    )
+
+    assert result == "ok"
+    assert captured["env"] == {"ANTHROPIC_API_KEY": "sk-explicit"}
+
+
 def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.MonkeyPatch) -> None:
     published: list[list[dict[str, object]]] = []
     calls: list[list[str]] = []
