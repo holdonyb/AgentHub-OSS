@@ -541,13 +541,27 @@ def test_api_startup_does_not_globally_backfill_existing_codex_plan_timeline(tmp
     from app.core.config import Settings
     from app.core.database import create_db_engine, create_session_local, init_database
     from app.main import create_app
-    from app.models import AgentPermission, AgentSession, AgentTimeline, Space
+    from app.models import AgentPermission, AgentSession, AgentTimeline, Space, Worker
 
     engine = create_db_engine(db_url)
     init_database(engine)
     SessionLocal = create_session_local(engine)
     with SessionLocal() as db:
         db.add(Space(space_id="spc-plan-startup", name="Plan Startup", slug="plan-startup"))
+        db.add(
+            Worker(
+                space_id="spc-plan-startup",
+                worker_id="win-main",
+                machine_name="win-main",
+                os="windows",
+                token_hash="test-worker-token-hash",
+                reachable_backends_json='["codex"]',
+                workspace_roots_json='["E:/work/AgentHub"]',
+                capabilities_json="{}",
+                status="online",
+            )
+        )
+        db.flush()
         db.add(
             AgentSession(
                 space_id="spc-plan-startup",
