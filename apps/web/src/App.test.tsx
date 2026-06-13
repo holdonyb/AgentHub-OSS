@@ -1175,15 +1175,23 @@ describe('AgentHub console', () => {
 
     render(<App />);
 
-    expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '归档会话' }));
+    const activeSessionRow = await screen.findByRole('button', { name: /修复移动控制台/ });
+    const activeSessionShell = activeSessionRow.closest('.session-row-shell') as HTMLElement;
+    expect(within(activeSessionShell).queryByRole('button', { name: '从列表归档会话' })).toBeNull();
+    fireEvent.pointerDown(activeSessionRow, { pointerType: 'touch', clientX: 320, clientY: 40 });
+    fireEvent.pointerUp(activeSessionRow, { pointerType: 'touch', clientX: 220, clientY: 42 });
+    fireEvent.click(await within(activeSessionShell).findByRole('button', { name: '从列表归档会话' }));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-1/archive', expect.any(Object)));
     expect(window.confirm).toHaveBeenCalledWith('确认归档这个会话？');
     expect(await screen.findByText('暂无会话。')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^归档$/ }));
-    expect(await screen.findByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '恢复会话' }));
+    const archivedSessionRow = await screen.findByRole('button', { name: /修复移动控制台/ });
+    const archivedSessionShell = archivedSessionRow.closest('.session-row-shell') as HTMLElement;
+    expect(within(archivedSessionShell).queryByRole('button', { name: '从列表恢复会话' })).toBeNull();
+    fireEvent.pointerDown(archivedSessionRow, { pointerType: 'touch', clientX: 320, clientY: 40 });
+    fireEvent.pointerUp(archivedSessionRow, { pointerType: 'touch', clientX: 220, clientY: 42 });
+    fireEvent.click(await within(archivedSessionShell).findByRole('button', { name: '从列表恢复会话' }));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/sess-1/unarchive', expect.any(Object)));
     expect(window.confirm).toHaveBeenCalledWith('确认恢复这个会话？');
     fireEvent.click(screen.getByRole('button', { name: /^收件箱$/ }));

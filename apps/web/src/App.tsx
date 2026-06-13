@@ -41,7 +41,7 @@ import {
   UserCircle,
   Users,
 } from 'lucide-react';
-import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -2382,6 +2382,7 @@ function App() {
   const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
   const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
+  const [revealedSessionActionId, setRevealedSessionActionId] = useState<string | null>(null);
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>('focus');
   const [replyMode, setReplyMode] = useState<ReplyMode>('direct');
   const [isFastModePending, setIsFastModePending] = useState(false);
@@ -2440,6 +2441,8 @@ function App() {
   const sessionAfterSeqRef = useRef<Record<string, number>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
   const transcriptSessionRef = useRef<string | null>(null);
+  const sessionSwipeStartRef = useRef<{ sessionId: string; x: number; y: number } | null>(null);
+  const suppressSessionClickRef = useRef<string | null>(null);
   const shouldScrollTranscriptToBottomRef = useRef(false);
   const preserveTranscriptScrollRef = useRef<{
     sessionId: string;
@@ -3672,6 +3675,34 @@ function App() {
 
   function setAllVisibleSessionsSelected(selected: boolean) {
     setSelectedSessionIds(selected ? new Set(filteredSessions.map((session) => session.session_id)) : new Set());
+  }
+
+  function handleSessionPointerDown(event: PointerEvent<HTMLElement>, sessionId: string) {
+    if (event.pointerType === 'mouse' || sessionSelectionMode || !canOperate(user)) return;
+    sessionSwipeStartRef.current = { sessionId, x: event.clientX, y: event.clientY };
+  }
+
+  function handleSessionPointerEnd(event: PointerEvent<HTMLElement>, sessionId: string) {
+    const start = sessionSwipeStartRef.current;
+    sessionSwipeStartRef.current = null;
+    if (!start || start.sessionId !== sessionId) return;
+    const deltaX = event.clientX - start.x;
+    const deltaY = event.clientY - start.y;
+    if (Math.abs(deltaX) < 42 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    suppressSessionClickRef.current = sessionId;
+    setRevealedSessionActionId(deltaX < 0 ? sessionId : null);
+  }
+
+  function handleSessionRowClick(sessionId: string) {
+    if (suppressSessionClickRef.current === sessionId) {
+      suppressSessionClickRef.current = null;
+      return;
+    }
+    if (revealedSessionActionId === sessionId) {
+      setRevealedSessionActionId(null);
+      return;
+    }
+    openSession(sessionId);
   }
 
   async function handleCancelCurrentJob() {
@@ -5214,7 +5245,15 @@ function App() {
             <p className="empty">{sessionArchiveView === 'archived' ? t(locale, 'noArchivedSessions') : t(locale, 'noSessions')}</p>
           )}
           {filteredSessions.map((session) => (
-            <div key={session.session_id} className="session-row-shell">
+            <div
+              key={session.session_id}
+              className={`session-row-shell ${sessionSelectionMode ? 'selecting' : ''} ${revealedSessionActionId === session.session_id ? 'action-open' : ''}`}
+              onPointerDown={(event) => handleSessionPointerDown(event, session.session_id)}
+              onPointerUp={(event) => handleSessionPointerEnd(event, session.session_id)}
+              onPointerCancel={() => {
+                sessionSwipeStartRef.current = null;
+              }}
+            >
               {sessionSelectionMode && (
                 <button
                   type="button"
@@ -5226,41 +5265,50 @@ function App() {
                   {selectedSessionIds.has(session.session_id) ? '✓' : ''}
                 </button>
               )}
-              <button
-                type="button"
-                className={`session-row ${session.session_id === selectedSession?.session_id ? 'selected' : ''}`}
-                onClick={() => openSession(session.session_id)}
-              >
-                <span className={`status-dot ${statusClass(session.status)}`} />
-                <span className="session-row-body">
-                  <span className="session-row-top">
-                    <strong>{sessionTitle(session)}</strong>
-                    <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status, locale)}</span>
-                  </span>
-                  <span className="session-row-meta">
-                    <span className="backend-mark">
-                      <TerminalSquare size={14} />
-                      {backendLabel(session.backend)}
-                    </span>
-                    <span>{session.project_name} / {session.namespace}</span>
-                    <small>{formatRelative(session.last_activity_at, locale) || formatWhen(session.last_activity_at)}</small>
-                  </span>
-                  <span className="session-row-bottom">
-                    <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
-                  </span>
-                </span>
-              </button>
-              {canOperate(user) && (
+              <div className="session-row-swipe-frame">
                 <button
                   type="button"
-                  className="session-row-quick-action"
-                  aria-label={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
-                  title={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
-                  onClick={() => void archiveSessions([session.session_id], sessionArchiveView !== 'archived')}
+                  className={`session-row ${session.session_id === selectedSession?.session_id ? 'selected' : ''}`}
+                  onClick={() => handleSessionRowClick(session.session_id)}
                 >
-                  {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
+                  <span className={`status-dot ${statusClass(session.status)}`} />
+                  <span className="session-row-body">
+                    <span className="session-row-top">
+                      <strong>{sessionTitle(session)}</strong>
+                      <span className={`mini-state ${statusClass(session.status)}`}>{statusLabel(session.status, locale)}</span>
+                    </span>
+                    <span className="session-row-meta">
+                      <span className="backend-mark">
+                        <TerminalSquare size={14} />
+                        {backendLabel(session.backend)}
+                      </span>
+                      <span>{session.project_name} / {session.namespace}</span>
+                      <small>{formatRelative(session.last_activity_at, locale) || formatWhen(session.last_activity_at)}</small>
+                    </span>
+                    <span className="session-row-bottom">
+                      <small>{agentOpsActivitySummary(session.activity_summary || session.last_message, session.status)}</small>
+                    </span>
+                  </span>
                 </button>
-              )}
+                {canOperate(user) && (
+                  <button
+                    type="button"
+                    className="session-row-quick-action"
+                    aria-label={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
+                    aria-hidden={revealedSessionActionId === session.session_id ? undefined : true}
+                    tabIndex={revealedSessionActionId === session.session_id ? 0 : -1}
+                    title={sessionArchiveView === 'archived' ? t(locale, 'restoreSessionFromList') : t(locale, 'archiveSessionFromList')}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setRevealedSessionActionId(null);
+                      void archiveSessions([session.session_id], sessionArchiveView !== 'archived');
+                    }}
+                  >
+                    {sessionArchiveView === 'archived' ? <RotateCcw size={16} /> : <Archive size={16} />}
+                    <span>{sessionArchiveView === 'archived' ? t(locale, 'restore') : t(locale, 'archive')}</span>
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </aside>
