@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 
 
 def _sqlite_index_names(engine, table_name: str) -> set[str]:
@@ -39,3 +40,29 @@ def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_p
     assert "ix_jobs_space_created_at" in _sqlite_index_names(engine, "jobs")
     assert "ix_jobs_space_target_updated_at" in _sqlite_index_names(engine, "jobs")
     assert "ix_agent_timeline_space_session_created_seq" in _sqlite_index_names(engine, "agent_timeline")
+
+
+def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: Path) -> None:
+    from app.core.database import create_db_engine
+
+    db_path = tmp_path / "wal-agenthub.db"
+    engine = create_db_engine(f"sqlite+pysqlite:///{db_path.as_posix()}")
+    with engine.connect() as conn:
+        journal_mode = conn.execute(text("PRAGMA journal_mode")).scalar_one()
+        busy_timeout = conn.execute(text("PRAGMA busy_timeout")).scalar_one()
+        foreign_keys = conn.execute(text("PRAGMA foreign_keys")).scalar_one()
+
+    assert str(journal_mode).lower() == "wal"
+    assert int(busy_timeout) == 30000
+    assert int(foreign_keys) == 1
+
+
+def test_database_busy_operational_error_maps_to_503() -> None:
+    from app.main import _database_error_payload
+
+    status_code, detail = _database_error_payload(
+        OperationalError("SELECT 1", {}, Exception("database is locked"))
+    )
+
+    assert status_code == 503
+    assert detail == {"message": "Database is busy, retry shortly", "code": "DB_BUSY"}

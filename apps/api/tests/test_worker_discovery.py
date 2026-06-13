@@ -153,6 +153,20 @@ def test_codex_parser_keeps_first_session_meta_when_fork_context_contains_parent
     assert session.display_title == "子任务分析"
 
 
+def test_codex_parser_prefers_rollout_filename_session_id_when_meta_uses_human_slug(tmp_path: Path) -> None:
+    fixture = tmp_path / "rollout-2026-06-13T09-05-42-019ebe83-63a4-7a81-9b49-327c732a94ae.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-06-13T09:05:42.000Z","type":"session_meta","payload":{"id":"autopilot-cockpit-2026-06-13","cwd":"E:\\\\Work","source":"exec"}}\n'
+        '{"timestamp":"2026-06-13T09:05:50.000Z","type":"event_msg","payload":{"type":"user_message","message":"继续 autopilot 收口"}}\n',
+        encoding="utf-8",
+    )
+
+    session = parse_codex_jsonl(fixture)
+
+    assert session.session_id == "019ebe83-63a4-7a81-9b49-327c732a94ae"
+    assert session.display_title == "继续 autopilot 收口"
+
+
 def test_short_acknowledgement_is_not_used_as_session_title(tmp_path: Path) -> None:
     fixture = tmp_path / "rollout-2026-04-26T18-26-34-ack-session.jsonl"
     fixture.write_text(
@@ -257,6 +271,33 @@ def test_claude_jsonl_fixture_parses_session_metadata(tmp_path: Path) -> None:
     assert session.workspace_root == "/home/dev/AgentHub"
     assert session.title == "Fix worker"
     assert session.last_message == "Needs reply"
+
+
+def test_claude_jsonl_keeps_first_workspace_root_when_later_rows_enter_nested_dir(tmp_path: Path) -> None:
+    fixture = tmp_path / "claude-nested-cwd.jsonl"
+    fixture.write_text(
+        '{"sessionId":"claude-root","cwd":"E:\\\\work","type":"summary","summary":"Root workspace"}\n'
+        '{"type":"assistant","cwd":"E:\\\\work\\\\开创力\\\\课程创建Agent\\\\backend","message":{"role":"assistant","content":[{"type":"text","text":"继续处理"}]}}\n',
+        encoding="utf-8",
+    )
+
+    session = parse_claude_jsonl(fixture)
+
+    assert session.workspace_root == "E:/work"
+
+
+def test_claude_jsonl_infers_workspace_root_from_project_bucket_when_rows_omit_cwd(tmp_path: Path) -> None:
+    fixture = tmp_path / ".claude" / "projects" / "E--work" / "claude-root.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"sessionId":"claude-root","type":"summary","summary":"Root workspace"}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"继续处理"}]}}\n',
+        encoding="utf-8",
+    )
+
+    session = parse_claude_jsonl(fixture)
+
+    assert session.workspace_root == "E:/work"
 
 
 def test_claude_jsonl_ignores_local_command_echo_entries(tmp_path: Path) -> None:

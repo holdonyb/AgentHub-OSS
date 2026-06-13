@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,8 @@ CLAUDE_LOCAL_COMMAND_TAGS = (
     "<command-message>",
     "<command-args>",
 )
+CODEX_ROLLOUT_SESSION_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
+CLAUDE_PROJECT_BUCKET_RE = re.compile(r"^(?P<drive>[A-Za-z])--(?P<segment>[A-Za-z0-9._]+)$")
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -313,6 +316,23 @@ def _activity_summary(status: str, preview: str, action: str | None = None) -> s
     if status == "failed":
         return f"出现异常：{clean or '需要排查'}"
     return f"最近上下文：{clean}" if clean else "当前空闲"
+
+
+def _codex_session_id_from_path(path: Path) -> str:
+    match = CODEX_ROLLOUT_SESSION_RE.match(path.stem)
+    if match:
+        return match.group(1)
+    return path.stem
+
+
+def _infer_claude_workspace_root_from_path(path: Path) -> str:
+    project_dir = path.parent
+    if project_dir.parent.name != "projects" or project_dir.parent.parent.name != ".claude":
+        return ""
+    match = CLAUDE_PROJECT_BUCKET_RE.fullmatch(project_dir.name)
+    if not match:
+        return ""
+    return normalize_workspace_root(f"{match.group('drive')}:/{match.group('segment')}")
 
 
 def _is_fresh_action(last_message: dict[str, Any] | None, last_activity_at: datetime) -> bool:
@@ -613,7 +633,8 @@ def parse_codex_jsonl(path: Path) -> SessionSnapshot:
     rows = _read_jsonl(path)
     stat = path.stat()
     fallback_mtime = datetime.fromtimestamp(stat.st_mtime)
-    session_id = path.stem
+    session_id = _codex_session_id_from_path(path)
+    session_id_from_path = session_id
     workspace_root = ""
     messages: list[dict[str, Any]] = []
     explicit_title = ""
@@ -625,7 +646,14 @@ def parse_codex_jsonl(path: Path) -> SessionSnapshot:
         if row_type in {"session", "session_meta"}:
             if not session_meta_seen:
                 source = payload if row_type == "session_meta" else row
-                session_id = str(source.get("id") or source.get("session_id") or session_id)
+                candidate_session_id = str(source.get("id") or source.get("session_id") or "").strip()
+                if candidate_session_id and (
+                    _is_uuidish(candidate_session_id)
+                    or session_id_from_path == path.stem
+                    or candidate_session_id == session_id_from_path
+                    or candidate_session_id == path.stem
+                ):
+                    session_id = candidate_session_id
                 workspace_root = str(source.get("cwd") or source.get("workspace_root") or workspace_root)
                 explicit_title = str(source.get("title") or explicit_title)
                 session_meta_seen = True
@@ -691,13 +719,18 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
     fallback_mtime = datetime.fromtimestamp(stat.st_mtime)
     session_id = path.stem
     workspace_root = ""
+    inferred_workspace_root = _infer_claude_workspace_root_from_path(path)
     messages: list[dict[str, Any]] = []
     explicit_title = ""
     hidden_tool_call_ids: set[str] = set()
     for row in rows:
         timestamp = _timestamp(row.get("timestamp"), fallback_mtime)
-        session_id = str(row.get("sessionId") or row.get("session_id") or session_id)
-        workspace_root = str(row.get("cwd") or row.get("workspace_root") or workspace_root)
+        candidate_session_id = str(row.get("sessionId") or row.get("session_id") or "").strip()
+        if candidate_session_id:
+            session_id = candidate_session_id
+        candidate_workspace_root = str(row.get("cwd") or row.get("workspace_root") or "").strip()
+        if candidate_workspace_root and not workspace_root:
+            workspace_root = candidate_workspace_root
         if row.get("summary"):
             explicit_title = str(row["summary"])
         row_type = row.get("type")
@@ -745,7 +778,12 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
             text = _text_from_content(row.get("summary") or row.get("message") or row.get("error") or row.get("cause") or "")
             if item := _message(session_id, "system", text, timestamp, str(row.get("subtype"))):
                 messages.append(item)
-    workspace_root = workspace_root or str(path.parent)
+    normalized_workspace_root = normalize_workspace_root(workspace_root) if workspace_root else ""
+    if inferred_workspace_root and normalized_workspace_root:
+        inferred_prefix = f"{inferred_workspace_root.casefold()}/"
+        if normalized_workspace_root.casefold().startswith(inferred_prefix):
+            workspace_root = inferred_workspace_root
+    workspace_root = workspace_root or inferred_workspace_root or str(path.parent)
     snapshot = _snapshot(
         session_id=session_id,
         backend="claude",

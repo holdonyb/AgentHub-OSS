@@ -2444,6 +2444,7 @@ function App() {
   const sessionSwipeStartRef = useRef<{ sessionId: string; x: number; y: number } | null>(null);
   const suppressSessionClickRef = useRef<string | null>(null);
   const shouldScrollTranscriptToBottomRef = useRef(false);
+  const transcriptPinnedToBottomRef = useRef(true);
   const preserveTranscriptScrollRef = useRef<{
     sessionId: string;
     scrollHeight: number;
@@ -2629,21 +2630,45 @@ function App() {
     () => displayTimeline.filter((item) => timelineMatchesFilter(item, timelineFilter)),
     [displayTimeline, timelineFilter],
   );
+  const latestVisibleTimelineKey = useMemo(() => {
+    const latest = visibleTimeline[visibleTimeline.length - 1];
+    if (!latest) return 'empty';
+    return `${latest.seq}:${latest.item_type}:${latest.created_at}:${latest.text}`;
+  }, [visibleTimeline]);
+  const selectedPermissionStateKey = useMemo(
+    () =>
+      selectedPermissions.length === 0
+        ? 'none'
+        : selectedPermissions
+            .map((permission) => `${permission.permission_id}:${permission.status}:${permission.resolved_at ?? permission.created_at ?? ''}`)
+            .join('|'),
+    [selectedPermissions],
+  );
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
   const quickReplies = settings.preferences.quick_replies?.filter((item) => item.trim()).slice(0, 12) ?? [];
+
+  function transcriptNearBottom() {
+    const transcript = transcriptRef.current;
+    if (!transcript) return true;
+    return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 96;
+  }
 
   function updateScrollToBottomState() {
     const transcript = transcriptRef.current;
     if (!transcript) {
+      transcriptPinnedToBottomRef.current = true;
       setShowScrollToBottom(false);
       return;
     }
-    setShowScrollToBottom(transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight > 96);
+    const pinned = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 96;
+    transcriptPinnedToBottomRef.current = pinned;
+    setShowScrollToBottom(!pinned);
   }
 
   function scrollTranscriptToBottom(behavior: ScrollBehavior = 'smooth') {
     const transcript = transcriptRef.current;
     if (!transcript) return;
+    transcriptPinnedToBottomRef.current = true;
     transcript.scrollTop = transcript.scrollHeight;
     transcript.scrollTo?.({ top: transcript.scrollHeight, behavior });
     setShowScrollToBottom(false);
@@ -2686,7 +2711,7 @@ function App() {
       }
     }
     updateScrollToBottomState();
-  }, [selectedSession?.session_id, selectedPermissions.length, timelineFilter, visibleTimeline.length]);
+  }, [selectedSession?.session_id, selectedPermissionStateKey, timelineFilter, latestVisibleTimelineKey]);
 
   useEffect(() => {
     if (selectedIdRef.current && sessions.some((session) => session.session_id === selectedIdRef.current)) return;
@@ -3068,13 +3093,21 @@ function App() {
     const params = new URLSearchParams();
     if (afterSeq > 0) params.set('after_seq', String(afterSeq));
     const payload = await apiGet<SessionSyncPayload>(`/api/sync/session/${sessionId}?${params.toString()}`);
+    const keepPinnedToBottom =
+      selectedIdRef.current === sessionId && (transcriptPinnedToBottomRef.current || transcriptNearBottom());
     setSessions((current) => mergeSessionList(current, [payload.session], []));
     setJobs((current) => replaceSessionJobs(current, sessionId, payload.jobs));
     if (payload.items.length > 0) {
+      if (keepPinnedToBottom) {
+        shouldScrollTranscriptToBottomRef.current = true;
+      }
       setTimelineBySession((current) => ({
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
       }));
+      if (keepPinnedToBottom) {
+        window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
+      }
     }
     sessionAfterSeqRef.current[sessionId] = payload.next_after_seq;
     return payload;
@@ -3367,7 +3400,7 @@ function App() {
     if (!target) return;
     target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
     setFocusedPermissionId(null);
-  }, [focusedPermissionId, mobilePane, selectedSession?.session_id, selectedPermissions.length, visibleTimeline.length]);
+  }, [focusedPermissionId, mobilePane, selectedSession?.session_id, selectedPermissionStateKey, latestVisibleTimelineKey]);
 
   useEffect(() => {
     if (loadState === 'ready') startNativeNotificationService();

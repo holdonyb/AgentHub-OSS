@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import Settings
 from app.core.database import create_db_engine, create_session_local, init_database
@@ -30,6 +33,13 @@ from app.routers import (
 )
 
 logger = logging.getLogger("agenthub")
+
+
+def _database_error_payload(error: OperationalError) -> tuple[int, dict[str, str]]:
+    message = str(error).lower()
+    if "database is locked" in message or "database schema is locked" in message:
+        return 503, {"message": "Database is busy, retry shortly", "code": "DB_BUSY"}
+    return 500, {"message": "Database operation failed", "code": "DB_OPERATION_FAILED"}
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -72,6 +82,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice.router)
     app.include_router(internal.router)
     app.include_router(worker_relay.router)
+
+    @app.exception_handler(OperationalError)
+    async def handle_operational_error(request: Request, exc: OperationalError):
+        status_code, detail = _database_error_payload(exc)
+        if status_code >= 500:
+            logger.warning("Database operation failed during %s %s: %s", request.method, request.url.path, exc)
+        return JSONResponse(status_code=status_code, content={"detail": detail})
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
