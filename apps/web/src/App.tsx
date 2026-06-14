@@ -1252,7 +1252,19 @@ function quoteCliArg(value: string) {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function sessionRuntimeSource(session: AgentSession) {
+  const runtimeSource = optionText((session.runtime_metadata as Record<string, unknown> | undefined)?.source);
+  if (runtimeSource) return runtimeSource;
+  return optionText((session.metadata as Record<string, unknown> | undefined)?.source);
+}
+
+function isVirtualResumeOnlySession(session: AgentSession) {
+  const source = sessionRuntimeSource(session);
+  return source === 'autopilot_cockpit';
+}
+
 function localResumeCommand(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) return '';
   const backend = session.backend.toLowerCase();
   const sessionId = quoteCliArg(session.session_id);
   const workspace = session.workspace_root?.trim() ? ` -C ${quoteCliArg(session.workspace_root.trim())}` : '';
@@ -1274,10 +1286,21 @@ function localResumeCommand(session: AgentSession) {
 }
 
 function localResumeHint(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) {
+    return '这是 AgentHub 驾驶舱生成的合成会话，不对应本机 Codex CLI 历史，不能直接用 codex resume 打开。';
+  }
   if (session.backend.toLowerCase() === 'codex') {
     return 'AgentHub 新建的 Codex 会话来自 codex exec，普通 resume 列表默认可能隐藏它，所以这里固定带 --all 和 --include-non-interactive。';
   }
   return '在对应 worker 本机运行这条命令，打开同一个后端会话。';
+}
+
+function localResumeDetail(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) {
+    const source = sessionRuntimeSource(session) || 'virtual';
+    return `Source: ${source} · Runtime: ${session.runtime_session_ref || session.session_id}`;
+  }
+  return `Workspace: ${session.workspace_root || 'default'} · Runtime: ${session.runtime_session_ref || session.session_id}`;
 }
 
 function replyModeHint(mode: ReplyMode, session?: AgentSession | null, provider?: ProviderSnapshot, locale: LocaleCode = 'zh-CN') {
@@ -5900,10 +5923,8 @@ function App() {
               <Panel title={pickLocale(locale, '本机恢复', 'Local Resume')} icon={<TerminalSquare size={16} />} defaultOpen={false}>
                 <div className="local-resume-panel">
                   <p>{localResumeHint(selectedSession)}</p>
-                  <code>{localResumeCommand(selectedSession)}</code>
-                  <small>
-                    Workspace: {selectedSession.workspace_root || 'default'} · Runtime: {selectedSession.runtime_session_ref || selectedSession.session_id}
-                  </small>
+                  {localResumeCommand(selectedSession) ? <code>{localResumeCommand(selectedSession)}</code> : null}
+                  <small>{localResumeDetail(selectedSession)}</small>
                 </div>
               </Panel>
 

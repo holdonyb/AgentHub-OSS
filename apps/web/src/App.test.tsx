@@ -330,6 +330,26 @@ const sessionSyncPayload = {
   has_more: false,
 };
 
+const virtualCockpitSessionPayload = {
+  ...sessionPayload.items[0],
+  session_id: 'autopilot-cockpit-2026-06-13',
+  worker_id: 'vm-openaitest',
+  workspace_root: 'E:/Work',
+  runtime_session_ref: 'autopilot-cockpit-2026-06-13',
+  runtime_metadata: {
+    source: 'autopilot_cockpit',
+    date: '2026-06-13',
+  },
+};
+
+const virtualCockpitSessionSyncPayload = {
+  session: virtualCockpitSessionPayload,
+  items: [],
+  jobs: [],
+  next_after_seq: 2,
+  has_more: false,
+};
+
 const permissionsPayload = {
   items: [
     {
@@ -2704,6 +2724,39 @@ describe('AgentHub console', () => {
     expect(await screen.findByText('本机恢复')).toBeInTheDocument();
     expect(screen.getByText('codex resume --all --include-non-interactive -C "E:/work/AgentHub" "sess-1"')).toBeInTheDocument();
     expect(screen.getByText(/AgentHub 新建的 Codex 会话/)).toBeInTheDocument();
+  });
+
+  it('does not show a fake local resume command for virtual autopilot cockpit sessions', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse({ items: [virtualCockpitSessionPayload] });
+      if (url.endsWith('/api/workers')) return jsonResponse(workersPayload);
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/autopilot-cockpit-2026-06-13/timeline')) return jsonResponse({ items: [], has_more: false });
+      if (url.includes('/api/sync/status')) {
+        return jsonResponse({
+          ...syncStatusPayload,
+          selected_session_id: 'autopilot-cockpit-2026-06-13',
+          selected_timeline_digest: 'timeline-autopilot-v1',
+        });
+      }
+      if (url.includes('/api/sync/session/autopilot-cockpit-2026-06-13')) return jsonResponse(virtualCockpitSessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('本机恢复')).toBeInTheDocument();
+    expect(screen.getByText('这是 AgentHub 驾驶舱生成的合成会话，不对应本机 Codex CLI 历史，不能直接用 codex resume 打开。')).toBeInTheDocument();
+    expect(screen.queryByText(/codex resume --all --include-non-interactive/)).toBeNull();
+    expect(screen.getByText('Source: autopilot_cockpit · Runtime: autopilot-cockpit-2026-06-13')).toBeInTheDocument();
   });
 
   it('summarizes interrupted Codex jobs without exposing raw progress as the primary error', async () => {
