@@ -6,58 +6,28 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BLUE = "#68C5FF"
-GRID = "#E5ECF5"
+INK = "#111827"
 BORDER = "#D9E4EF"
 
 
 ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
   <title>AgentHub</title>
-  <defs>
-    <clipPath id="agenthub-icon-mask">
-      <rect x="56" y="56" width="912" height="912" rx="196"/>
-    </clipPath>
-  </defs>
   <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="{BORDER}" stroke-width="8"/>
-  <g clip-path="url(#agenthub-icon-mask)" stroke="{GRID}" stroke-width="4" opacity="0.82">
-    <path d="M-160 36 L988 1184"/>
-    <path d="M-64 36 L1084 1184"/>
-    <path d="M32 36 L1180 1184"/>
-    <path d="M128 36 L1276 1184"/>
-    <path d="M224 36 L1372 1184"/>
-    <path d="M320 36 L1468 1184"/>
-    <path d="M416 36 L1564 1184"/>
-    <path d="M512 36 L1660 1184"/>
-    <path d="M608 36 L1756 1184"/>
-    <path d="M704 36 L1852 1184"/>
-    <path d="M800 36 L1948 1184"/>
-    <path d="M896 36 L2044 1184"/>
-    <path d="M-1020 1184 L128 -36"/>
-    <path d="M-924 1184 L224 -36"/>
-    <path d="M-828 1184 L320 -36"/>
-    <path d="M-732 1184 L416 -36"/>
-    <path d="M-636 1184 L512 -36"/>
-    <path d="M-540 1184 L608 -36"/>
-    <path d="M-444 1184 L704 -36"/>
-    <path d="M-348 1184 L800 -36"/>
-    <path d="M-252 1184 L896 -36"/>
-    <path d="M-156 1184 L992 -36"/>
-    <path d="M-60 1184 L1088 -36"/>
-    <path d="M36 1184 L1184 -36"/>
-  </g>
-  <g stroke="{BLUE}" stroke-width="96" stroke-linecap="butt" stroke-linejoin="miter">
-    <path d="M318 334 L690 706"/>
-    <path d="M318 690 L690 318"/>
+  <g fill="none" stroke="{INK}" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="168" y="216" width="688" height="592" rx="72"/>
+    <path d="M326 408 462 512 326 616"/>
+    <path d="M536 632h170"/>
   </g>
 </svg>
 """
 
 MARK_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
-  <title>AgentHub mark</title>
-  <path fill="#0D66D0" d="M512 64 816 240v352l-104 60V300L512 184 312 300v352l-104-60V240z"/>
-  <path fill="#2F9CF4" d="M392 352 496 292v512l-104-60z"/>
-  <path fill="#0D66D0" d="M528 292 632 352v392l-104 60z"/>
-  <path fill="#5CB8FF" d="M496 292h32v512l-16 10-16-10z"/>
+  <title>AgentHub terminal mark</title>
+  <g fill="none" stroke="{INK}" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="144" y="192" width="736" height="640" rx="76"/>
+    <path d="M312 388 454 512 312 636"/>
+    <path d="M526 646h184"/>
+  </g>
 </svg>
 """
 
@@ -72,18 +42,25 @@ FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/a
         android:pathData="M0,0h108v108h-108z" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M33.5,35.2L72.7,74.4"
-        android:strokeColor="{BLUE}"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter"
-        android:strokeWidth="10.2" />
+        android:pathData="M19,26h70q8,0 8,8v50q0,8 -8,8h-70q-8,0 -8,-8v-50q0,-8 8,-8z"
+        android:strokeColor="{INK}"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7.5" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M33.5,72.7L72.7,33.5"
-        android:strokeColor="{BLUE}"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter"
-        android:strokeWidth="10.2" />
+        android:pathData="M31,47l14,12l-14,12"
+        android:strokeColor="{INK}"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7.5" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,73h21"
+        android:strokeColor="{INK}"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7.5" />
 </vector>
 """
 
@@ -97,30 +74,6 @@ BACKGROUND_VECTOR = f"""<?xml version="1.0" encoding="utf-8"?>
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M0,0h108v108h-108z" />
-    <path android:fillColor="#00000000" android:pathData="M-20,5L103,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-10,5L113,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M0,5L123,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M10,5L133,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M20,5L143,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M30,5L153,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M40,5L163,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M50,5L173,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M60,5L183,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M70,5L193,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M80,5L203,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M90,5L213,128" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-104,128L19,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-94,128L29,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-84,128L39,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-74,128L49,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-64,128L59,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-54,128L69,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-44,128L79,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-34,128L89,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-24,128L99,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-14,128L109,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M-4,128L119,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
-    <path android:fillColor="#00000000" android:pathData="M6,128L129,5" android:strokeColor="#CCE5ECF5" android:strokeWidth="0.45" />
 </vector>
 """
 
@@ -133,18 +86,25 @@ NOTIFICATION_VECTOR = """<?xml version="1.0" encoding="utf-8"?>
     android:viewportHeight="24">
     <path
         android:fillColor="#00000000"
-        android:pathData="M7.1,7.9L16.1,16.9"
+        android:pathData="M4.5,5.5h15q1.8,0 1.8,1.8v9.4q0,1.8 -1.8,1.8h-15q-1.8,0 -1.8,-1.8v-9.4q0,-1.8 1.8,-1.8z"
         android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter"
-        android:strokeWidth="2.8" />
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
     <path
         android:fillColor="#00000000"
-        android:pathData="M7.1,16.1L16.1,7.1"
+        android:pathData="M7.4,9.2l3.1,2.8l-3.1,2.8"
         android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="butt"
-        android:strokeLineJoin="miter"
-        android:strokeWidth="2.8" />
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M12.4,15h4.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.8" />
 </vector>
 """
 
@@ -176,28 +136,13 @@ def render_icon(size: int, include_background: bool = True) -> Image.Image:
         radius = s(196)
         draw.rounded_rectangle(rect, radius=radius, fill="white", outline=BORDER, width=max(1, s(8)))
 
-        mask = Image.new("L", (canvas, canvas), 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.rounded_rectangle(rect, radius=radius, fill=255)
+
+    mark = render_mark(size)
+    if include_background:
+        mark = mark.resize((s(688), s(688)), Image.Resampling.LANCZOS)
+        image.alpha_composite(mark, (s(168), s(168)))
     else:
-        mask = Image.new("L", (canvas, canvas), 255)
-
-    grid_layer = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    grid_draw = ImageDraw.Draw(grid_layer)
-    for offset in range(-160, 920, 96):
-        grid_draw.line([(s(offset), s(36)), (s(offset + 1148), s(1184))], fill=GRID, width=max(1, s(4)))
-    for offset in range(-1020, 132, 96):
-        grid_draw.line([(s(offset), s(1184)), (s(offset + 1148), s(-36))], fill=GRID, width=max(1, s(4)))
-    grid_layer.putalpha(Image.composite(grid_layer.getchannel("A"), Image.new("L", (canvas, canvas), 0), mask))
-    image.alpha_composite(grid_layer)
-
-    mark_layer = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    mark_draw = ImageDraw.Draw(mark_layer)
-    width = max(1, s(96))
-    mark_draw.line([(s(318), s(334)), (s(690), s(706))], fill=BLUE, width=width)
-    mark_draw.line([(s(318), s(690)), (s(690), s(318))], fill=BLUE, width=width)
-    mark_layer.putalpha(Image.composite(mark_layer.getchannel("A"), Image.new("L", (canvas, canvas), 0), mask))
-    image.alpha_composite(mark_layer)
+        image.alpha_composite(mark)
 
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
@@ -211,24 +156,15 @@ def render_mark(size: int) -> Image.Image:
     def s(value: float) -> int:
         return round(value * canvas / 1024)
 
-    draw.polygon(
-        [
-            (s(512), s(64)),
-            (s(816), s(240)),
-            (s(816), s(592)),
-            (s(712), s(652)),
-            (s(712), s(300)),
-            (s(512), s(184)),
-            (s(312), s(300)),
-            (s(312), s(652)),
-            (s(208), s(592)),
-            (s(208), s(240)),
-        ],
-        fill="#0D66D0",
+    stroke = max(1, s(72))
+    draw.rounded_rectangle(
+        [s(144), s(192), s(880), s(832)],
+        radius=s(76),
+        outline=INK,
+        width=stroke,
     )
-    draw.polygon([(s(392), s(352)), (s(496), s(292)), (s(496), s(804)), (s(392), s(744))], fill="#2F9CF4")
-    draw.polygon([(s(528), s(292)), (s(632), s(352)), (s(632), s(744)), (s(528), s(804))], fill="#0D66D0")
-    draw.polygon([(s(496), s(292)), (s(528), s(292)), (s(528), s(804)), (s(512), s(814)), (s(496), s(804))], fill="#5CB8FF")
+    draw.line([(s(312), s(388)), (s(454), s(512)), (s(312), s(636))], fill=INK, width=stroke, joint="curve")
+    draw.line([(s(526), s(646)), (s(710), s(646))], fill=INK, width=stroke)
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 

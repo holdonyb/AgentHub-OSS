@@ -2,14 +2,14 @@
 
 AgentHub 的图标源文件放在：
 
-- `assets/brand/agenthub-icon.svg`：App 图标源文件，用于 Android launcher、Windows desktop 图标和 Web favicon。
+- `assets/brand/agenthub-icon.svg`：App 图标源文件，用于 Android launcher 和 Windows desktop 图标。
 - `assets/brand/agenthub-icon.png`：从 App 图标生成的 1024px PNG，方便预览和发布页使用。
-- `assets/brand/agenthub-mark.svg`：几何 hub 品牌标记，用于 README hero、架构图、标题锁定和其它白底文档场景。
-- `assets/brand/agenthub-mark.png`：从纯品牌标记生成的 1024px PNG。
+- `assets/brand/agenthub-mark.svg`：终端窗口品牌标记，用于 Web favicon、官网、README hero、架构图、标题锁定和其它白底文档场景。
+- `assets/brand/agenthub-mark.png`：从终端品牌标记生成的 1024px PNG。
 
 ![AgentHub icon](../assets/brand/agenthub-icon.png)
 
-当前 App 图标采用 Android APK 图标的样式：白色圆角方形、浅色网格底纹、浅蓝交叉标记。文档和图表不要直接使用完整 App 图标，否则在白底上会像一个按钮；应使用 `agenthub-mark` 这种更像产品 Logo 的几何标记。
+当前品牌标记采用终端窗口图形，和产品定位一致：AgentHub 是跨设备控制本机 agent runtime 的入口。App 图标是在同一个终端标记外套一层白色圆角底，用于系统 launcher；文档、官网和浏览器 tab 使用 `agenthub-mark`，保持和页面标题锁定一致。
 
 ## 生成派生资源
 
