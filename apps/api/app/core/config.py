@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     max_session_attachment_bytes: Annotated[int, Field(ge=1024)] = 8 * 1024 * 1024
     max_voice_audio_bytes: Annotated[int, Field(ge=1024)] = 12 * 1024 * 1024
     secret_encryption_key: str = ""
+    voice_asr_provider: Literal["doubao", "openai"] = "doubao"
     doubao_asr_api_key: str = ""
     doubao_asr_app_key: str = ""
     doubao_asr_access_key: str = ""
@@ -40,6 +41,18 @@ class Settings(BaseSettings):
     doubao_stream_asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
     doubao_stream_asr_resource_id: str = "volc.bigasr.sauc.duration"
     doubao_stream_token_duration_seconds: Annotated[int, Field(ge=60, le=3600)] = 300
+    openai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("AGENTHUB_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    )
+    openai_asr_api_key: str = ""
+    openai_asr_base_url: str = "https://api.openai.com/v1"
+    openai_asr_model: str = "whisper-1"
+    voice_agent_provider: Literal["agenthub", "disabled"] = "agenthub"
+    voice_agent_api_key: str = ""
+    voice_agent_base_url: str = "https://api.openai.com/v1"
+    voice_agent_model: str = "gpt-4.1-mini"
+    voice_agent_timeout_seconds: Annotated[float, Field(ge=1, le=120)] = 30.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod

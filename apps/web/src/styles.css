@@ -3053,6 +3053,17 @@ textarea:disabled {
   opacity: 0.5;
 }
 
+.voice-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-mode-bar .voice-mode-toggle {
+  flex: 0 0 auto;
+}
+
 .voice-mode-toggle {
   display: inline-flex;
   align-items: center;

@@ -81,6 +81,13 @@ Supported providers today:
 
 `openai` means OpenAI or any OpenAI-compatible endpoint that implements `POST /audio/transcriptions`.
 
+Voice transcription and the voice assistant are separate:
+
+- transcription turns microphone audio into text
+- the voice assistant takes that text, reads AgentHub session context, and may call allowlisted AgentHub tools
+
+If no voice credentials are configured, normal Web/App/worker usage still works.
+
 ## Doubao ASR Configuration
 
 Doubao is the current provider that supports both:
@@ -142,6 +149,38 @@ Notes:
 
 - `openai` currently supports upload transcription only.
 - live streaming auth is not available in `openai` mode yet.
+
+## Voice Assistant Provider
+
+The full voice assistant uses an AgentHub-managed, server-side OpenAI-compatible chat endpoint. Browser and Android clients never receive the provider key.
+
+Example:
+
+```env
+AGENTHUB_VOICE_AGENT_PROVIDER=agenthub
+AGENTHUB_VOICE_AGENT_API_KEY=sk-xxxx
+AGENTHUB_VOICE_AGENT_BASE_URL=https://api.openai.com/v1
+AGENTHUB_VOICE_AGENT_MODEL=gpt-4.1-mini
+AGENTHUB_VOICE_AGENT_TIMEOUT_SECONDS=30
+```
+
+You may also set `OPENAI_API_KEY` or `AGENTHUB_OPENAI_API_KEY`; `AGENTHUB_VOICE_AGENT_API_KEY` wins when present.
+
+The V1 voice assistant is deliberately constrained. It can only call these AgentHub tools:
+
+- read the selected session state
+- send input to the selected session
+- answer a pending approval / user choice
+- create a `/btw` sidecar question
+
+It cannot run shell commands directly, edit files directly, read arbitrary secrets, or bypass AgentHub RBAC.
+
+Client behavior:
+
+- Web and Android share the same UI.
+- `听写` mode writes recognized text into the composer.
+- `助手` mode sends recognized text to `/api/voice/turn`; the server-side voice agent decides which allowlisted AgentHub tool to call.
+- Web uses browser `speechSynthesis` for local spoken feedback when available; text feedback is always shown.
 
 ## Session Attachments
 

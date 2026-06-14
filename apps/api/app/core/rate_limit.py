@@ -61,6 +61,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             or path == "/api/jobs"
             or path == "/api/voice/transcribe"
             or path == "/api/voice/stream-auth"
+            or path == "/api/voice/turn"
             or path.endswith("/input")
             or path == "/api/auth/bootstrap"
         ):

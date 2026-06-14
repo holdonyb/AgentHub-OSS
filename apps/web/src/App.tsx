@@ -102,6 +102,7 @@ type ApkUpdateStatus = 'idle' | 'checking' | 'ready' | 'failed';
 type ThemeMode = 'dark' | 'light';
 type VoiceMode = 'streaming' | 'standard';
 type VoiceInputMode = 'standard' | 'streaming';
+type VoiceInteractionMode = 'dictation' | 'assistant';
 type InviteRole = Extract<Role, 'admin' | 'operator' | 'viewer'>;
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
 
@@ -121,6 +122,7 @@ const APK_DOWNLOAD_FILENAME = 'agenthub-debug.apk';
 const THEME_STORAGE_KEY = 'agenthub.theme';
 const LOCALE_STORAGE_KEY = 'agenthub.locale';
 const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
+const VOICE_INTERACTION_MODE_STORAGE_KEY = 'agenthub.voiceInteractionMode';
 const NOTIFICATION_READ_STORAGE_KEY = 'agenthub.notifications.read';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
 
@@ -231,6 +233,12 @@ interface ApkUpdateState {
 }
 
 interface VoiceStreamAuthResponse extends VoiceStreamAuthPayload {}
+
+interface VoiceTurnResponse {
+  spoken_text: string;
+  status: 'ok' | 'partial' | 'failed';
+  actions: Array<Record<string, unknown>>;
+}
 
 interface NotificationInboxItem {
   id: string;
@@ -1420,6 +1428,14 @@ function initialVoiceInputMode(): VoiceInputMode {
   }
 }
 
+function initialVoiceInteractionMode(): VoiceInteractionMode {
+  try {
+    return localStorage.getItem(VOICE_INTERACTION_MODE_STORAGE_KEY) === 'assistant' ? 'assistant' : 'dictation';
+  } catch {
+    return 'dictation';
+  }
+}
+
 function initialLocale(): LocaleCode {
   try {
     const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
@@ -2395,6 +2411,7 @@ function App() {
   const [locale, setLocale] = useState<LocaleCode>(() => initialLocale());
   const [settings, setSettings] = useState<AgentHubSettings>(() => defaultSettings());
   const [voiceInputMode, setVoiceInputMode] = useState<VoiceInputMode>(() => initialVoiceInputMode());
+  const [voiceInteractionMode, setVoiceInteractionMode] = useState<VoiceInteractionMode>(() => initialVoiceInteractionMode());
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const [notificationPermission, setNotificationPermission] = useState<NotificationState>(() => notificationState());
   const [nativeVersion] = useState<NativeAppVersion | null>(() => nativeAppVersion());
@@ -3276,6 +3293,14 @@ function App() {
       // Ignore storage failures in embedded WebViews.
     }
   }, [voiceInputMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VOICE_INTERACTION_MODE_STORAGE_KEY, voiceInteractionMode);
+    } catch {
+      // Ignore storage failures in embedded WebViews.
+    }
+  }, [voiceInteractionMode]);
 
   useEffect(() => {
     let active = true;
@@ -4266,6 +4291,44 @@ function App() {
     waiters.forEach((resolve) => resolve());
   }
 
+  function speakVoiceAssistantReply(text: string) {
+    const spoken = text.trim();
+    if (!spoken || typeof window.speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') return;
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(spoken);
+      utterance.lang = settings.preferences.voice_language || 'zh-CN';
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Text feedback remains the source of truth when browser TTS is unavailable.
+    }
+  }
+
+  async function submitVoiceAssistantTurn(utterance: string) {
+    if (!selectedSession) {
+      setNotice('请先选择一个会话');
+      return;
+    }
+    setNotice('语音助手正在处理');
+    const payload = await apiPost<VoiceTurnResponse>(
+      '/api/voice/turn',
+      {
+        session_id: selectedSession.session_id,
+        utterance,
+        source: window.AgentHubAndroid ? 'android' : 'web',
+      },
+      csrfToken,
+    );
+    const spoken = payload.spoken_text.trim() || (payload.status === 'failed' ? '语音助手处理失败' : '语音助手已处理');
+    setNotice(spoken);
+    speakVoiceAssistantReply(spoken);
+    await Promise.allSettled([
+      loadInboxDelta(sessionArchiveView),
+      loadPermissionDelta(),
+      loadSessionDelta(selectedSession.session_id),
+    ]);
+  }
+
   async function stopStreamingVoiceRecording(options?: { commit?: boolean; notice?: string }) {
     if (!isRecording || voiceInputMode !== 'streaming') return;
     const controller = streamingVoiceControllerRef.current;
@@ -4313,7 +4376,11 @@ function App() {
     }
     setIsTranscribing(true);
     try {
-      setNotice('正在识别语音；你可以继续输入，结果会追加到当前输入末尾');
+      setNotice(
+        voiceInteractionMode === 'assistant'
+          ? '正在识别语音，稍后交给语音助手处理'
+          : '正在识别语音；你可以继续输入，结果会追加到当前输入末尾',
+      );
       const payload = await apiPost<{ text: string }>(
         '/api/voice/transcribe',
         {
@@ -4329,6 +4396,14 @@ function App() {
       const text = payload.text.trim();
       if (!text) {
         setNotice('没有识别到文字');
+        return;
+      }
+      if (voiceInteractionMode === 'assistant') {
+        try {
+          await submitVoiceAssistantTurn(text);
+        } catch (error) {
+          setNotice(`语音助手处理失败：${errorMessage(error)}`);
+        }
         return;
       }
       appendVoiceTranscript(text);
@@ -4468,7 +4543,7 @@ function App() {
 
   async function handleVoiceToggle() {
     if (isRecording) {
-      if (voiceInputMode === 'streaming') {
+      if (voiceInteractionMode === 'dictation' && voiceInputMode === 'streaming') {
         await stopStreamingVoiceRecording({ commit: true, notice: '正在结束流式录音' });
         return;
       }
@@ -4481,6 +4556,10 @@ function App() {
         }
       }
       recorder?.stop();
+      return;
+    }
+    if (voiceInteractionMode === 'assistant') {
+      await startStandardVoiceRecording();
       return;
     }
     if (voiceInputMode === 'streaming') {
@@ -5660,25 +5739,47 @@ function App() {
                   </div>
                 )}
             {visibleReplyStatus && <div className="reply-status">{visibleReplyStatus}</div>}
-                <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
-                  <button
-                    type="button"
-                    className={voiceInputMode === 'streaming' ? 'selected' : ''}
-                    aria-pressed={voiceInputMode === 'streaming'}
-                    onClick={() => setVoiceInputMode('streaming')}
-                    disabled={isRecording}
-                  >
-                    流式
-                  </button>
-                  <button
-                    type="button"
-                    className={voiceInputMode === 'standard' ? 'selected' : ''}
-                    aria-pressed={voiceInputMode === 'standard'}
-                    onClick={() => setVoiceInputMode('standard')}
-                    disabled={isRecording}
-                  >
-                    标准
-                  </button>
+                <div className="voice-mode-bar">
+                  <div className="voice-mode-toggle voice-interaction-toggle" role="group" aria-label="语音交互模式">
+                    <button
+                      type="button"
+                      className={voiceInteractionMode === 'dictation' ? 'selected' : ''}
+                      aria-pressed={voiceInteractionMode === 'dictation'}
+                      onClick={() => setVoiceInteractionMode('dictation')}
+                      disabled={isRecording}
+                    >
+                      听写
+                    </button>
+                    <button
+                      type="button"
+                      className={voiceInteractionMode === 'assistant' ? 'selected' : ''}
+                      aria-pressed={voiceInteractionMode === 'assistant'}
+                      onClick={() => setVoiceInteractionMode('assistant')}
+                      disabled={isRecording}
+                    >
+                      助手
+                    </button>
+                  </div>
+                  <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
+                    <button
+                      type="button"
+                      className={voiceInputMode === 'streaming' ? 'selected' : ''}
+                      aria-pressed={voiceInputMode === 'streaming'}
+                      onClick={() => setVoiceInputMode('streaming')}
+                      disabled={isRecording || voiceInteractionMode === 'assistant'}
+                    >
+                      流式
+                    </button>
+                    <button
+                      type="button"
+                      className={voiceInputMode === 'standard' ? 'selected' : ''}
+                      aria-pressed={voiceInputMode === 'standard'}
+                      onClick={() => setVoiceInputMode('standard')}
+                      disabled={isRecording || voiceInteractionMode === 'assistant'}
+                    >
+                      标准
+                    </button>
+                  </div>
                 </div>
                 <div className="reply-footer">
                   {quickReplies.length > 0 && (
@@ -5718,7 +5819,17 @@ function App() {
                     type="button"
                     className={`reply-icon-button voice-action ${isRecording ? 'recording' : ''} ${isTranscribing ? 'transcribing' : ''}`}
                     aria-label={isRecording ? '停止' : '语音'}
-                    title={isRecording ? '停止录音' : isTranscribing ? '正在识别语音' : voiceInputMode === 'streaming' ? '流式语音输入' : '标准语音输入'}
+                    title={
+                      isRecording
+                        ? '停止录音'
+                        : isTranscribing
+                          ? '正在识别语音'
+                          : voiceInteractionMode === 'assistant'
+                            ? '语音助手'
+                            : voiceInputMode === 'streaming'
+                              ? '流式语音输入'
+                              : '标准语音输入'
+                    }
                     aria-busy={isTranscribing}
                     onClick={handleVoiceToggle}
                     disabled={!canReply || isTranscribing}
