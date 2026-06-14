@@ -4187,6 +4187,73 @@ describe('AgentHub console', () => {
     expect(stopTrack).toHaveBeenCalled();
   });
 
+  it('records voice in assistant mode and sends the transcript to the voice turn endpoint', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/voice/transcribe')) {
+        return jsonResponse({ text: '帮我继续推进这个任务' });
+      }
+      if (url.endsWith('/api/voice/turn')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(JSON.parse(String(init?.body ?? '{}'))).toEqual({
+          session_id: 'sess-1',
+          utterance: '帮我继续推进这个任务',
+          source: 'web',
+        });
+        return jsonResponse({
+          spoken_text: '已发送给当前会话。',
+          status: 'ok',
+          actions: [{ tool: 'send_session_input', status: 'ok', job: { job_id: 'job-voice', status: 'queued' } }],
+        });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+    const stopTrack = vi.fn();
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    class MockMediaRecorder {
+      static isTypeSupported = () => true;
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      start() {}
+      stop() {
+        this.ondataavailable?.({ data: new Blob([new Uint8Array([4, 5])], { type: 'audio/webm' }) });
+        this.onstop?.();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder);
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '助手' }));
+    fireEvent.click(screen.getByRole('button', { name: '语音' }));
+    fireEvent.click(await screen.findByRole('button', { name: '停止' }));
+
+    await waitFor(() => expect(screen.getByText('已发送给当前会话。')).toBeInTheDocument());
+    expect(screen.getByLabelText('回复当前会话')).toHaveValue('');
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/voice/turn', expect.objectContaining({ method: 'POST' }));
+    expect(stopTrack).toHaveBeenCalled();
+  });
+
   it('starts true streaming voice mode from Doubao auth and appends the final transcript on stop', async () => {
     let stopStreaming: (() => void) | undefined;
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

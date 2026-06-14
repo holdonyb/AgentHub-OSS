@@ -435,6 +435,19 @@ class VoiceStreamAuthOut(BaseModel):
     expires_in_seconds: int
 
 
+class VoiceTurnIn(BaseModel):
+    session_id: str | None = Field(default=None, max_length=180)
+    utterance: str = Field(min_length=1, max_length=6000)
+    source: Literal["web", "android"] = "web"
+    mode: Literal["assistant"] = "assistant"
+
+
+class VoiceTurnOut(BaseModel):
+    spoken_text: str
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    status: Literal["ok", "partial", "failed"]
+
+
 class SyncStatusOut(BaseModel):
     archived: bool
     selected_session_id: str | None = None

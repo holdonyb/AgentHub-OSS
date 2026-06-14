@@ -1226,6 +1226,44 @@ class DoubaoAsrFacade:
 doubao_asr = DoubaoAsrFacade()
 
 
+class OpenAIWhisperAsrFacade:
+    async def transcribe_audio_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: str,
+        content_type: str,
+        language: str | None = None,
+        api_key: str,
+        base_url: str,
+        model: str,
+    ) -> str:
+        key = api_key.strip()
+        if not key:
+            raise RuntimeError("OpenAI-compatible ASR credentials are not configured")
+        normalized_base_url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
+        url = f"{normalized_base_url}/audio/transcriptions"
+        data = {"model": (model or "whisper-1").strip() or "whisper-1"}
+        if language:
+            data["language"] = language
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=90, write=90, pool=30)) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (filename, audio_bytes, content_type)},
+                data=data,
+            )
+            response.raise_for_status()
+        payload = response.json() if response.content else {}
+        text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+        if not text:
+            raise RuntimeError("OpenAI-compatible ASR returned empty text")
+        return text
+
+
+openai_asr = OpenAIWhisperAsrFacade()
+
+
 def schedule_out(schedule: Schedule) -> dict[str, Any]:
     return {
         "space_id": schedule.space_id,

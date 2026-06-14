@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
 
-from conftest import auth_headers, bootstrap_owner, login
+from conftest import auth_headers, bootstrap_owner, create_worker, login
 from app.services import DoubaoAsrFacade, doubao_asr
 
 
@@ -207,7 +208,7 @@ def test_voice_transcribe_reports_provider_timeout_without_500(
     assert response.status_code == 504, response.text
     assert response.json() == {
         "detail": {
-            "message": "Doubao ASR timed out",
+            "message": "Voice ASR timed out",
             "code": "VOICE_ASR_TIMEOUT",
             "diagnostics": {
                 "filename": "voice.wav",
@@ -338,3 +339,207 @@ def test_doubao_asr_uses_recording_file_2_submit_query_with_api_key(monkeypatch)
         "access_key": "",
         "resource_id": "volc.seedasr.auc",
     }
+
+
+def test_voice_transcribe_can_use_openai_compatible_whisper_provider(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    calls: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "app.routers.voice.get_settings",
+        lambda: SimpleNamespace(
+            max_voice_audio_bytes=12 * 1024 * 1024,
+            voice_asr_provider="openai",
+            openai_asr_api_key="asr-key",
+            openai_asr_base_url="https://voice.example.test/v1",
+            openai_asr_model="whisper-large-v3",
+        ),
+    )
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            calls["client_kwargs"] = kwargs
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def post(self, url: str, *, headers: dict[str, str], files: dict[str, Any], data: dict[str, str]) -> httpx.Response:
+            calls["url"] = url
+            calls["headers"] = headers
+            calls["data"] = data
+            calls["file"] = files["file"]
+            request = httpx.Request("POST", url)
+            return httpx.Response(200, request=request, json={"text": "Whisper 识别结果"})
+
+    monkeypatch.setattr("app.services.httpx.AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/voice/transcribe",
+        json={
+            "filename": "voice.webm",
+            "content_type": "audio/webm",
+            "data_base64": base64.b64encode(b"webm-audio").decode("ascii"),
+            "language": "zh-CN",
+        },
+        headers=auth_headers(owner_login),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["text"] == "Whisper 识别结果"
+    assert calls["url"] == "https://voice.example.test/v1/audio/transcriptions"
+    assert calls["headers"] == {"Authorization": "Bearer asr-key"}
+    assert calls["data"] == {"model": "whisper-large-v3", "language": "zh-CN"}
+    assert calls["file"] == ("voice.webm", b"webm-audio", "audio/webm")
+
+
+def test_voice_turn_can_send_input_to_selected_session(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    create_worker(client)
+    session_response = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "sess-voice",
+            "backend": "codex",
+            "worker_id": "win-main",
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-voice.jsonl",
+            "status": "ready",
+            "title": "Voice target",
+            "last_message": "等你回复",
+        },
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    async def fake_decide(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "spoken_text": "我会发给当前会话。",
+            "tool_calls": [
+                {
+                    "name": "send_session_input",
+                    "arguments": {
+                        "session_id": "sess-voice",
+                        "prompt": "请总结当前进展",
+                        "reply_mode": "direct",
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.routers.voice.voice_agent.decide", fake_decide)
+
+    response = client.post(
+        "/api/voice/turn",
+        headers=headers,
+        json={"session_id": "sess-voice", "utterance": "帮我问一下当前进展", "source": "web"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["spoken_text"] == "我会发给当前会话。"
+    assert payload["actions"][0]["tool"] == "send_session_input"
+    assert payload["actions"][0]["status"] == "ok"
+    assert payload["actions"][0]["job"]["kind"] == "session_input"
+    assert payload["actions"][0]["job"]["payload"]["prompt"] == "请总结当前进展"
+
+
+def test_voice_turn_can_answer_pending_user_choice(client: TestClient, monkeypatch) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    worker_payload = create_worker(client)
+    worker_token = worker_payload["worker_token"]
+    session_response = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "sess-choice",
+            "backend": "codex",
+            "worker_id": "win-main",
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-choice.jsonl",
+            "status": "ready",
+            "title": "Choice target",
+        },
+    )
+    assert session_response.status_code == 200, session_response.text
+    permission_response = client.post(
+        "/api/internal/permissions/requested",
+        headers={"Authorization": f"Bearer {worker_token}"},
+        json={
+            "worker_id": "win-main",
+            "permission": {
+                "session_id": "sess-choice",
+                "backend": "codex",
+                "kind": "question",
+                "title": "对象存储",
+                "description": "上传服务一阶段优先适配哪类对象存储？",
+                "detail": {
+                    "questions": [
+                        {
+                            "id": "storage",
+                            "header": "对象存储",
+                            "question": "上传服务一阶段优先适配哪类对象存储？",
+                            "options": [
+                                {"label": "S3兼容/MinIO (Recommended)", "description": "最通用"},
+                                {"label": "阿里云 OSS", "description": "国内生产可用性强"},
+                            ],
+                        }
+                    ]
+                },
+                "actions": {},
+            },
+        },
+    )
+    assert permission_response.status_code == 200, permission_response.text
+    permission_id = permission_response.json()["permission"]["permission_id"]
+
+    async def fake_decide(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "spoken_text": "已选择 S3 兼容方案。",
+            "tool_calls": [
+                {
+                    "name": "respond_permission",
+                    "arguments": {
+                        "permission_id": permission_id,
+                        "action": "answer",
+                        "response": {
+                            "answers": {
+                                "storage": {
+                                    "label": "S3兼容/MinIO (Recommended)",
+                                    "description": "最通用",
+                                }
+                            }
+                        },
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.routers.voice.voice_agent.decide", fake_decide)
+
+    response = client.post(
+        "/api/voice/turn",
+        headers=headers,
+        json={"session_id": "sess-choice", "utterance": "选第一个 S3 兼容", "source": "android"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["actions"][0]["tool"] == "respond_permission"
+    assert payload["actions"][0]["permission"]["status"] == "answered"
+    jobs_response = client.get("/api/jobs", headers=headers)
+    assert jobs_response.status_code == 200, jobs_response.text
+    assert any(job["payload"].get("answered_permission_id") == permission_id for job in jobs_response.json()["items"])
