@@ -763,15 +763,37 @@ def _is_codex_native_plan_fallback_error(message: str) -> bool:
         return False
     if "user denied codex plan input request" in lowered:
         return False
-    return "codex app-server" in lowered or "responsestreamdisconnected" in lowered or "willretry" in lowered
+    return (
+        "codex app-server" in lowered
+        or "responsestreamdisconnected" in lowered
+        or "willretry" in lowered
+        or _is_codex_native_resume_fallback_error(lowered)
+    )
 
 
 def _is_codex_native_default_fallback_error(message: str) -> bool:
     lowered = message.lower()
     return (
-        "codex app-server thread/resume failed" in lowered
-        and "failed to load configuration" in lowered
-        and "model provider" in lowered
+        _is_codex_native_resume_fallback_error(lowered)
+        or (
+            "codex app-server thread/resume failed" in lowered
+            and "failed to load configuration" in lowered
+            and "model provider" in lowered
+        )
+    )
+
+
+def _is_codex_native_resume_fallback_error(message: str) -> bool:
+    lowered = message.lower()
+    if "codex app-server thread/resume failed" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in (
+            "invalid thread id",
+            "thread not found",
+            "invalid character: expected an optional prefix of `urn:uuid:`",
+        )
     )
 
 

@@ -783,6 +783,64 @@ def test_codex_default_turn_falls_back_to_cli_resume_for_legacy_provider_config(
     assert "AgentHub native plan fallback" not in args[-1]
 
 
+def test_codex_default_turn_falls_back_to_cli_resume_for_invalid_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`'}"
+        )
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(
+            {
+                "args": args,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+                "output_file": output_file,
+                "env": env,
+            }
+        )
+        return "resume invalid-thread fallback"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-invalid-thread-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "autopilot-cockpit-2026-06-13",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "继续执行",
+                "raw_prompt": "继续执行",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "timeout_seconds": 66,
+            },
+        },
+        client=object(),
+        worker_id="vm-openaitest",
+    )
+
+    assert result == "resume invalid-thread fallback"
+    assert calls[0]["cwd"] == "E:/work"
+    assert calls[0]["timeout_seconds"] == 66
+    assert calls[0]["args"][-2:] == ["autopilot-cockpit-2026-06-13", "继续执行"]
+
+
 def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 
@@ -825,6 +883,50 @@ def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(m
     assert args[-2] == "codex-session"
     assert "AgentHub native plan fallback" in args[-1]
     assert "先规划 UI 改造" in args[-1]
+
+
+def test_codex_native_plan_falls_back_to_cli_plan_prompt_for_invalid_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_plan_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`'}"
+        )
+
+    def fake_run_backend_command(args: list[str], cwd: str, timeout_seconds: int, *, output_file: str | None = None) -> str:
+        calls.append({"args": args, "cwd": cwd, "timeout_seconds": timeout_seconds, "output_file": output_file})
+        return "fallback invalid thread plan"
+
+    monkeypatch.setattr(executor, "run_codex_plan_turn", fake_run_codex_plan_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-plan-invalid-thread",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "autopilot-cockpit-2026-06-13",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "先列计划",
+                "raw_prompt": "先列计划",
+                "reply_mode": "plan",
+                "native_plan_mode": True,
+                "timeout_seconds": 88,
+            },
+        },
+        client=object(),
+        worker_id="vm-openaitest",
+    )
+
+    assert result == "fallback invalid thread plan"
+    assert calls[0]["cwd"] == "E:/work/AgentHub"
+    assert calls[0]["timeout_seconds"] == 88
+    assert "AgentHub native plan fallback" in calls[0]["args"][-1]
+    assert "先列计划" in calls[0]["args"][-1]
 
 
 def test_codex_native_plan_with_image_attachment_uses_cli_fallback_to_preserve_image(monkeypatch: pytest.MonkeyPatch) -> None:
