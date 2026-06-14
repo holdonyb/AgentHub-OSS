@@ -57,6 +57,7 @@ ALLOWED_ATTACHMENT_TYPES = {
     "text/plain",
     "text/xml",
 }
+UNSUPPORTED_VIRTUAL_SESSION_SOURCES = {"autopilot_cockpit"}
 
 SESSION_LIST_LOAD_ONLY = (
     AgentSession.space_id,
@@ -105,6 +106,35 @@ def _workspace_label(workspace_root: str) -> str:
     if not normalized:
         return "workspace"
     return normalized.replace("\\", "/").split("/")[-1] or "workspace"
+
+
+def _session_runtime_source(session: AgentSession) -> str:
+    runtime_metadata = loads_json(session.runtime_metadata_json, {})
+    if isinstance(runtime_metadata, dict):
+        source = str(runtime_metadata.get("source") or "").strip()
+        if source:
+            return source
+    metadata = loads_json(session.metadata_json, {})
+    if isinstance(metadata, dict):
+        source = str(metadata.get("source") or "").strip()
+        if source:
+            return source
+    return ""
+
+
+def _reject_unsupported_virtual_session(session: AgentSession, *, action: str) -> None:
+    source = _session_runtime_source(session)
+    if source not in UNSUPPORTED_VIRTUAL_SESSION_SOURCES:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": f"This {action} target is a virtual AgentHub session and cannot be resumed from the OSS runtime",
+            "code": "UNSUPPORTED_VIRTUAL_SESSION",
+            "source": source,
+            "action": action,
+        },
+    )
 
 
 def _runtime_title(payload: SessionCreateIn) -> str | None:
@@ -605,6 +635,7 @@ def fork_session(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="fork")
     worker_id = (payload.worker_id or session.worker_id).strip()
     backend = (payload.backend or session.backend).strip().lower()
     workspace_root = (payload.workspace_root or session.workspace_root).strip()
@@ -659,6 +690,7 @@ def btw_session(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="btw")
     _require_worker_backend(db, session)
     controls = _normalize_controls(payload.controls) if payload.controls is not None else loads_json(session.controls_json, {})
     handoff_context = _session_handoff_context(db, session)
@@ -863,6 +895,7 @@ def send_session_input(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="session_input")
     _require_worker_backend(db, session)
     session_was_running = _session_runtime_busy(session)
     reply_mode = payload.reply_mode

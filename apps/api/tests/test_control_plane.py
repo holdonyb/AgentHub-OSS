@@ -825,6 +825,45 @@ def test_session_input_creates_queued_job_and_audit_event(client: TestClient) ->
     assert any(event["event_type"] == "job.create" for event in events)
 
 
+def test_virtual_autopilot_session_rejects_session_input_in_oss_runtime(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "autopilot-cockpit-2026-06-13",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/Work",
+            "project_name": "Autopilot Cockpit",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "autopilot-cockpit-2026-06-13",
+            "status": "ready",
+            "title": "Autopilot 驾驶舱 2026-06-13",
+            "last_message": "ready",
+            "runtime_metadata": {"source": "autopilot_cockpit", "date": "2026-06-13"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/autopilot-cockpit-2026-06-13/input",
+        json={"prompt": "继续"},
+        headers=auth_headers(owner_login),
+    )
+    assert input_response.status_code == 409, input_response.text
+    assert input_response.json()["detail"]["code"] == "UNSUPPORTED_VIRTUAL_SESSION"
+    assert input_response.json()["detail"]["source"] == "autopilot_cockpit"
+
+    jobs = client.get("/api/jobs").json()["items"]
+    assert jobs == []
+
+
 def test_stale_worker_discovery_does_not_rewind_recent_user_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
