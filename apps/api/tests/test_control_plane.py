@@ -2695,6 +2695,38 @@ def test_session_without_title_gets_readable_default_name(client: TestClient) ->
     assert "codex" in title
 
 
+def test_claude_controls_patch_normalizes_legacy_approval_mode(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "claude-legacy-controls",
+            "backend": "claude",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/CourseAgent",
+            "project_name": "CourseAgent",
+            "runtime_session_ref": "claude-legacy-controls.jsonl",
+            "controls": {},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    controls = client.patch(
+        "/api/sessions/claude-legacy-controls/controls",
+        json={"approval_mode": "never"},
+        headers=headers,
+    )
+    assert controls.status_code == 200, controls.text
+    payload = controls.json()["session"]["controls"]
+    assert payload["permission_mode"] == "bypassPermissions"
+    assert "approval_mode" not in payload
+
+
 def test_legacy_machine_session_titles_are_not_exposed(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

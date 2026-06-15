@@ -660,6 +660,10 @@ const fullAccessControls = {
   yolo: true,
 };
 
+function isClaudeBackendName(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase() === 'claude';
+}
+
 const maxReplyAttachments = 5;
 const maxReplyAttachmentBytes = 8 * 1024 * 1024;
 
@@ -696,7 +700,7 @@ function emptyLaunchDraft(worker?: Worker, session?: AgentSession): SessionLaunc
     title: '',
     model: controls.model,
     sandbox_mode: controls.sandbox_mode,
-    approval_mode: controls.approval_mode,
+    approval_mode: isClaudeBackendName(backend) ? '' : controls.approval_mode,
     permission_mode: controls.permission_mode,
     interaction_bridge: controls.interaction_bridge,
     yolo: controls.yolo,
@@ -798,9 +802,10 @@ function workerInstallSummary(draft: WorkerInstallDraft) {
 
 function controlsFromLaunchDraft(draft: SessionLaunchDraft) {
   const controls: Record<string, string | boolean> = {};
+  const isClaude = isClaudeBackendName(draft.backend);
   if (draft.model.trim()) controls.model = draft.model.trim();
   if (draft.sandbox_mode) controls.sandbox_mode = draft.sandbox_mode;
-  if (draft.approval_mode) controls.approval_mode = draft.approval_mode;
+  if (!isClaude && draft.approval_mode) controls.approval_mode = draft.approval_mode;
   if (draft.permission_mode) controls.permission_mode = draft.permission_mode;
   if (draft.interaction_bridge) controls.interaction_bridge = draft.interaction_bridge;
   if (draft.agent.trim()) controls.agent = draft.agent.trim();
@@ -944,11 +949,14 @@ function controlsFromSession(session?: AgentSession): ControlsDraft {
   const secretRefs = Array.isArray(controls.secret_refs)
     ? controls.secret_refs.map((item) => String(item)).filter(Boolean).join('\n')
     : '';
+  const backend = session.backend.toLowerCase();
+  const approval = valueFromControls(controls, 'approval_mode');
+  const permission = valueFromControls(controls, 'permission_mode') || (backend === 'claude' && approval === 'never' ? 'bypassPermissions' : '');
   return {
     model: valueFromControls(controls, 'model'),
     sandbox_mode: valueFromControls(controls, 'sandbox_mode'),
-    approval_mode: valueFromControls(controls, 'approval_mode'),
-    permission_mode: valueFromControls(controls, 'permission_mode'),
+    approval_mode: backend === 'claude' ? '' : approval,
+    permission_mode: permission,
     interaction_bridge: valueFromControls(controls, 'interaction_bridge'),
     agent: valueFromControls(controls, 'agent'),
     yolo: controls.yolo === true,
@@ -1244,7 +1252,7 @@ function sandboxSummary(session?: AgentSession | null, locale: LocaleCode = 'zh-
   const backend = session.backend.toLowerCase();
   const sandbox = optionText(controls.sandbox_mode) || 'default';
   const approval = optionText(controls.approval_mode) || 'default';
-  const permission = optionText(controls.permission_mode) || approval;
+  const permission = optionText(controls.permission_mode) || (backend === 'claude' && approval === 'never' ? 'bypassPermissions' : approval);
   if (controls.yolo === true || sandbox === 'danger-full-access' || permission === 'bypassPermissions') {
     return pickLocale(locale, '全权限', 'Full access');
   }
@@ -4963,10 +4971,11 @@ function App() {
   async function handleControls(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSession || !canOperate(user)) return;
+    const isClaude = isClaudeBackendName(selectedSession.backend);
     const payload: Record<string, string | boolean | string[] | null> = {};
     if (controlsDraft.model.trim()) payload.model = controlsDraft.model.trim();
     if (controlsDraft.sandbox_mode) payload.sandbox_mode = controlsDraft.sandbox_mode;
-    if (controlsDraft.approval_mode) payload.approval_mode = controlsDraft.approval_mode;
+    if (!isClaude && controlsDraft.approval_mode) payload.approval_mode = controlsDraft.approval_mode;
     if (controlsDraft.permission_mode) payload.permission_mode = controlsDraft.permission_mode;
     if (controlsDraft.interaction_bridge) payload.interaction_bridge = controlsDraft.interaction_bridge;
     if (controlsDraft.agent.trim()) payload.agent = controlsDraft.agent.trim();
@@ -5044,9 +5053,12 @@ function App() {
 
   async function handleApplyFullAccessControls() {
     if (!selectedSession || !canOperate(user)) return;
+    const payload = isClaudeBackendName(selectedSession.backend)
+      ? { permission_mode: 'bypassPermissions' }
+      : fullAccessControls;
     const response = await apiPatch<{ session: AgentSession }>(
       `/api/sessions/${selectedSession.session_id}/controls`,
-      fullAccessControls,
+      payload,
       csrfToken,
     );
     patchSession(response.session);
@@ -6092,24 +6104,26 @@ function App() {
                         ))}
                       </select>
                     </label>
-                    <label>
-                      {pickLocale(locale, '审批', 'Approval')}
-                      <select
-                        aria-label={pickLocale(locale, '审批', 'Approval')}
-                        value={controlsDraft.approval_mode}
-                        onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
-                        disabled={!canOperate(user)}
-                      >
-                        <option value="">default</option>
-                        {modeOptions(selectedProvider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map(
-                          (value) => (
-                            <option value={value} key={value}>
-                              {value}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </label>
+                    {!isClaudeBackendName(selectedProvider?.backend) ? (
+                      <label>
+                        {pickLocale(locale, '审批', 'Approval')}
+                        <select
+                          aria-label={pickLocale(locale, '审批', 'Approval')}
+                          value={controlsDraft.approval_mode}
+                          onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
+                          disabled={!canOperate(user)}
+                        >
+                          <option value="">default</option>
+                          {modeOptions(selectedProvider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map(
+                            (value) => (
+                              <option value={value} key={value}>
+                                {value}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                    ) : null}
                     <label>
                       {pickLocale(locale, '权限策略', 'Permission Policy')}
                       <select
@@ -7390,21 +7404,23 @@ function SessionLaunchDialog({
               ))}
             </select>
           </label>
-          <label>
-            审批
-            <select
-              aria-label="Launch 审批"
-              value={draft.approval_mode}
-              onChange={(event) => onChange((current) => ({ ...current, approval_mode: event.target.value }))}
-            >
-              <option value="">default</option>
-              {modeOptions(provider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map((value) => (
-                <option value={value} key={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isClaudeBackendName(provider?.backend) ? (
+            <label>
+              审批
+              <select
+                aria-label="Launch 审批"
+                value={draft.approval_mode}
+                onChange={(event) => onChange((current) => ({ ...current, approval_mode: event.target.value }))}
+              >
+                <option value="">default</option>
+                {modeOptions(provider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         <label className="launch-prompt">

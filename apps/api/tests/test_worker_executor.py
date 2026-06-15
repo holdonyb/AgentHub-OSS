@@ -192,6 +192,31 @@ def test_claude_session_input_uses_resume_prompt_path() -> None:
     assert claude[-1] == prompt
 
 
+def test_claude_session_input_maps_legacy_approval_never_to_bypass_permissions() -> None:
+    claude = build_backend_command(
+        {
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-legacy-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "controls": {"approval_mode": "never"},
+            },
+        }
+    )
+
+    assert claude == [
+        "claude",
+        "-p",
+        "--resume",
+        "claude-legacy-session",
+        "--permission-mode",
+        "bypassPermissions",
+        "继续执行",
+    ]
+
+
 def test_claude_session_input_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     observed_calls: list[list[str]] = []
 

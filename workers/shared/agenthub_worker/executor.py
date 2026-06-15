@@ -272,6 +272,16 @@ def _model_for_backend(backend: str, controls: dict[str, Any]) -> str:
     return ""
 
 
+def _claude_permission_mode(controls: dict[str, Any]) -> str:
+    explicit = str(controls.get("permission_mode") or "").strip()
+    if explicit:
+        return explicit
+    legacy = str(controls.get("approval_mode") or "").strip()
+    if legacy == "never":
+        return "bypassPermissions"
+    return ""
+
+
 def _append_common_workspace(args: list[str], controls: dict[str, Any]) -> None:
     extra_dirs = controls.get("extra_workspace_dirs")
     if isinstance(extra_dirs, list):
@@ -334,7 +344,7 @@ def build_backend_command(
         args = ["claude", "-p", "--resume", session_id]
         if model:
             args.extend(["--model", model])
-        permission = str(controls.get("permission_mode") or controls.get("approval_mode") or "").strip()
+        permission = _claude_permission_mode(controls)
         if permission:
             args.extend(["--permission-mode", permission])
         args.append(prompt)
@@ -404,7 +414,7 @@ def build_session_start_command(
         args = ["claude", "-p"]
         if model:
             args.extend(["--model", model])
-        permission = str(controls.get("permission_mode") or controls.get("approval_mode") or "").strip()
+        permission = _claude_permission_mode(controls)
         if permission:
             args.extend(["--permission-mode", permission])
         _append_common_workspace(args, controls)
@@ -1168,7 +1178,7 @@ def _claude_interactive_start_args(job: dict[str, Any]) -> list[str]:
     args = ["claude"]
     if model:
         args.extend(["--model", model])
-    permission = str(controls.get("permission_mode") or controls.get("approval_mode") or "").strip()
+    permission = _claude_permission_mode(controls)
     if permission:
         args.extend(["--permission-mode", permission])
     return args
