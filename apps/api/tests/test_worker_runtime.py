@@ -324,6 +324,46 @@ def test_claude_provider_uses_auth_status_command(monkeypatch: pytest.MonkeyPatc
     assert snapshot["features"]["plan_agent"] is True
 
 
+def test_claude_provider_can_advertise_tmux_bridge_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "1")
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+    monkeypatch.setattr(providers_module, "_preferred_claude_interactive_bridge", lambda: "tmux")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["claude", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, stdout='{"loggedIn": true}', stderr="")
+        if args[:2] == ["claude", "agents"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="claude 1.0.0", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="claude", executable="claude").snapshot(available=True)
+
+    assert snapshot["features"]["interaction_bridge"] == "tmux"
+    assert snapshot["features"]["native_runtime_prompts"] is True
+
+
+def test_claude_provider_can_advertise_psmux_bridge_from_env_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "1")
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+    monkeypatch.setattr(providers_module, "_preferred_claude_interactive_bridge", lambda: "psmux")
+
+    def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["claude", "auth", "status"]:
+            return subprocess.CompletedProcess(args, 0, stdout='{"loggedIn": true}', stderr="")
+        if args[:2] == ["claude", "agents"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="claude 1.0.0", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="claude", executable="claude").snapshot(available=True)
+
+    assert snapshot["features"]["interaction_bridge"] == "psmux"
+    assert snapshot["features"]["native_runtime_prompts"] is True
+
+
 def test_codex_provider_uses_feature_list_probe_for_native_goal_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
 

@@ -4,14 +4,17 @@ import base64
 import binascii
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 from agenthub_worker.codex_app_server import (
@@ -50,6 +53,8 @@ MAX_FILE_LIST_ENTRIES = 300
 DEFAULT_FILE_READ_BYTES = 200_000
 MAX_FILE_READ_BYTES = 5_000_000
 MAX_INLINE_FILE_BYTES = 5_000_000
+CLAUDE_INTERACTIVE_BRIDGE_ENV = "AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE"
+CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT = "已送达 Claude 交互会话，等待 transcript 同步"
 
 
 @dataclass(frozen=True)
@@ -214,6 +219,45 @@ def _controls(job: dict[str, Any]) -> dict[str, Any]:
     payload = _payload(job)
     controls = payload.get("controls") or {}
     return controls if isinstance(controls, dict) else {}
+
+
+def _claude_interactive_bridge_mode(payload: dict[str, Any]) -> str:
+    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
+    raw = str(
+        controls.get("interaction_bridge")
+        or payload.get("interaction_bridge")
+        or os.getenv(CLAUDE_INTERACTIVE_BRIDGE_ENV, "")
+    ).strip().lower()
+    if raw in {"", "0", "false", "no", "off", "disabled", "none"}:
+        return ""
+    if raw in {"1", "true", "yes", "on", "enabled", "interactive", "auto"}:
+        return "auto"
+    return raw
+
+
+def _supports_tmux_interactive_bridge() -> bool:
+    return os.name != "nt" and shutil.which("tmux") is not None
+
+
+def _supports_psmux_interactive_bridge() -> bool:
+    return os.name == "nt" and shutil.which("psmux") is not None
+
+
+def _resolve_claude_interactive_bridge(payload: dict[str, Any]) -> str:
+    mode = _claude_interactive_bridge_mode(payload)
+    if mode in {"", "compatibility", "none"}:
+        return ""
+    if mode == "auto":
+        if _supports_tmux_interactive_bridge():
+            return "tmux"
+        if _supports_psmux_interactive_bridge():
+            return "psmux"
+        return ""
+    if mode == "tmux" and _supports_tmux_interactive_bridge():
+        return "tmux"
+    if mode == "psmux" and _supports_psmux_interactive_bridge():
+        return "psmux"
+    return ""
 
 
 def _model_for_backend(backend: str, controls: dict[str, Any]) -> str:
@@ -643,6 +687,39 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
         os.close(fd)
     prompt_override = _build_session_fork_prompt(job) if job.get("kind") == "session_fork" else None
     try:
+        bridge_mode = _resolve_claude_interactive_bridge(payload)
+        if backend == "claude" and bridge_mode:
+            if payload.get("dry_run"):
+                return f"dry_run: claude interactive bridge ({bridge_mode}) start {_truncate_text(prompt_override or _prompt(job), 240)}"
+            roots = _session_discovery_roots(workspace_root)
+            before = _discover_local_sessions(roots)
+            process_env = _backend_process_env(job, {})
+            session_name = _claude_interactive_job_session_name(job)
+            _start_interactive_command_session(
+                session_name,
+                _claude_interactive_start_args(job),
+                workspace_root,
+                process_env,
+                bridge_mode,
+            )
+            _paste_prompt_into_interactive_bridge(
+                session_name=session_name,
+                prompt=(prompt_override or _prompt(job)).strip(),
+                cwd=workspace_root,
+                env=process_env,
+                bridge_mode=bridge_mode,
+            )
+            created = _poll_created_session(
+                before,
+                roots=roots,
+                backend=backend,
+                workspace_root=workspace_root,
+                timeout_seconds=_job_timeout_seconds(payload),
+            )
+            if created is None:
+                raise RuntimeError("Claude interactive bridge submitted the prompt but no new session was discovered")
+            created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
+            return f"created_session_id={created_session_id}\n{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）"
         args = build_session_start_command(job, output_file=output_file, prompt_override=prompt_override)
         timeout_seconds = _job_timeout_seconds(payload)
         if payload.get("dry_run"):
@@ -650,8 +727,13 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
         roots = _session_discovery_roots(workspace_root)
         before = _discover_local_sessions(roots)
         cli_output = _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
-        after = _discover_local_sessions(roots)
-        created = _select_created_session(before, after, backend=backend, workspace_root=workspace_root)
+        created = _poll_created_session(
+            before,
+            roots=roots,
+            backend=backend,
+            workspace_root=workspace_root,
+            timeout_seconds=timeout_seconds,
+        )
         if created is None:
             detail = cli_output.strip()
             suffix = f": {detail[:2000]}" if detail else ""
@@ -673,6 +755,50 @@ def _execute_session_btw(job: dict[str, Any], *, client: Any | None) -> str:
         os.close(fd)
     secret_env = _resolve_job_secrets(client, job, payload)
     try:
+        bridge_mode = _resolve_claude_interactive_bridge(payload)
+        if backend == "claude" and bridge_mode:
+            if payload.get("dry_run"):
+                return f"dry_run: claude interactive bridge ({bridge_mode}) btw {_truncate_text(_prompt(job), 240)}"
+            roots = _session_discovery_roots(workspace_root)
+            before = _discover_local_sessions(roots)
+            process_env = _backend_process_env(job, secret_env)
+            session_name = _claude_interactive_job_session_name(job)
+            created_session: dict[str, Any] | None = None
+            try:
+                _start_interactive_command_session(
+                    session_name,
+                    _claude_interactive_start_args(job),
+                    workspace_root,
+                    process_env,
+                    bridge_mode,
+                )
+                _paste_prompt_into_interactive_bridge(
+                    session_name=session_name,
+                    prompt=_build_session_btw_prompt(job),
+                    cwd=workspace_root,
+                    env=process_env,
+                    bridge_mode=bridge_mode,
+                )
+                created_session = _poll_created_session(
+                    before,
+                    roots=roots,
+                    backend=backend,
+                    workspace_root=workspace_root,
+                    timeout_seconds=_job_timeout_seconds(payload),
+                )
+                if created_session is None:
+                    raise RuntimeError("Claude interactive bridge submitted the BTW prompt but no sidecar session was discovered")
+                _, result_text = _poll_session_result_text(
+                    str(created_session.get("session_id") or ""),
+                    roots=roots,
+                    timeout_seconds=_job_timeout_seconds(payload),
+                )
+                if not result_text.strip():
+                    raise RuntimeError("Claude interactive bridge sidecar session did not produce a readable assistant result")
+                return result_text
+            finally:
+                _kill_interactive_session(session_name, workspace_root, process_env, bridge_mode)
+                _cleanup_claude_sidecar_runtime(created_session)
         args = build_session_start_command(job, output_file=output_file, prompt_override=_build_session_btw_prompt(job))
         timeout_seconds = _job_timeout_seconds(payload)
         process_env = _backend_process_env(job, secret_env)
@@ -711,6 +837,31 @@ def _execute_provider_auth(job: dict[str, Any], action: str) -> str:
 
 def _format_command(args: list[str]) -> str:
     return " ".join(shlex.quote(arg) for arg in args)
+
+
+def _run_control_command(
+    args: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    executable = shutil.which(args[0])
+    if executable is None:
+        raise RuntimeError(f"Control command not found: {args[0]}")
+    completed = subprocess.run(
+        [executable, *args[1:]],
+        cwd=cwd if cwd and os.path.isdir(cwd) else None,
+        env={**os.environ, **env} if env else None,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    return completed
 
 
 def _read_output_file(output_file: str | None) -> str:
@@ -998,6 +1149,326 @@ def _job_with_attachment_context(job: dict[str, Any], attachments: list[Material
     return next_job
 
 
+def _claude_interactive_session_name(session_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", session_id.strip().lower()).strip("-")[:24] or "session"
+    digest = hashlib.sha1(session_id.encode("utf-8", errors="replace")).hexdigest()[:10]
+    return f"ah-claude-{slug}-{digest}"[:48]
+
+
+def _claude_interactive_job_session_name(job: dict[str, Any]) -> str:
+    token = str(job.get("job_id") or job.get("kind") or "job")
+    slug = re.sub(r"[^a-z0-9_-]+", "-", token.strip().lower()).strip("-")[:24] or "job"
+    digest = hashlib.sha1(token.encode("utf-8", errors="replace")).hexdigest()[:10]
+    return f"ah-claude-{slug}-{digest}"[:48]
+
+
+def _claude_interactive_start_args(job: dict[str, Any]) -> list[str]:
+    controls = _controls(job)
+    model = _model_for_backend("claude", controls)
+    args = ["claude"]
+    if model:
+        args.extend(["--model", model])
+    permission = str(controls.get("permission_mode") or controls.get("approval_mode") or "").strip()
+    if permission:
+        args.extend(["--permission-mode", permission])
+    return args
+
+
+def _claude_tmux_session_exists(session_name: str, cwd: str, env: dict[str, str] | None) -> bool:
+    completed = _run_control_command(["tmux", "has-session", "-t", session_name], cwd, 15, env=env)
+    return completed.returncode == 0
+
+
+def _claude_psmux_session_exists(session_name: str, cwd: str, env: dict[str, str] | None) -> bool:
+    completed = _run_control_command(["psmux", "has-session", "-t", session_name], cwd, 15, env=env)
+    return completed.returncode == 0
+
+
+def _start_tmux_command_session(
+    session_name: str,
+    command_args: list[str],
+    cwd: str,
+    env: dict[str, str] | None,
+) -> None:
+    completed = _run_control_command(
+        ["tmux", "new-session", "-d", "-s", session_name, "-c", cwd, *command_args],
+        cwd,
+        30,
+        env=env,
+    )
+    if completed.returncode != 0:
+        detail = _combined_process_output(completed) or "tmux new-session failed without diagnostics"
+        raise RuntimeError(f"claude interactive bridge failed to start tmux session: {detail[:2000]}")
+    time.sleep(0.35)
+
+
+def _powershell_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _build_psmux_shell_command(command_args: list[str], cwd: str) -> list[str]:
+    command_text = _format_command(command_args)
+    script = f"Set-Location -LiteralPath '{_powershell_literal(cwd)}'; & {command_text}"
+    return ["powershell", "-NoLogo", "-NoProfile", "-NoExit", "-Command", script]
+
+
+def _start_psmux_command_session(
+    session_name: str,
+    command_args: list[str],
+    cwd: str,
+    env: dict[str, str] | None,
+) -> None:
+    completed = _run_control_command(
+        ["psmux", "new-session", "-d", "-s", session_name, "--", *_build_psmux_shell_command(command_args, cwd)],
+        cwd,
+        30,
+        env=env,
+    )
+    if completed.returncode != 0:
+        detail = _combined_process_output(completed) or "psmux new-session failed without diagnostics"
+        raise RuntimeError(f"claude interactive bridge failed to start psmux session: {detail[:2000]}")
+    time.sleep(0.35)
+
+
+def _psmux_primary_pane_id(session_name: str, cwd: str, env: dict[str, str] | None) -> str:
+    completed = _run_control_command(["psmux", "list-panes", "-t", session_name], cwd, 15, env=env)
+    if completed.returncode != 0:
+        detail = _combined_process_output(completed) or "psmux list-panes failed without diagnostics"
+        raise RuntimeError(f"claude interactive bridge failed to inspect psmux panes: {detail[:2000]}")
+    match = re.search(r"(%\d+)", completed.stdout or "")
+    if not match:
+        raise RuntimeError("claude interactive bridge could not locate the active psmux pane")
+    return match.group(1)
+
+
+def _paste_prompt_into_tmux(
+    *,
+    session_name: str,
+    prompt: str,
+    cwd: str,
+    env: dict[str, str] | None,
+) -> None:
+    buffer_name = f"agenthub-{hashlib.sha1(f'{session_name}:{prompt}'.encode('utf-8', errors='replace')).hexdigest()[:12]}"
+    fd, prompt_file = tempfile.mkstemp(prefix="agenthub-claude-bridge-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(prompt)
+        load = _run_control_command(["tmux", "load-buffer", "-b", buffer_name, prompt_file], cwd, 15, env=env)
+        if load.returncode != 0:
+            detail = _combined_process_output(load) or "tmux load-buffer failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to stage prompt: {detail[:2000]}")
+        paste = _run_control_command(["tmux", "paste-buffer", "-d", "-b", buffer_name, "-t", session_name], cwd, 15, env=env)
+        if paste.returncode != 0:
+            detail = _combined_process_output(paste) or "tmux paste-buffer failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to paste prompt: {detail[:2000]}")
+        send = _run_control_command(["tmux", "send-keys", "-t", session_name, "Enter"], cwd, 15, env=env)
+        if send.returncode != 0:
+            detail = _combined_process_output(send) or "tmux send-keys failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to submit prompt: {detail[:2000]}")
+    finally:
+        Path(prompt_file).unlink(missing_ok=True)
+        try:
+            _run_control_command(["tmux", "delete-buffer", "-b", buffer_name], cwd, 15, env=env)
+        except RuntimeError:
+            pass
+
+
+def _paste_prompt_into_psmux(
+    *,
+    session_name: str,
+    prompt: str,
+    cwd: str,
+    env: dict[str, str] | None,
+) -> None:
+    fd, prompt_file = tempfile.mkstemp(prefix="agenthub-claude-bridge-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(prompt)
+        pane_id = _psmux_primary_pane_id(session_name, cwd, env)
+        load = _run_control_command(["psmux", "load-buffer", prompt_file], cwd, 15, env=env)
+        if load.returncode != 0:
+            detail = _combined_process_output(load) or "psmux load-buffer failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to stage prompt: {detail[:2000]}")
+        paste = _run_control_command(["psmux", "paste-buffer", "-t", pane_id], cwd, 15, env=env)
+        if paste.returncode != 0:
+            detail = _combined_process_output(paste) or "psmux paste-buffer failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to paste prompt: {detail[:2000]}")
+        send = _run_control_command(["psmux", "send-keys", "-t", pane_id, "Enter"], cwd, 15, env=env)
+        if send.returncode != 0:
+            detail = _combined_process_output(send) or "psmux send-keys failed without diagnostics"
+            raise RuntimeError(f"claude interactive bridge failed to submit prompt: {detail[:2000]}")
+    finally:
+        Path(prompt_file).unlink(missing_ok=True)
+        try:
+            _run_control_command(["psmux", "delete-buffer"], cwd, 15, env=env)
+        except RuntimeError:
+            pass
+
+
+def _claude_interactive_session_exists(session_name: str, cwd: str, env: dict[str, str] | None, bridge_mode: str) -> bool:
+    if bridge_mode == "tmux":
+        return _claude_tmux_session_exists(session_name, cwd, env)
+    if bridge_mode == "psmux":
+        return _claude_psmux_session_exists(session_name, cwd, env)
+    raise RuntimeError(f"Unsupported Claude interactive bridge: {bridge_mode}")
+
+
+def _start_interactive_command_session(
+    session_name: str,
+    command_args: list[str],
+    cwd: str,
+    env: dict[str, str] | None,
+    bridge_mode: str,
+) -> None:
+    if bridge_mode == "tmux":
+        _start_tmux_command_session(session_name, command_args, cwd, env)
+        return
+    if bridge_mode == "psmux":
+        _start_psmux_command_session(session_name, command_args, cwd, env)
+        return
+    raise RuntimeError(f"Unsupported Claude interactive bridge: {bridge_mode}")
+
+
+def _paste_prompt_into_interactive_bridge(
+    *,
+    session_name: str,
+    prompt: str,
+    cwd: str,
+    env: dict[str, str] | None,
+    bridge_mode: str,
+) -> None:
+    if bridge_mode == "tmux":
+        _paste_prompt_into_tmux(session_name=session_name, prompt=prompt, cwd=cwd, env=env)
+        return
+    if bridge_mode == "psmux":
+        _paste_prompt_into_psmux(session_name=session_name, prompt=prompt, cwd=cwd, env=env)
+        return
+    raise RuntimeError(f"Unsupported Claude interactive bridge: {bridge_mode}")
+
+
+def _poll_created_session(
+    before: list[dict[str, Any]],
+    *,
+    roots: list[Path],
+    backend: str,
+    workspace_root: str,
+    timeout_seconds: int,
+) -> dict[str, Any] | None:
+    deadline = time.monotonic() + max(2.0, min(float(timeout_seconds), 20.0))
+    while time.monotonic() < deadline:
+        after = _discover_local_sessions(roots)
+        created = _select_created_session(before, after, backend=backend, workspace_root=workspace_root)
+        if created is not None:
+            return created
+        time.sleep(0.5)
+    return None
+
+
+def _latest_assistant_text(session: dict[str, Any]) -> str:
+    runtime_metadata = session.get("runtime_metadata") if isinstance(session.get("runtime_metadata"), dict) else {}
+    messages = runtime_metadata.get("messages") if isinstance(runtime_metadata, dict) else None
+    if isinstance(messages, list):
+        for item in reversed(messages):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("role") or "").strip().lower() != "assistant":
+                continue
+            text = str(item.get("text") or "").strip()
+            if text:
+                return text
+    return str(session.get("last_message") or "").strip()
+
+
+def _poll_session_result_text(
+    session_id: str,
+    *,
+    roots: list[Path],
+    timeout_seconds: int,
+) -> tuple[dict[str, Any] | None, str]:
+    deadline = time.monotonic() + max(3.0, min(float(timeout_seconds), 45.0))
+    last_text = ""
+    stable_reads = 0
+    last_session: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        current = next((item for item in _discover_local_sessions(roots) if str(item.get("session_id") or "") == session_id), None)
+        if current is not None:
+            last_session = current
+            text = _latest_assistant_text(current)
+            if text:
+                stable_reads = stable_reads + 1 if text == last_text else 1
+                last_text = text
+                status = str(current.get("status") or "").strip().lower()
+                if stable_reads >= 2 or status in {"ready", "needs_reply", "failed", "terminated"}:
+                    return current, text
+        time.sleep(0.75)
+    return last_session, last_text
+
+
+def _kill_tmux_session(session_name: str, cwd: str, env: dict[str, str] | None) -> None:
+    try:
+        _run_control_command(["tmux", "kill-session", "-t", session_name], cwd, 15, env=env)
+    except RuntimeError:
+        pass
+
+
+def _kill_psmux_session(session_name: str, cwd: str, env: dict[str, str] | None) -> None:
+    try:
+        _run_control_command(["psmux", "kill-session", "-t", session_name], cwd, 15, env=env)
+    except RuntimeError:
+        pass
+
+
+def _kill_interactive_session(session_name: str, cwd: str, env: dict[str, str] | None, bridge_mode: str) -> None:
+    if bridge_mode == "tmux":
+        _kill_tmux_session(session_name, cwd, env)
+        return
+    if bridge_mode == "psmux":
+        _kill_psmux_session(session_name, cwd, env)
+        return
+
+
+def _cleanup_claude_sidecar_runtime(session: dict[str, Any] | None) -> None:
+    if not isinstance(session, dict):
+        return
+    runtime_ref = str(session.get("runtime_session_ref") or "").strip()
+    if not runtime_ref:
+        return
+    try:
+        path = Path(runtime_ref)
+        if path.is_file():
+            path.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _execute_claude_interactive_bridge(job: dict[str, Any], payload: dict[str, Any], secret_env: dict[str, str]) -> str:
+    bridge_mode = _resolve_claude_interactive_bridge(payload)
+    if not bridge_mode:
+        raise RuntimeError("claude interactive bridge is not available on this worker")
+    workspace_root = _effective_workspace_root(job, payload)
+    session_id = str(job.get("target_session_id") or "").strip()
+    if not session_id:
+        raise ValueError("session_input target_session_id is required")
+    process_env = _backend_process_env(job, secret_env)
+    session_name = _claude_interactive_session_name(session_id)
+    if not _claude_interactive_session_exists(session_name, workspace_root, process_env, bridge_mode):
+        _start_interactive_command_session(
+            session_name,
+            ["claude", "--resume", session_id],
+            workspace_root,
+            process_env,
+            bridge_mode,
+        )
+    _paste_prompt_into_interactive_bridge(
+        session_name=session_name,
+        prompt=_prompt(job),
+        cwd=workspace_root,
+        env=process_env,
+        bridge_mode=bridge_mode,
+    )
+    return f"{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）"
+
+
 def _execute_codex_native_plan_cli_fallback(job: dict[str, Any], payload: dict[str, Any]) -> str:
     fallback_payload = dict(payload)
     fallback_payload["prompt"] = _build_codex_native_plan_fallback_prompt(job)
@@ -1037,6 +1508,15 @@ def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], sec
         attachments = _materialize_attachments(payload)
         job_for_command = _job_with_attachment_context(job, attachments)
         job_for_command["workspace_root"] = workspace_root
+        if (
+            backend == "claude"
+            and _resolve_claude_interactive_bridge(payload)
+            and all(not attachment.is_image for attachment in attachments)
+        ):
+            if payload.get("dry_run"):
+                bridge_mode = _resolve_claude_interactive_bridge(payload)
+                return f"dry_run: claude interactive bridge ({bridge_mode}) --resume {job.get('target_session_id')}"
+            return _execute_claude_interactive_bridge(job_for_command, _payload(job_for_command), secret_env)
         image_paths = [str(attachment.path) for attachment in attachments if attachment.is_image]
         args = build_backend_command(job_for_command, output_file=output_file, attachment_paths=image_paths)
         timeout_seconds = _job_timeout_seconds(payload)

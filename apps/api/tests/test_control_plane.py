@@ -2119,12 +2119,12 @@ def test_session_start_creates_worker_owned_job_with_controls_and_audit(client: 
         headers=auth_headers(owner_login),
         json={
             "worker_id": worker["worker"]["worker_id"],
-            "backend": "codex",
+            "backend": "claude",
             "workspace_root": "E:/work/AgentHub",
             "namespace": "default",
             "prompt": "新建一个 AgentHub UI 优化会话",
             "title": "AgentHub UI session",
-            "controls": {"model": "gpt-5.4", "sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            "controls": {"model": "sonnet", "permission_mode": "auto", "interaction_bridge": "tmux"},
         },
     )
 
@@ -2133,11 +2133,12 @@ def test_session_start_creates_worker_owned_job_with_controls_and_audit(client: 
     assert job["kind"] == "session_start"
     assert job["target_session_id"] is None
     assert job["worker_id"] == worker["worker"]["worker_id"]
-    assert job["backend"] == "codex"
+    assert job["backend"] == "claude"
     assert job["workspace_root"] == "E:/work/AgentHub"
     assert job["payload"]["prompt"] == "新建一个 AgentHub UI 优化会话"
     assert job["payload"]["title"] == "AgentHub UI session"
-    assert job["payload"]["controls"]["approval_mode"] == "never"
+    assert job["payload"]["controls"]["permission_mode"] == "auto"
+    assert job["payload"]["controls"]["interaction_bridge"] == "tmux"
 
     with client.app.state.SessionLocal() as db:
         event_types = [row.event_type for row in db.query(Event).order_by(Event.created_at.asc()).all()]
@@ -2658,12 +2659,13 @@ def test_sessions_sort_by_last_activity_and_support_rename_and_controls(client: 
 
     controls = client.patch(
         "/api/sessions/newer-session/controls",
-        json={"model": "kimi-k2.5", "yolo": True, "sandbox_mode": "danger-full-access"},
+        json={"model": "kimi-k2.5", "yolo": True, "sandbox_mode": "danger-full-access", "interaction_bridge": "tmux"},
         headers=headers,
     )
     assert controls.status_code == 200, controls.text
     assert controls.json()["session"]["controls"]["model"] == "kimi-k2.5"
     assert controls.json()["session"]["controls"]["yolo"] is True
+    assert controls.json()["session"]["controls"]["interaction_bridge"] == "tmux"
 
 
 def test_session_without_title_gets_readable_default_name(client: TestClient) -> None:

@@ -2087,6 +2087,64 @@ describe('AgentHub console', () => {
     expect(await screen.findByText('Sign in')).toBeInTheDocument();
   }, 10000);
 
+  it('sends Claude launch requests with the selected interaction bridge', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) {
+        return jsonResponse({
+          items: [
+            {
+              worker_id: 'win-main',
+              machine_name: 'DevBox',
+              os: 'windows',
+              reachable_backends: ['codex', 'claude', 'kimi'],
+              workspace_roots: ['E:/work/AgentHub'],
+              capabilities: { codex: true, claude: true, kimi: true },
+              status: 'online',
+              last_heartbeat_at: '2026-04-26T10:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/start')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({
+          worker_id: 'win-main',
+          backend: 'claude',
+          workspace_root: 'E:/work/AgentHub',
+          prompt: '创建一个新的 Claude 会话',
+          controls: {
+            interaction_bridge: 'tmux',
+          },
+        });
+        return jsonResponse({ job: { job_id: 'job-start-claude', kind: 'session_start', status: 'queued' } });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /新建会话/ }));
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Launch 交互桥'), { target: { value: 'tmux' } });
+    fireEvent.change(screen.getByLabelText('初始 Prompt'), { target: { value: '创建一个新的 Claude 会话' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建会话' }));
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/sessions/start', expect.any(Object)));
+  }, 10000);
+
   it('stops the current session input from visible controls', async () => {
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -3300,9 +3358,11 @@ describe('AgentHub console', () => {
     await waitFor(() => expect(within(screen.getByLabelText('模型')).getByText('GPT-5.4')).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText('模型'), { target: { value: 'gpt-5.4' } });
     fireEvent.change(screen.getByLabelText('沙箱'), { target: { value: 'danger-full-access' } });
+    fireEvent.change(screen.getByLabelText('交互桥'), { target: { value: 'tmux' } });
     fireEvent.click(screen.getByLabelText('Yolo'));
     await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('gpt-5.4'));
     await waitFor(() => expect(screen.getByLabelText('沙箱')).toHaveValue('danger-full-access'));
+    await waitFor(() => expect(screen.getByLabelText('交互桥')).toHaveValue('tmux'));
     fireEvent.click(screen.getByRole('button', { name: /保存控制/ }));
 
     await waitFor(() => {
@@ -3317,6 +3377,7 @@ describe('AgentHub console', () => {
       expect(JSON.parse(String(call?.[1]?.body ?? '{}'))).toMatchObject({
         model: 'gpt-5.4',
         sandbox_mode: 'danger-full-access',
+        interaction_bridge: 'tmux',
         yolo: true,
       });
     });

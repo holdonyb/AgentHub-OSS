@@ -193,6 +193,7 @@ interface ControlsDraft {
   sandbox_mode: string;
   approval_mode: string;
   permission_mode: string;
+  interaction_bridge: string;
   agent: string;
   yolo: boolean;
   thinking: string;
@@ -418,6 +419,7 @@ interface SessionLaunchDraft {
   sandbox_mode: string;
   approval_mode: string;
   permission_mode: string;
+  interaction_bridge: string;
   yolo: boolean;
   thinking: string;
   agent: string;
@@ -517,6 +519,7 @@ const emptyControls: ControlsDraft = {
   sandbox_mode: '',
   approval_mode: '',
   permission_mode: '',
+  interaction_bridge: '',
   agent: '',
   yolo: false,
   thinking: '',
@@ -695,6 +698,7 @@ function emptyLaunchDraft(worker?: Worker, session?: AgentSession): SessionLaunc
     sandbox_mode: controls.sandbox_mode,
     approval_mode: controls.approval_mode,
     permission_mode: controls.permission_mode,
+    interaction_bridge: controls.interaction_bridge,
     yolo: controls.yolo,
     thinking: controls.thinking,
     agent: controls.agent,
@@ -798,6 +802,7 @@ function controlsFromLaunchDraft(draft: SessionLaunchDraft) {
   if (draft.sandbox_mode) controls.sandbox_mode = draft.sandbox_mode;
   if (draft.approval_mode) controls.approval_mode = draft.approval_mode;
   if (draft.permission_mode) controls.permission_mode = draft.permission_mode;
+  if (draft.interaction_bridge) controls.interaction_bridge = draft.interaction_bridge;
   if (draft.agent.trim()) controls.agent = draft.agent.trim();
   if (draft.yolo) controls.yolo = true;
   if (draft.thinking) controls.thinking = draft.thinking === 'true';
@@ -944,6 +949,7 @@ function controlsFromSession(session?: AgentSession): ControlsDraft {
     sandbox_mode: valueFromControls(controls, 'sandbox_mode'),
     approval_mode: valueFromControls(controls, 'approval_mode'),
     permission_mode: valueFromControls(controls, 'permission_mode'),
+    interaction_bridge: valueFromControls(controls, 'interaction_bridge'),
     agent: valueFromControls(controls, 'agent'),
     yolo: controls.yolo === true,
     thinking: typeof thinking === 'boolean' ? String(thinking) : '',
@@ -4962,6 +4968,7 @@ function App() {
     if (controlsDraft.sandbox_mode) payload.sandbox_mode = controlsDraft.sandbox_mode;
     if (controlsDraft.approval_mode) payload.approval_mode = controlsDraft.approval_mode;
     if (controlsDraft.permission_mode) payload.permission_mode = controlsDraft.permission_mode;
+    if (controlsDraft.interaction_bridge) payload.interaction_bridge = controlsDraft.interaction_bridge;
     if (controlsDraft.agent.trim()) payload.agent = controlsDraft.agent.trim();
     if (controlsDraft.yolo) payload.yolo = true;
     if (controlsDraft.thinking) payload.thinking = controlsDraft.thinking === 'true';
@@ -6119,6 +6126,22 @@ function App() {
                           'dontAsk',
                           'bypassPermissions',
                         ]).map((value) => (
+                          <option value={value} key={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {pickLocale(locale, '交互桥', 'Interaction Bridge')}
+                      <select
+                        aria-label={pickLocale(locale, '交互桥', 'Interaction Bridge')}
+                        value={controlsDraft.interaction_bridge}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, interaction_bridge: event.target.value }))}
+                        disabled={!canOperate(user)}
+                      >
+                        <option value="">default</option>
+                        {modeOptions(selectedProvider, 'interaction_bridge', ['compatibility', 'tmux', 'psmux']).map((value) => (
                           <option value={value} key={value}>
                             {value}
                           </option>
@@ -7412,7 +7435,22 @@ function SessionLaunchDialog({
               onChange={(event) => onChange((current) => ({ ...current, permission_mode: event.target.value }))}
             >
               <option value="">default</option>
-              {modeOptions(provider, 'permission_mode', ['default', 'auto', 'plan', 'dontAsk', 'bypassPermissions']).map((value) => (
+                {modeOptions(provider, 'permission_mode', ['default', 'auto', 'plan', 'dontAsk', 'bypassPermissions']).map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            交互桥
+            <select
+              aria-label="Launch 交互桥"
+              value={draft.interaction_bridge}
+              onChange={(event) => onChange((current) => ({ ...current, interaction_bridge: event.target.value }))}
+            >
+              <option value="">default</option>
+              {modeOptions(provider, 'interaction_bridge', ['compatibility', 'tmux', 'psmux']).map((value) => (
                 <option value={value} key={value}>
                   {value}
                 </option>

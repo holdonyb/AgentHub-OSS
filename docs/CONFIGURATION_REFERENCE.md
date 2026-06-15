@@ -66,6 +66,33 @@ AGENTHUB_COOKIE_SECURE=true
 AGENTHUB_CORS_ORIGINS=https://agenthub.example.com
 ```
 
+## Claude Interaction Bridge
+
+Claude now supports two execution styles inside AgentHub:
+
+- `compatibility`: existing `claude -p` non-interactive path
+- `tmux`: non-official interactive bridge for Linux workers, using `tmux` + transcript sync
+- `psmux`: non-official interactive bridge for Windows workers, using `psmux` + transcript sync
+
+Server and client behavior:
+
+- the session controls panel can persist `interaction_bridge`
+- the launch modal can set `interaction_bridge` for new Claude sessions
+- the worker still falls back to the compatibility path when the selected bridge is unavailable
+
+Worker-side default:
+
+```env
+AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE=1
+```
+
+Notes:
+
+- `AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE=1` maps to `tmux` on Linux and `psmux` on Windows
+- current bridge coverage is existing-session reply, session start, session fork, and `/btw`
+- Linux workers need both `tmux` and `claude` installed for the bridge to be useful
+- Windows workers need both `psmux` and `claude` installed for the bridge to be useful
+
 ## Voice ASR Provider Selection
 
 AgentHub voice transcription is configurable. Set:
