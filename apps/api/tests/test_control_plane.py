@@ -825,6 +825,45 @@ def test_session_input_creates_queued_job_and_audit_event(client: TestClient) ->
     assert any(event["event_type"] == "job.create" for event in events)
 
 
+def test_virtual_autopilot_session_rejects_session_input_in_oss_runtime(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "autopilot-cockpit-2026-06-13",
+            "backend": "codex",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/Work",
+            "project_name": "Autopilot Cockpit",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "autopilot-cockpit-2026-06-13",
+            "status": "ready",
+            "title": "Autopilot 驾驶舱 2026-06-13",
+            "last_message": "ready",
+            "runtime_metadata": {"source": "autopilot_cockpit", "date": "2026-06-13"},
+            "metadata": {},
+        },
+        headers=auth_headers(owner_login),
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    input_response = client.post(
+        "/api/sessions/autopilot-cockpit-2026-06-13/input",
+        json={"prompt": "继续"},
+        headers=auth_headers(owner_login),
+    )
+    assert input_response.status_code == 409, input_response.text
+    assert input_response.json()["detail"]["code"] == "UNSUPPORTED_VIRTUAL_SESSION"
+    assert input_response.json()["detail"]["source"] == "autopilot_cockpit"
+
+    jobs = client.get("/api/jobs").json()["items"]
+    assert jobs == []
+
+
 def test_stale_worker_discovery_does_not_rewind_recent_user_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
@@ -2080,12 +2119,12 @@ def test_session_start_creates_worker_owned_job_with_controls_and_audit(client: 
         headers=auth_headers(owner_login),
         json={
             "worker_id": worker["worker"]["worker_id"],
-            "backend": "codex",
+            "backend": "claude",
             "workspace_root": "E:/work/AgentHub",
             "namespace": "default",
             "prompt": "新建一个 AgentHub UI 优化会话",
             "title": "AgentHub UI session",
-            "controls": {"model": "gpt-5.4", "sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            "controls": {"model": "sonnet", "permission_mode": "auto", "interaction_bridge": "tmux"},
         },
     )
 
@@ -2094,11 +2133,12 @@ def test_session_start_creates_worker_owned_job_with_controls_and_audit(client: 
     assert job["kind"] == "session_start"
     assert job["target_session_id"] is None
     assert job["worker_id"] == worker["worker"]["worker_id"]
-    assert job["backend"] == "codex"
+    assert job["backend"] == "claude"
     assert job["workspace_root"] == "E:/work/AgentHub"
     assert job["payload"]["prompt"] == "新建一个 AgentHub UI 优化会话"
     assert job["payload"]["title"] == "AgentHub UI session"
-    assert job["payload"]["controls"]["approval_mode"] == "never"
+    assert job["payload"]["controls"]["permission_mode"] == "auto"
+    assert job["payload"]["controls"]["interaction_bridge"] == "tmux"
 
     with client.app.state.SessionLocal() as db:
         event_types = [row.event_type for row in db.query(Event).order_by(Event.created_at.asc()).all()]
@@ -2619,12 +2659,13 @@ def test_sessions_sort_by_last_activity_and_support_rename_and_controls(client: 
 
     controls = client.patch(
         "/api/sessions/newer-session/controls",
-        json={"model": "kimi-k2.5", "yolo": True, "sandbox_mode": "danger-full-access"},
+        json={"model": "kimi-k2.5", "yolo": True, "sandbox_mode": "danger-full-access", "interaction_bridge": "tmux"},
         headers=headers,
     )
     assert controls.status_code == 200, controls.text
     assert controls.json()["session"]["controls"]["model"] == "kimi-k2.5"
     assert controls.json()["session"]["controls"]["yolo"] is True
+    assert controls.json()["session"]["controls"]["interaction_bridge"] == "tmux"
 
 
 def test_session_without_title_gets_readable_default_name(client: TestClient) -> None:
@@ -2652,6 +2693,38 @@ def test_session_without_title_gets_readable_default_name(client: TestClient) ->
     assert title != "rollout-20260426-abcdef123456"
     assert "AgentHub" in title
     assert "codex" in title
+
+
+def test_claude_controls_patch_normalizes_legacy_approval_mode(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "claude-legacy-controls",
+            "backend": "claude",
+            "worker_id": worker["worker"]["worker_id"],
+            "workspace_root": "E:/work/CourseAgent",
+            "project_name": "CourseAgent",
+            "runtime_session_ref": "claude-legacy-controls.jsonl",
+            "controls": {},
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    controls = client.patch(
+        "/api/sessions/claude-legacy-controls/controls",
+        json={"approval_mode": "never"},
+        headers=headers,
+    )
+    assert controls.status_code == 200, controls.text
+    payload = controls.json()["session"]["controls"]
+    assert payload["permission_mode"] == "bypassPermissions"
+    assert "approval_mode" not in payload
 
 
 def test_legacy_machine_session_titles_are_not_exposed(client: TestClient) -> None:

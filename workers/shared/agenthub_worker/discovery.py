@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from agenthub_protocol.models import AgentTimelineItem, SessionSnapshot
-from agenthub_worker.paths import normalize_workspace_root, project_name_from_root
+from agenthub_worker.paths import infer_claude_workspace_root_from_runtime_ref, normalize_workspace_root, project_name_from_root
 
 
 GENERIC_TITLES = {"codex session", "claude session", "kimi session", "opencode session", "session"}
@@ -53,7 +53,6 @@ CLAUDE_LOCAL_COMMAND_TAGS = (
     "<command-args>",
 )
 CODEX_ROLLOUT_SESSION_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
-CLAUDE_PROJECT_BUCKET_RE = re.compile(r"^(?P<drive>[A-Za-z])--(?P<segment>[A-Za-z0-9._]+)$")
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -326,13 +325,7 @@ def _codex_session_id_from_path(path: Path) -> str:
 
 
 def _infer_claude_workspace_root_from_path(path: Path) -> str:
-    project_dir = path.parent
-    if project_dir.parent.name != "projects" or project_dir.parent.parent.name != ".claude":
-        return ""
-    match = CLAUDE_PROJECT_BUCKET_RE.fullmatch(project_dir.name)
-    if not match:
-        return ""
-    return normalize_workspace_root(f"{match.group('drive')}:/{match.group('segment')}")
+    return infer_claude_workspace_root_from_runtime_ref(str(path))
 
 
 def _is_fresh_action(last_message: dict[str, Any] | None, last_activity_at: datetime) -> bool:

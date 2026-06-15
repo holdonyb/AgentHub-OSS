@@ -193,6 +193,7 @@ interface ControlsDraft {
   sandbox_mode: string;
   approval_mode: string;
   permission_mode: string;
+  interaction_bridge: string;
   agent: string;
   yolo: boolean;
   thinking: string;
@@ -418,6 +419,7 @@ interface SessionLaunchDraft {
   sandbox_mode: string;
   approval_mode: string;
   permission_mode: string;
+  interaction_bridge: string;
   yolo: boolean;
   thinking: string;
   agent: string;
@@ -517,6 +519,7 @@ const emptyControls: ControlsDraft = {
   sandbox_mode: '',
   approval_mode: '',
   permission_mode: '',
+  interaction_bridge: '',
   agent: '',
   yolo: false,
   thinking: '',
@@ -657,6 +660,10 @@ const fullAccessControls = {
   yolo: true,
 };
 
+function isClaudeBackendName(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase() === 'claude';
+}
+
 const maxReplyAttachments = 5;
 const maxReplyAttachmentBytes = 8 * 1024 * 1024;
 
@@ -693,8 +700,9 @@ function emptyLaunchDraft(worker?: Worker, session?: AgentSession): SessionLaunc
     title: '',
     model: controls.model,
     sandbox_mode: controls.sandbox_mode,
-    approval_mode: controls.approval_mode,
+    approval_mode: isClaudeBackendName(backend) ? '' : controls.approval_mode,
     permission_mode: controls.permission_mode,
+    interaction_bridge: controls.interaction_bridge,
     yolo: controls.yolo,
     thinking: controls.thinking,
     agent: controls.agent,
@@ -794,10 +802,12 @@ function workerInstallSummary(draft: WorkerInstallDraft) {
 
 function controlsFromLaunchDraft(draft: SessionLaunchDraft) {
   const controls: Record<string, string | boolean> = {};
+  const isClaude = isClaudeBackendName(draft.backend);
   if (draft.model.trim()) controls.model = draft.model.trim();
   if (draft.sandbox_mode) controls.sandbox_mode = draft.sandbox_mode;
-  if (draft.approval_mode) controls.approval_mode = draft.approval_mode;
+  if (!isClaude && draft.approval_mode) controls.approval_mode = draft.approval_mode;
   if (draft.permission_mode) controls.permission_mode = draft.permission_mode;
+  if (draft.interaction_bridge) controls.interaction_bridge = draft.interaction_bridge;
   if (draft.agent.trim()) controls.agent = draft.agent.trim();
   if (draft.yolo) controls.yolo = true;
   if (draft.thinking) controls.thinking = draft.thinking === 'true';
@@ -939,11 +949,15 @@ function controlsFromSession(session?: AgentSession): ControlsDraft {
   const secretRefs = Array.isArray(controls.secret_refs)
     ? controls.secret_refs.map((item) => String(item)).filter(Boolean).join('\n')
     : '';
+  const backend = session.backend.toLowerCase();
+  const approval = valueFromControls(controls, 'approval_mode');
+  const permission = valueFromControls(controls, 'permission_mode') || (backend === 'claude' && approval === 'never' ? 'bypassPermissions' : '');
   return {
     model: valueFromControls(controls, 'model'),
     sandbox_mode: valueFromControls(controls, 'sandbox_mode'),
-    approval_mode: valueFromControls(controls, 'approval_mode'),
-    permission_mode: valueFromControls(controls, 'permission_mode'),
+    approval_mode: backend === 'claude' ? '' : approval,
+    permission_mode: permission,
+    interaction_bridge: valueFromControls(controls, 'interaction_bridge'),
     agent: valueFromControls(controls, 'agent'),
     yolo: controls.yolo === true,
     thinking: typeof thinking === 'boolean' ? String(thinking) : '',
@@ -1238,7 +1252,7 @@ function sandboxSummary(session?: AgentSession | null, locale: LocaleCode = 'zh-
   const backend = session.backend.toLowerCase();
   const sandbox = optionText(controls.sandbox_mode) || 'default';
   const approval = optionText(controls.approval_mode) || 'default';
-  const permission = optionText(controls.permission_mode) || approval;
+  const permission = optionText(controls.permission_mode) || (backend === 'claude' && approval === 'never' ? 'bypassPermissions' : approval);
   if (controls.yolo === true || sandbox === 'danger-full-access' || permission === 'bypassPermissions') {
     return pickLocale(locale, '全权限', 'Full access');
   }
@@ -1252,7 +1266,19 @@ function quoteCliArg(value: string) {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function sessionRuntimeSource(session: AgentSession) {
+  const runtimeSource = optionText((session.runtime_metadata as Record<string, unknown> | undefined)?.source);
+  if (runtimeSource) return runtimeSource;
+  return optionText((session.metadata as Record<string, unknown> | undefined)?.source);
+}
+
+function isVirtualResumeOnlySession(session: AgentSession) {
+  const source = sessionRuntimeSource(session);
+  return source === 'autopilot_cockpit';
+}
+
 function localResumeCommand(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) return '';
   const backend = session.backend.toLowerCase();
   const sessionId = quoteCliArg(session.session_id);
   const workspace = session.workspace_root?.trim() ? ` -C ${quoteCliArg(session.workspace_root.trim())}` : '';
@@ -1274,10 +1300,21 @@ function localResumeCommand(session: AgentSession) {
 }
 
 function localResumeHint(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) {
+    return '这是 AgentHub 驾驶舱生成的合成会话，不对应本机 Codex CLI 历史，不能直接用 codex resume 打开。';
+  }
   if (session.backend.toLowerCase() === 'codex') {
     return 'AgentHub 新建的 Codex 会话来自 codex exec，普通 resume 列表默认可能隐藏它，所以这里固定带 --all 和 --include-non-interactive。';
   }
   return '在对应 worker 本机运行这条命令，打开同一个后端会话。';
+}
+
+function localResumeDetail(session: AgentSession) {
+  if (isVirtualResumeOnlySession(session)) {
+    const source = sessionRuntimeSource(session) || 'virtual';
+    return `Source: ${source} · Runtime: ${session.runtime_session_ref || session.session_id}`;
+  }
+  return `Workspace: ${session.workspace_root || 'default'} · Runtime: ${session.runtime_session_ref || session.session_id}`;
 }
 
 function replyModeHint(mode: ReplyMode, session?: AgentSession | null, provider?: ProviderSnapshot, locale: LocaleCode = 'zh-CN') {
@@ -4934,11 +4971,13 @@ function App() {
   async function handleControls(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSession || !canOperate(user)) return;
+    const isClaude = isClaudeBackendName(selectedSession.backend);
     const payload: Record<string, string | boolean | string[] | null> = {};
     if (controlsDraft.model.trim()) payload.model = controlsDraft.model.trim();
     if (controlsDraft.sandbox_mode) payload.sandbox_mode = controlsDraft.sandbox_mode;
-    if (controlsDraft.approval_mode) payload.approval_mode = controlsDraft.approval_mode;
+    if (!isClaude && controlsDraft.approval_mode) payload.approval_mode = controlsDraft.approval_mode;
     if (controlsDraft.permission_mode) payload.permission_mode = controlsDraft.permission_mode;
+    if (controlsDraft.interaction_bridge) payload.interaction_bridge = controlsDraft.interaction_bridge;
     if (controlsDraft.agent.trim()) payload.agent = controlsDraft.agent.trim();
     if (controlsDraft.yolo) payload.yolo = true;
     if (controlsDraft.thinking) payload.thinking = controlsDraft.thinking === 'true';
@@ -5014,9 +5053,12 @@ function App() {
 
   async function handleApplyFullAccessControls() {
     if (!selectedSession || !canOperate(user)) return;
+    const payload = isClaudeBackendName(selectedSession.backend)
+      ? { permission_mode: 'bypassPermissions' }
+      : fullAccessControls;
     const response = await apiPatch<{ session: AgentSession }>(
       `/api/sessions/${selectedSession.session_id}/controls`,
-      fullAccessControls,
+      payload,
       csrfToken,
     );
     patchSession(response.session);
@@ -5900,10 +5942,8 @@ function App() {
               <Panel title={pickLocale(locale, '本机恢复', 'Local Resume')} icon={<TerminalSquare size={16} />} defaultOpen={false}>
                 <div className="local-resume-panel">
                   <p>{localResumeHint(selectedSession)}</p>
-                  <code>{localResumeCommand(selectedSession)}</code>
-                  <small>
-                    Workspace: {selectedSession.workspace_root || 'default'} · Runtime: {selectedSession.runtime_session_ref || selectedSession.session_id}
-                  </small>
+                  {localResumeCommand(selectedSession) ? <code>{localResumeCommand(selectedSession)}</code> : null}
+                  <small>{localResumeDetail(selectedSession)}</small>
                 </div>
               </Panel>
 
@@ -6064,24 +6104,26 @@ function App() {
                         ))}
                       </select>
                     </label>
-                    <label>
-                      {pickLocale(locale, '审批', 'Approval')}
-                      <select
-                        aria-label={pickLocale(locale, '审批', 'Approval')}
-                        value={controlsDraft.approval_mode}
-                        onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
-                        disabled={!canOperate(user)}
-                      >
-                        <option value="">default</option>
-                        {modeOptions(selectedProvider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map(
-                          (value) => (
-                            <option value={value} key={value}>
-                              {value}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </label>
+                    {!isClaudeBackendName(selectedProvider?.backend) ? (
+                      <label>
+                        {pickLocale(locale, '审批', 'Approval')}
+                        <select
+                          aria-label={pickLocale(locale, '审批', 'Approval')}
+                          value={controlsDraft.approval_mode}
+                          onChange={(event) => updateControlsDraft((current) => ({ ...current, approval_mode: event.target.value }))}
+                          disabled={!canOperate(user)}
+                        >
+                          <option value="">default</option>
+                          {modeOptions(selectedProvider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map(
+                            (value) => (
+                              <option value={value} key={value}>
+                                {value}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                    ) : null}
                     <label>
                       {pickLocale(locale, '权限策略', 'Permission Policy')}
                       <select
@@ -6098,6 +6140,22 @@ function App() {
                           'dontAsk',
                           'bypassPermissions',
                         ]).map((value) => (
+                          <option value={value} key={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {pickLocale(locale, '交互桥', 'Interaction Bridge')}
+                      <select
+                        aria-label={pickLocale(locale, '交互桥', 'Interaction Bridge')}
+                        value={controlsDraft.interaction_bridge}
+                        onChange={(event) => updateControlsDraft((current) => ({ ...current, interaction_bridge: event.target.value }))}
+                        disabled={!canOperate(user)}
+                      >
+                        <option value="">default</option>
+                        {modeOptions(selectedProvider, 'interaction_bridge', ['compatibility', 'tmux', 'psmux']).map((value) => (
                           <option value={value} key={value}>
                             {value}
                           </option>
@@ -7346,21 +7404,23 @@ function SessionLaunchDialog({
               ))}
             </select>
           </label>
-          <label>
-            审批
-            <select
-              aria-label="Launch 审批"
-              value={draft.approval_mode}
-              onChange={(event) => onChange((current) => ({ ...current, approval_mode: event.target.value }))}
-            >
-              <option value="">default</option>
-              {modeOptions(provider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map((value) => (
-                <option value={value} key={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!isClaudeBackendName(provider?.backend) ? (
+            <label>
+              审批
+              <select
+                aria-label="Launch 审批"
+                value={draft.approval_mode}
+                onChange={(event) => onChange((current) => ({ ...current, approval_mode: event.target.value }))}
+              >
+                <option value="">default</option>
+                {modeOptions(provider, 'approval_mode', ['never', 'on-request', 'on-failure', 'untrusted']).map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
         </div>
 
         <label className="launch-prompt">
@@ -7391,7 +7451,22 @@ function SessionLaunchDialog({
               onChange={(event) => onChange((current) => ({ ...current, permission_mode: event.target.value }))}
             >
               <option value="">default</option>
-              {modeOptions(provider, 'permission_mode', ['default', 'auto', 'plan', 'dontAsk', 'bypassPermissions']).map((value) => (
+                {modeOptions(provider, 'permission_mode', ['default', 'auto', 'plan', 'dontAsk', 'bypassPermissions']).map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            交互桥
+            <select
+              aria-label="Launch 交互桥"
+              value={draft.interaction_bridge}
+              onChange={(event) => onChange((current) => ({ ...current, interaction_bridge: event.target.value }))}
+            >
+              <option value="">default</option>
+              {modeOptions(provider, 'interaction_bridge', ['compatibility', 'tmux', 'psmux']).map((value) => (
                 <option value={value} key={value}>
                   {value}
                 </option>

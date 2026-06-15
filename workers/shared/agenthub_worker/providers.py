@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any
 
 
+def _preferred_claude_interactive_bridge() -> str:
+    return "psmux" if os.name == "nt" else "tmux"
+
+
 @dataclass
 class AgentProvider:
     backend: str
@@ -255,6 +259,13 @@ class AgentProvider:
             "native_goal_command": False,
             "native_plan_command": False,
         }
+        bridge_env = str(os.getenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE") or "").strip().lower()
+        if bridge_env in {"1", "true", "yes", "on", "enabled", "interactive", "auto"}:
+            overrides["interaction_bridge"] = _preferred_claude_interactive_bridge()
+            overrides["native_runtime_prompts"] = True
+        elif bridge_env in {"tmux", "psmux"}:
+            overrides["interaction_bridge"] = bridge_env
+            overrides["native_runtime_prompts"] = True
         agents = self._run_auth_probe(["claude", "agents"])
         if agents is not None:
             text = f"{agents.stdout}\n{agents.stderr}"
@@ -325,6 +336,9 @@ PROVIDERS = {
             {"id": "plan", "label": "plan", "kind": "permission_mode"},
             {"id": "dontAsk", "label": "dontAsk", "kind": "permission_mode"},
             {"id": "bypassPermissions", "label": "bypassPermissions", "kind": "permission_mode"},
+            {"id": "compatibility", "label": "compatibility", "kind": "interaction_bridge"},
+            {"id": "tmux", "label": "tmux", "kind": "interaction_bridge"},
+            {"id": "psmux", "label": "psmux", "kind": "interaction_bridge"},
         ],
         features={
             "permission_mode": True,

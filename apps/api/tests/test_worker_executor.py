@@ -192,6 +192,187 @@ def test_claude_session_input_uses_resume_prompt_path() -> None:
     assert claude[-1] == prompt
 
 
+def test_claude_session_input_maps_legacy_approval_never_to_bypass_permissions() -> None:
+    claude = build_backend_command(
+        {
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-legacy-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "controls": {"approval_mode": "never"},
+            },
+        }
+    )
+
+    assert claude == [
+        "claude",
+        "-p",
+        "--resume",
+        "claude-legacy-session",
+        "--permission-mode",
+        "bypassPermissions",
+        "继续执行",
+    ]
+
+
+def test_claude_session_input_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_calls: list[list[str]] = []
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: True)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+
+    def fake_run_control_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        observed_calls.append(args)
+        if args[:2] == ["tmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(executor, "_run_control_command", fake_run_control_command)
+    monkeypatch.setattr(executor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(executor, "_run_backend_command", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not use -p path")))
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-bridge",
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-interactive-session",
+            "workspace_root": "/srv/work",
+            "payload": {
+                "prompt": "继续执行\n第二行",
+                "runtime_session_ref": "/root/.claude/projects/srv--work/claude-interactive-session.jsonl",
+            },
+        }
+    )
+
+    assert "已送达 Claude 交互会话" in result
+    assert observed_calls[0][:2] == ["tmux", "has-session"]
+    assert observed_calls[1][:6] == ["tmux", "new-session", "-d", "-s", observed_calls[1][4], "-c"]
+    assert observed_calls[1][-3:] == ["claude", "--resume", "claude-interactive-session"]
+    assert observed_calls[2][:3] == ["tmux", "load-buffer", "-b"]
+    assert observed_calls[3][:3] == ["tmux", "paste-buffer", "-d"]
+    assert observed_calls[4][:3] == ["tmux", "send-keys", "-t"]
+
+
+def test_claude_session_input_interactive_bridge_dry_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: True)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-bridge-dry-run",
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-interactive-session",
+            "workspace_root": "/srv/work",
+            "payload": {
+                "prompt": "继续执行",
+                "dry_run": True,
+            },
+        }
+    )
+
+    assert result == "dry_run: claude interactive bridge (tmux) --resume claude-interactive-session"
+
+
+def test_claude_session_input_bridge_flag_falls_back_to_p_path_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "1")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: False)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["args"] = args
+        captured["cwd"] = cwd
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-windows-fallback",
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-session",
+            "workspace_root": "E:/work",
+            "payload": {"prompt": "say hi"},
+        }
+    )
+
+    assert result == "ok"
+    assert captured["cwd"] == "E:/work"
+    assert captured["args"] == ["claude", "-p", "--resume", "claude-session", "say hi"]
+
+
+def test_claude_session_input_can_use_psmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed_calls: list[list[str]] = []
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "psmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: False)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: True)
+
+    def fake_run_control_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        observed_calls.append(args)
+        if args[:2] == ["psmux", "has-session"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+        if args[:2] == ["psmux", "list-panes"]:
+            return subprocess.CompletedProcess(args, 0, stdout="0: [120x30] %7 (active)\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(executor, "_run_control_command", fake_run_control_command)
+    monkeypatch.setattr(executor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(executor, "_run_backend_command", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not use -p path")))
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-bridge-psmux",
+            "kind": "session_input",
+            "backend": "claude",
+            "target_session_id": "claude-interactive-session",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "继续执行\n第二行",
+                "runtime_session_ref": "C:/Users/holdo/.claude/projects/E--work/claude-interactive-session.jsonl",
+            },
+        }
+    )
+
+    assert "已送达 Claude 交互会话" in result
+    assert "psmux:" in result
+    assert observed_calls[0][:2] == ["psmux", "has-session"]
+    assert observed_calls[1][:4] == ["psmux", "new-session", "-d", "-s"]
+    assert observed_calls[1][5] == "--"
+    assert observed_calls[1][6:10] == ["powershell", "-NoLogo", "-NoProfile", "-NoExit"]
+    assert observed_calls[2][:2] == ["psmux", "list-panes"]
+    assert observed_calls[3][:2] == ["psmux", "load-buffer"]
+    assert observed_calls[4][:2] == ["psmux", "paste-buffer"]
+    assert observed_calls[5][:2] == ["psmux", "send-keys"]
+
+
 def test_codex_session_input_adds_image_paths_to_exec_resume() -> None:
     codex = build_backend_command(
         {
@@ -783,6 +964,64 @@ def test_codex_default_turn_falls_back_to_cli_resume_for_legacy_provider_config(
     assert "AgentHub native plan fallback" not in args[-1]
 
 
+def test_codex_default_turn_falls_back_to_cli_resume_for_invalid_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`'}"
+        )
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(
+            {
+                "args": args,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+                "output_file": output_file,
+                "env": env,
+            }
+        )
+        return "resume invalid-thread fallback"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-invalid-thread-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "autopilot-cockpit-2026-06-13",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "继续执行",
+                "raw_prompt": "继续执行",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "timeout_seconds": 66,
+            },
+        },
+        client=object(),
+        worker_id="vm-openaitest",
+    )
+
+    assert result == "resume invalid-thread fallback"
+    assert calls[0]["cwd"] == "E:/work"
+    assert calls[0]["timeout_seconds"] == 66
+    assert calls[0]["args"][-2:] == ["autopilot-cockpit-2026-06-13", "继续执行"]
+
+
 def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 
@@ -825,6 +1064,50 @@ def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(m
     assert args[-2] == "codex-session"
     assert "AgentHub native plan fallback" in args[-1]
     assert "先规划 UI 改造" in args[-1]
+
+
+def test_codex_native_plan_falls_back_to_cli_plan_prompt_for_invalid_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_plan_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'invalid thread id: invalid character: expected an optional prefix of `urn:uuid:`'}"
+        )
+
+    def fake_run_backend_command(args: list[str], cwd: str, timeout_seconds: int, *, output_file: str | None = None) -> str:
+        calls.append({"args": args, "cwd": cwd, "timeout_seconds": timeout_seconds, "output_file": output_file})
+        return "fallback invalid thread plan"
+
+    monkeypatch.setattr(executor, "run_codex_plan_turn", fake_run_codex_plan_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-plan-invalid-thread",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "autopilot-cockpit-2026-06-13",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "先列计划",
+                "raw_prompt": "先列计划",
+                "reply_mode": "plan",
+                "native_plan_mode": True,
+                "timeout_seconds": 88,
+            },
+        },
+        client=object(),
+        worker_id="vm-openaitest",
+    )
+
+    assert result == "fallback invalid thread plan"
+    assert calls[0]["cwd"] == "E:/work/AgentHub"
+    assert calls[0]["timeout_seconds"] == 88
+    assert "AgentHub native plan fallback" in calls[0]["args"][-1]
+    assert "先列计划" in calls[0]["args"][-1]
 
 
 def test_codex_native_plan_with_image_attachment_uses_cli_fallback_to_preserve_image(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1781,6 +2064,113 @@ def test_session_btw_dry_run_uses_one_shot_handoff_without_resuming_source() -> 
     assert " exec resume " not in result
 
 
+def test_claude_session_btw_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fixture = [
+        [],
+        [
+            {
+                "session_id": "claude-btw-sidecar",
+                "backend": "claude",
+                "worker_id": "",
+                "workspace_root": "/srv/work",
+                "project_name": "srv",
+                "runtime_session_ref": str(tmp_path / "claude-btw-sidecar.jsonl"),
+                "last_activity_at": "2026-01-02T00:00:00",
+                "runtime_metadata": {
+                    "messages": [
+                        {"role": "user", "text": "AgentHub BTW side question"},
+                    ]
+                },
+                "status": "running",
+            }
+        ],
+        [
+            {
+                "session_id": "claude-btw-sidecar",
+                "backend": "claude",
+                "worker_id": "",
+                "workspace_root": "/srv/work",
+                "project_name": "srv",
+                "runtime_session_ref": str(tmp_path / "claude-btw-sidecar.jsonl"),
+                "last_activity_at": "2026-01-02T00:00:01",
+                "runtime_metadata": {
+                    "messages": [
+                        {"role": "user", "text": "AgentHub BTW side question"},
+                        {"role": "assistant", "text": "先按 namespace/environment 隔离 secrets。"},
+                    ]
+                },
+                "status": "running",
+            }
+        ],
+        [
+            {
+                "session_id": "claude-btw-sidecar",
+                "backend": "claude",
+                "worker_id": "",
+                "workspace_root": "/srv/work",
+                "project_name": "srv",
+                "runtime_session_ref": str(tmp_path / "claude-btw-sidecar.jsonl"),
+                "last_activity_at": "2026-01-02T00:00:02",
+                "runtime_metadata": {
+                    "messages": [
+                        {"role": "user", "text": "AgentHub BTW side question"},
+                        {"role": "assistant", "text": "先按 namespace/environment 隔离 secrets。"},
+                    ]
+                },
+                "status": "ready",
+            }
+        ],
+    ]
+    captured: dict[str, object] = {}
+    sidecar_file = tmp_path / "claude-btw-sidecar.jsonl"
+    sidecar_file.write_text("temp", encoding="utf-8")
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: True)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+    monkeypatch.setattr(executor, "_discover_local_sessions", lambda roots: fixture.pop(0) if fixture else [])
+    monkeypatch.setattr(executor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(executor, "_start_interactive_command_session", lambda *args, **kwargs: None)
+
+    def fake_paste_prompt_into_bridge(*, session_name: str, prompt: str, cwd: str, env: dict[str, str] | None, bridge_mode: str) -> None:
+        captured["prompt"] = prompt
+        captured["session_name"] = session_name
+        captured["bridge_mode"] = bridge_mode
+
+    monkeypatch.setattr(executor, "_paste_prompt_into_interactive_bridge", fake_paste_prompt_into_bridge)
+    monkeypatch.setattr(executor, "_run_control_command", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="", stderr=""))
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-btw",
+            "kind": "session_btw",
+            "backend": "claude",
+            "target_session_id": "source-session",
+            "workspace_root": "/srv/work",
+            "payload": {
+                "prompt": "顺便分析一下 Secrets 应该怎么接入",
+                "handoff_context": {
+                    "session_id": "source-session",
+                    "title": "Source Claude",
+                    "workspace_root": "/srv/work",
+                    "project_name": "srv",
+                    "activity_summary": "主线正在继续跑",
+                    "timeline": [
+                        {"role": "user", "item_type": "user_message", "text": "先把主线跑通"},
+                        {"role": "assistant", "item_type": "assistant_message", "text": "主线已经跑通一半"},
+                    ],
+                },
+            },
+        }
+    )
+
+    assert result == "先按 namespace/environment 隔离 secrets。"
+    assert "AgentHub BTW side question" in str(captured["prompt"])
+    assert "Do not resume or mutate the source runtime session" in str(captured["prompt"])
+    assert captured["bridge_mode"] == "tmux"
+    assert not sidecar_file.exists()
+
+
 def test_session_input_resolves_secret_refs_into_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -1830,6 +2220,114 @@ def test_session_input_resolves_secret_refs_into_process_environment(monkeypatch
         "job_id": "job-secret-input",
     }
     assert captured["env"] == {"OPENAI_API_KEY": "sk-test", "KIMI_API_KEY": "kimi-test"}
+
+
+def test_claude_session_input_clears_inherited_anthropic_api_key_when_no_secret_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["args"] = args
+        captured["env"] = env
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad-inherited")
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-subscription",
+            "kind": "session_input",
+            "target_session_id": "sess-claude-subscription",
+            "backend": "claude",
+            "workspace_root": "E:/work",
+            "payload": {"prompt": "say hi"},
+        }
+    )
+
+    assert result == "ok"
+    assert captured["env"] == {"ANTHROPIC_API_KEY": ""}
+
+
+def test_claude_session_input_uses_runtime_ref_bucket_as_workspace_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["args"] = args
+        captured["cwd"] = cwd
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-runtime-ref",
+            "kind": "session_input",
+            "target_session_id": "05c07e97-bb7a-44a2-9849-98fb2d831bed",
+            "backend": "claude",
+            "workspace_root": "E:/work/开创力/课程创建Agent/.worktrees/courseagent-v2-foundation",
+            "payload": {
+                "prompt": "continue",
+                "runtime_session_ref": r"C:\Users\holdo\.claude\projects\E--work\05c07e97-bb7a-44a2-9849-98fb2d831bed.jsonl",
+            },
+        }
+    )
+
+    assert result == "ok"
+    assert captured["cwd"] == "E:/work"
+
+
+def test_claude_session_input_preserves_explicit_anthropic_api_key_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def resolve_secrets(self, refs: list[str], *, environment: str, namespace: str, job_id: str) -> dict[str, str]:
+            return {"ANTHROPIC_API_KEY": "sk-explicit"}
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["env"] = env
+        return "ok"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad-inherited")
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-explicit-key",
+            "kind": "session_input",
+            "target_session_id": "sess-claude-explicit-key",
+            "backend": "claude",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "say hi",
+                "controls": {"secret_refs": ["ANTHROPIC_API_KEY"]},
+            },
+        },
+        client=FakeClient(),
+    )
+
+    assert result == "ok"
+    assert captured["env"] == {"ANTHROPIC_API_KEY": "sk-explicit"}
 
 
 def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1892,6 +2390,149 @@ def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.Mo
     assert published[0][0]["worker_id"] == "win-main"
     assert published[0][0]["runtime_metadata"]["created_by_job_id"] == "job-start"
     assert calls[0][:3] == ["codex", "-C", "E:/work/AgentHub"]
+
+
+def test_claude_session_start_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    published: list[list[dict[str, object]]] = []
+    started: list[dict[str, object]] = []
+    prompts: list[str] = []
+    fixture = [
+        [],
+        [
+            {
+                "session_id": "claude-new-session",
+                "backend": "claude",
+                "worker_id": "",
+                "workspace_root": "/srv/work",
+                "project_name": "srv",
+                "runtime_session_ref": "/root/.claude/projects/srv--work/claude-new-session.jsonl",
+                "last_activity_at": "2026-01-02T00:00:00",
+                "runtime_metadata": {},
+            }
+        ],
+    ]
+
+    class FakeClient:
+        def publish_sessions(self, sessions: list[dict[str, object]]) -> None:
+            published.append(sessions)
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: True)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+    monkeypatch.setattr(executor, "_discover_local_sessions", lambda roots: fixture.pop(0) if fixture else [])
+
+    def fake_start_interactive_command_session(
+        session_name: str,
+        command_args: list[str],
+        cwd: str,
+        env: dict[str, str] | None,
+        bridge_mode: str,
+    ) -> None:
+        started.append({"session_name": session_name, "command_args": command_args, "cwd": cwd, "env": env, "bridge_mode": bridge_mode})
+
+    def fake_paste_prompt_into_bridge(*, session_name: str, prompt: str, cwd: str, env: dict[str, str] | None, bridge_mode: str) -> None:
+        prompts.append(prompt)
+        started.append({"prompt_bridge_mode": bridge_mode})
+
+    monkeypatch.setattr(executor, "_start_interactive_command_session", fake_start_interactive_command_session)
+    monkeypatch.setattr(executor, "_paste_prompt_into_interactive_bridge", fake_paste_prompt_into_bridge)
+    monkeypatch.setattr(executor.time, "sleep", lambda _seconds: None)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-start",
+            "kind": "session_start",
+            "backend": "claude",
+            "worker_id": "linux-main",
+            "workspace_root": "/srv/work",
+            "payload": {
+                "prompt": "新建 Claude 会话",
+                "project_name": "srv",
+                "namespace": "default",
+                "title": "Claude 新会话",
+                "controls": {"model": "sonnet", "permission_mode": "plan"},
+            },
+        },
+        client=FakeClient(),
+        worker_id="linux-main",
+    )
+
+    assert "created_session_id=claude-new-session" in result
+    assert published[0][0]["session_id"] == "claude-new-session"
+    assert published[0][0]["worker_id"] == "linux-main"
+    assert published[0][0]["runtime_metadata"]["created_by_job_id"] == "job-claude-start"
+    assert started[0]["command_args"] == ["claude", "--model", "sonnet", "--permission-mode", "plan"]
+    assert started[0]["cwd"] == "/srv/work"
+    assert started[0]["bridge_mode"] == "tmux"
+    assert prompts == ["新建 Claude 会话"]
+
+
+def test_claude_session_fork_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = [
+        [],
+        [
+            {
+                "session_id": "claude-fork-session",
+                "backend": "claude",
+                "worker_id": "",
+                "workspace_root": "/srv/work",
+                "project_name": "srv",
+                "runtime_session_ref": "/root/.claude/projects/srv--work/claude-fork-session.jsonl",
+                "last_activity_at": "2026-01-02T00:00:00",
+                "runtime_metadata": {},
+            }
+        ],
+    ]
+    prompts: list[str] = []
+
+    monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
+    monkeypatch.setattr(executor, "_supports_tmux_interactive_bridge", lambda: True)
+    monkeypatch.setattr(executor, "_supports_psmux_interactive_bridge", lambda: False)
+    monkeypatch.setattr(executor, "_discover_local_sessions", lambda roots: fixture.pop(0) if fixture else [])
+    monkeypatch.setattr(executor, "_start_interactive_command_session", lambda *args, **kwargs: None)
+    monkeypatch.setattr(executor, "_paste_prompt_into_interactive_bridge", lambda **kwargs: None)
+    monkeypatch.setattr(executor.time, "sleep", lambda _seconds: None)
+
+    captured_prompt: dict[str, str] = {}
+
+    def capture_prompt(*, session_name: str, prompt: str, cwd: str, env: dict[str, str] | None, bridge_mode: str) -> None:
+        captured_prompt["value"] = prompt
+        captured_prompt["bridge_mode"] = bridge_mode
+
+    monkeypatch.setattr(executor, "_paste_prompt_into_interactive_bridge", capture_prompt)
+
+    result = execute_job(
+        {
+            "job_id": "job-claude-fork",
+            "kind": "session_fork",
+            "backend": "claude",
+            "worker_id": "linux-main",
+            "target_session_id": "source-session",
+            "workspace_root": "/srv/work",
+            "payload": {
+                "prompt": "继续推进修复",
+                "handoff_context": {
+                    "session_id": "source-session",
+                    "title": "Source Claude",
+                    "workspace_root": "/srv/work",
+                    "project_name": "srv",
+                    "activity_summary": "已经定位到 claude -p 风险",
+                    "timeline": [
+                        {"role": "user", "item_type": "user_message", "text": "换一种非官方实现"},
+                        {"role": "assistant", "item_type": "assistant_message", "text": "准备用交互桥实现"},
+                    ],
+                },
+            },
+        },
+        client=None,
+        worker_id="linux-main",
+    )
+
+    assert "created_session_id=claude-fork-session" in result
+    assert "AgentHub fork handoff" in captured_prompt["value"]
+    assert "source-session" in captured_prompt["value"]
+    assert "继续推进修复" in captured_prompt["value"]
+    assert captured_prompt["bridge_mode"] == "tmux"
 
 
 def test_session_start_matches_windows_workspace_case_insensitively() -> None:

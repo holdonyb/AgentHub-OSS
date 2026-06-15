@@ -57,6 +57,7 @@ ALLOWED_ATTACHMENT_TYPES = {
     "text/plain",
     "text/xml",
 }
+UNSUPPORTED_VIRTUAL_SESSION_SOURCES = {"autopilot_cockpit"}
 
 SESSION_LIST_LOAD_ONLY = (
     AgentSession.space_id,
@@ -105,6 +106,35 @@ def _workspace_label(workspace_root: str) -> str:
     if not normalized:
         return "workspace"
     return normalized.replace("\\", "/").split("/")[-1] or "workspace"
+
+
+def _session_runtime_source(session: AgentSession) -> str:
+    runtime_metadata = loads_json(session.runtime_metadata_json, {})
+    if isinstance(runtime_metadata, dict):
+        source = str(runtime_metadata.get("source") or "").strip()
+        if source:
+            return source
+    metadata = loads_json(session.metadata_json, {})
+    if isinstance(metadata, dict):
+        source = str(metadata.get("source") or "").strip()
+        if source:
+            return source
+    return ""
+
+
+def _reject_unsupported_virtual_session(session: AgentSession, *, action: str) -> None:
+    source = _session_runtime_source(session)
+    if source not in UNSUPPORTED_VIRTUAL_SESSION_SOURCES:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "message": f"This {action} target is a virtual AgentHub session and cannot be resumed from the OSS runtime",
+            "code": "UNSUPPORTED_VIRTUAL_SESSION",
+            "source": source,
+            "action": action,
+        },
+    )
 
 
 def _runtime_title(payload: SessionCreateIn) -> str | None:
@@ -363,8 +393,16 @@ def _is_native_goal_command(db: DbSession, session: AgentSession, prompt: str) -
     return session.backend.strip().lower() in NATIVE_GOAL_BACKENDS
 
 
-def _normalize_controls(value: dict[str, object] | None) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
+def _normalize_controls(value: dict[str, object] | None, *, backend: str | None = None) -> dict[str, object]:
+    controls = dict(value) if isinstance(value, dict) else {}
+    backend_name = (backend or "").strip().lower()
+    if backend_name == "claude":
+        permission = str(controls.get("permission_mode") or "").strip()
+        legacy_approval = str(controls.get("approval_mode") or "").strip()
+        if not permission and legacy_approval == "never":
+            controls["permission_mode"] = "bypassPermissions"
+        controls.pop("approval_mode", None)
+    return controls
 
 
 def _job_project_name(workspace_root: str, project_name: str | None) -> str:
@@ -409,7 +447,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     elif session.space_id is None:
         session.space_id = space_id
     previous_activity_at = session.last_activity_at
-    existing_controls = loads_json(session.controls_json, {})
+    existing_controls = _normalize_controls(loads_json(session.controls_json, {}), backend=payload.backend)
     runtime_metadata = dict(payload.runtime_metadata)
     timeline_items = runtime_metadata.pop("timeline", [])
     session.backend = payload.backend
@@ -439,7 +477,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
         session.last_role = payload.last_role
     elif not session.activity_summary:
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
-    session.controls_json = dumps_json(existing_controls or payload.controls)
+    session.controls_json = dumps_json(_normalize_controls(existing_controls or payload.controls, backend=payload.backend))
     session.runtime_metadata_json = dumps_json(runtime_metadata)
     session.metadata_json = dumps_json(payload.metadata)
     session.updated_at = utcnow()
@@ -554,7 +592,7 @@ def start_session(
     backend = payload.backend.strip().lower()
     workspace_root = payload.workspace_root.strip()
     _require_worker_backend_available(db, actor.space_id, payload.worker_id, backend)
-    controls = _normalize_controls(payload.controls)
+    controls = _normalize_controls(payload.controls, backend=backend)
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -605,12 +643,17 @@ def fork_session(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="fork")
     worker_id = (payload.worker_id or session.worker_id).strip()
     backend = (payload.backend or session.backend).strip().lower()
     workspace_root = (payload.workspace_root or session.workspace_root).strip()
     namespace = (payload.namespace or session.namespace or "default").strip() or "default"
     _require_worker_backend_available(db, actor.space_id, worker_id, backend)
-    controls = _normalize_controls(payload.controls) if payload.controls is not None else loads_json(session.controls_json, {})
+    controls = (
+        _normalize_controls(payload.controls, backend=backend)
+        if payload.controls is not None
+        else _normalize_controls(loads_json(session.controls_json, {}), backend=backend)
+    )
     handoff_context = _session_handoff_context(db, session)
     job = _create_worker_job(
         db=db,
@@ -659,8 +702,13 @@ def btw_session(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="btw")
     _require_worker_backend(db, session)
-    controls = _normalize_controls(payload.controls) if payload.controls is not None else loads_json(session.controls_json, {})
+    controls = (
+        _normalize_controls(payload.controls, backend=session.backend)
+        if payload.controls is not None
+        else _normalize_controls(loads_json(session.controls_json, {}), backend=session.backend)
+    )
     handoff_context = _session_handoff_context(db, session)
     job = _create_worker_job(
         db=db,
@@ -863,6 +911,7 @@ def send_session_input(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _reject_unsupported_virtual_session(session, action="session_input")
     _require_worker_backend(db, session)
     session_was_running = _session_runtime_busy(session)
     reply_mode = payload.reply_mode
@@ -878,7 +927,11 @@ def send_session_input(
         job_prompt = _goal_prompt(raw_prompt, session.backend)
     else:
         job_prompt = raw_prompt if native_plan_mode or reply_mode != "plan" else _plan_prompt(raw_prompt, session.backend)
-    controls = _controls_for_reply_mode(session.backend, loads_json(session.controls_json, {}), reply_mode)
+    controls = _controls_for_reply_mode(
+        session.backend,
+        _normalize_controls(loads_json(session.controls_json, {}), backend=session.backend),
+        reply_mode,
+    )
     job_payload = {
         "prompt": job_prompt,
         "raw_prompt": raw_prompt,
@@ -1062,12 +1115,13 @@ def update_session_controls(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    controls = loads_json(session.controls_json, {})
+    controls = _normalize_controls(loads_json(session.controls_json, {}), backend=session.backend)
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
             controls.pop(key, None)
         else:
             controls[key] = value
+    controls = _normalize_controls(controls, backend=session.backend)
     session.controls_json = dumps_json(controls)
     session.updated_at = utcnow()
     write_event(

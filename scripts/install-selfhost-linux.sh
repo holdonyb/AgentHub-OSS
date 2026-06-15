@@ -94,6 +94,70 @@ PY
   done
 }
 
+guard_existing_runtime_data() {
+  local env_path="$install_root/.env"
+  local resolved_source
+  local resolved_target
+  local db_url
+  local db_path
+
+  if [[ ! -f "$env_path" ]]; then
+    return
+  fi
+
+  resolved_source="$(cd "$source_root" && pwd -P)"
+  mkdir -p "$install_root"
+  resolved_target="$(cd "$install_root" && pwd -P)"
+
+  if [[ "$resolved_source" == "$resolved_target" ]]; then
+    return
+  fi
+
+  db_url="$(
+    python3 - "$env_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r"^AGENTHUB_DATABASE_URL=(.+)$", text, re.M)
+print(match.group(1).strip() if match else "")
+PY
+  )"
+
+  if [[ -z "$db_url" ]]; then
+    return
+  fi
+
+  db_path="$(
+    python3 - "$db_url" <<'PY'
+from pathlib import Path
+import sys
+
+url = sys.argv[1].strip()
+prefix = "sqlite+pysqlite:///"
+if not url.startswith(prefix):
+    print("")
+    raise SystemExit(0)
+raw_path = url[len(prefix):]
+if raw_path.startswith("/"):
+    print(Path(raw_path).resolve())
+else:
+    print(Path(raw_path).resolve())
+PY
+  )"
+
+  if [[ -z "$db_path" ]]; then
+    return
+  fi
+
+  case "$db_path" in
+    "$resolved_target"/*)
+      fail "Existing AGENTHUB_DATABASE_URL points inside install_root ($db_path) while source_root differs from install_root. Refusing rsync --delete deployment. Move the database outside $resolved_target first, for example /var/lib/agenthub/agenthub.db."
+      ;;
+  esac
+}
+
 install_packages() {
   log "installing system packages"
   apt-get update
@@ -124,6 +188,7 @@ copy_source_tree() {
     --exclude '.venv' \
     --exclude '.runtime' \
     --exclude '.env' \
+    --exclude 'data' \
     --exclude 'node_modules' \
     --exclude 'apps/*/node_modules' \
     --exclude 'apps/web/dist' \
@@ -397,6 +462,7 @@ if [[ "$render_only" != "1" ]] && ! id "$service_user" >/dev/null 2>&1; then
   useradd --system --create-home --shell /usr/sbin/nologin "$service_user"
 fi
 
+guard_existing_runtime_data
 copy_source_tree
 write_env_file
 if [[ "$render_only" == "1" ]]; then

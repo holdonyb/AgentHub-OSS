@@ -341,6 +341,7 @@ class SessionControlsIn(BaseModel):
     approval_mode: str | None = None
     sandbox_mode: str | None = None
     permission_mode: str | None = None
+    interaction_bridge: str | None = None
     yolo: bool | None = None
     thinking: bool | None = None
     agent: str | None = None
