@@ -5,7 +5,7 @@ import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
-CLAUDE_PROJECT_BUCKET_RE = re.compile(r"^(?P<drive>[A-Za-z])--(?P<segment>[A-Za-z0-9._]+)$")
+CLAUDE_WINDOWS_PROJECT_BUCKET_RE = re.compile(r"^(?P<drive>[A-Za-z])--(?P<path>.+)$")
 
 
 def normalize_workspace_root(path: str) -> str:
@@ -27,16 +27,36 @@ def project_name_from_root(path: str) -> str:
 
 
 def infer_claude_workspace_root_from_runtime_ref(path: str) -> str:
-    runtime_path = Path(str(path or "").strip())
-    if not runtime_path.name:
+    value = str(path or "").strip()
+    if not value:
         return ""
-    project_dir = runtime_path.parent
-    if project_dir.parent.name != "projects" or project_dir.parent.parent.name != ".claude":
+    parts = [part for part in value.replace("\\", "/").split("/") if part]
+    try:
+        projects_index = next(
+            index for index, part in enumerate(parts[:-2]) if part == ".claude" and parts[index + 1] == "projects"
+        )
+    except StopIteration:
         return ""
-    match = CLAUDE_PROJECT_BUCKET_RE.fullmatch(project_dir.name)
-    if not match:
+    bucket = parts[projects_index + 2]
+    if not bucket:
         return ""
-    return normalize_workspace_root(f"{match.group('drive')}:/{match.group('segment')}")
+    match = CLAUDE_WINDOWS_PROJECT_BUCKET_RE.fullmatch(bucket)
+    if match:
+        segments = [segment for segment in match.group("path").split("-") if segment]
+        if not segments:
+            return ""
+        return normalize_workspace_root(f"{match.group('drive')}:/{'/'.join(segments)}")
+    if "--" in bucket:
+        segments = [segment for segment in bucket.split("--") if segment]
+        if not segments:
+            return ""
+        return normalize_workspace_root(f"/{'/'.join(segments)}")
+    if bucket.startswith("-"):
+        segments = [segment for segment in bucket.split("-") if segment]
+        if not segments:
+            return ""
+        return normalize_workspace_root(f"/{'/'.join(segments)}")
+    return ""
 
 
 def default_agent_session_roots(home: str | None = None) -> list[Path]:
