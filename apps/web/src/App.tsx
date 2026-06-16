@@ -125,6 +125,7 @@ const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
 const VOICE_INTERACTION_MODE_STORAGE_KEY = 'agenthub.voiceInteractionMode';
 const NOTIFICATION_READ_STORAGE_KEY = 'agenthub.notifications.read';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
+const MAX_FILE_EDITOR_CHARS = 1_000_000;
 
 declare global {
   interface Window {
@@ -406,6 +407,13 @@ interface WorkspaceFileReadResult {
   downloadable?: boolean;
   data_base64?: string;
   text?: string;
+}
+
+interface FileEditorState {
+  path: string;
+  filename: string;
+  text: string;
+  expectedModifiedAt?: string | null;
 }
 
 interface SessionLaunchDraft {
@@ -1757,6 +1765,13 @@ function latestCompletedJob(jobs: Job[], kind: string) {
     .sort((left, right) => jobTime(right) - jobTime(left))[0];
 }
 
+function latestCompletedJobByKinds(jobs: Job[], kinds: string[]) {
+  return jobs
+    .filter((job) => kinds.includes(job.kind) && job.status === 'succeeded')
+    .slice()
+    .sort((left, right) => jobTime(right) - jobTime(left))[0];
+}
+
 function fileListResult(jobs: Job[]) {
   const result = parseJobResult<WorkspaceFileListResult>(latestCompletedJob(jobs, 'file_list'));
   if (!result || !Array.isArray(result.entries)) return null;
@@ -1764,7 +1779,7 @@ function fileListResult(jobs: Job[]) {
 }
 
 function fileReadResult(jobs: Job[]) {
-  const result = parseJobResult<WorkspaceFileReadResult>(latestCompletedJob(jobs, 'file_read'));
+  const result = parseJobResult<WorkspaceFileReadResult>(latestCompletedJobByKinds(jobs, ['file_read', 'file_write']));
   if (!result || typeof result.path !== 'string' || typeof result.filename !== 'string') return null;
   return {
     ...result,
@@ -1775,7 +1790,14 @@ function fileReadResult(jobs: Job[]) {
 }
 
 function fileJobBusy(jobs: Job[]) {
-  return jobs.some((job) => ['file_list', 'file_read'].includes(job.kind) && ['queued', 'running'].includes(job.status));
+  return jobs.some((job) => ['file_list', 'file_read', 'file_write'].includes(job.kind) && ['queued', 'running'].includes(job.status));
+}
+
+function isEditableWorkspaceText(file: WorkspaceFileReadResult | null) {
+  if (!file) return false;
+  if (file.preview_kind !== 'text') return false;
+  if (file.truncated) return false;
+  return (file.text?.length ?? 0) <= MAX_FILE_EDITOR_CHARS;
 }
 
 function decodeBase64Bytes(dataBase64: string) {
@@ -2443,6 +2465,8 @@ function App() {
   const [mobileSessionActionsOpen, setMobileSessionActionsOpen] = useState(false);
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [fileEditor, setFileEditor] = useState<FileEditorState | null>(null);
+  const [isSavingFileEditor, setIsSavingFileEditor] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => initialThemeMode());
   const [locale, setLocale] = useState<LocaleCode>(() => initialLocale());
@@ -3242,6 +3266,7 @@ function App() {
     setMobileSessionActionsOpen(false);
     setStatusDetailsOpen(false);
     setComposerExpanded(false);
+    setFileEditor(null);
   }, [selectedId]);
 
   useEffect(() => {
@@ -4933,6 +4958,65 @@ function App() {
     }
   }
 
+  function handleOpenFileEditor(file: WorkspaceFileReadResult) {
+    if (file.preview_kind !== 'text') {
+      setNotice('当前只支持编辑文本文件');
+      return;
+    }
+    if (file.truncated) {
+      setNotice('文件内容已截断，先缩小文件或用本地编辑器处理');
+      return;
+    }
+    if ((file.text?.length ?? 0) > MAX_FILE_EDITOR_CHARS) {
+      setNotice('超过 1 MB 的文本先下载到本地编辑更稳');
+      return;
+    }
+    setFileEditor({
+      path: file.path,
+      filename: file.filename,
+      text: file.text || '',
+      expectedModifiedAt: file.modified_at,
+    });
+  }
+
+  async function handleFileWrite(path: string, textValue: string, expectedModifiedAt?: string | null) {
+    if (!selectedSession || !canOperate(user) || isSavingFileEditor) return false;
+    setIsSavingFileEditor(true);
+    try {
+      const response = await apiPost<{ job: Job }>(
+        `/api/sessions/${selectedSession.session_id}/files/write`,
+        { path, text: textValue, expected_modified_at: expectedModifiedAt ?? null },
+        csrfToken,
+      );
+      setNotice(`正在保存 ${path}`);
+      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 20, delayMs: 300 });
+      if (finished?.status === 'failed') {
+        setNotice(`保存失败：${finished.error_text || '未知错误'}`);
+        return false;
+      }
+      if (!finished || ['queued', 'running'].includes(finished.status)) {
+        setNotice(`保存已入队：${path}`);
+        return false;
+      }
+      const saved = parseJobResult<WorkspaceFileReadResult>(finished);
+      if (saved && typeof saved.path === 'string' && typeof saved.text === 'string') {
+        setFileEditor({
+          path: saved.path,
+          filename: saved.filename,
+          text: saved.text,
+          expectedModifiedAt: saved.modified_at,
+        });
+      }
+      setNotice(`已保存 ${path}`);
+      return true;
+    } catch (error) {
+      setNotice(`保存失败：${error instanceof Error ? error.message : '未知错误'}`);
+      return false;
+    } finally {
+      setIsSavingFileEditor(false);
+    }
+  }
+
   function handleDownloadWorkspaceFile(file: WorkspaceFileReadResult) {
     const blob = workspaceFileBlob(file);
     if (!blob) {
@@ -6468,17 +6552,18 @@ function App() {
         </aside>
 
         {mobilePane === 'files' && (
-          <MobileFilesPane
-            session={selectedSession}
-            jobs={selectedJobs}
-            attachments={replyAttachments}
-            locale={locale}
-            onCopyPath={(value) => void copyTextToClipboard(value, 'file path 已复制')}
-            onCopyText={(value) => void copyTextToClipboard(value, '文件内容已复制')}
-            onDownload={handleDownloadWorkspaceFile}
-            onList={(path) => void handleFileList(path)}
-            onRead={(path) => void handleFileRead(path)}
-          />
+        <MobileFilesPane
+          session={selectedSession}
+          jobs={selectedJobs}
+          attachments={replyAttachments}
+          locale={locale}
+          onCopyPath={(value) => void copyTextToClipboard(value, 'file path 已复制')}
+          onCopyText={(value) => void copyTextToClipboard(value, '文件内容已复制')}
+          onDownload={handleDownloadWorkspaceFile}
+          onEdit={handleOpenFileEditor}
+          onList={(path) => void handleFileList(path)}
+          onRead={(path) => void handleFileRead(path)}
+        />
         )}
         {mobilePane === 'workers' && (
           <MobileWorkersPane
@@ -6582,6 +6667,15 @@ function App() {
           {text.mobileMe}
         </button>
       </nav>
+      {fileEditor && (
+        <WorkspaceTextEditorDialog
+          locale={locale}
+          state={fileEditor}
+          saving={isSavingFileEditor}
+          onClose={() => setFileEditor(null)}
+          onSave={(nextText) => handleFileWrite(fileEditor.path, nextText, fileEditor.expectedModifiedAt)}
+        />
+      )}
     </main>
   );
 }
@@ -6652,6 +6746,7 @@ function MobileFilesPane({
   onCopyPath,
   onCopyText,
   onDownload,
+  onEdit,
   onList,
   onRead,
 }: {
@@ -6662,6 +6757,7 @@ function MobileFilesPane({
   onCopyPath: (value: string) => void;
   onCopyText: (value: string) => void;
   onDownload: (file: WorkspaceFileReadResult) => void;
+  onEdit: (file: WorkspaceFileReadResult) => void;
   onList: (path: string) => void;
   onRead: (path: string) => void;
 }) {
@@ -6768,6 +6864,12 @@ function MobileFilesPane({
                   <Copy size={14} />
                 </button>
               )}
+              {isEditableWorkspaceText(readResult) && (
+                <button type="button" className="message-action-button" onClick={() => onEdit(readResult)}>
+                  <FileText size={13} />
+                  {t(locale, 'editTextFile')}
+                </button>
+              )}
               {readResult.downloadable && (
                 <button type="button" className="message-action-button" onClick={() => onDownload(readResult)}>
                   <Download size={13} />
@@ -6799,6 +6901,82 @@ function MobileFilesPane({
         </div>
       )}
     </section>
+  );
+}
+
+function WorkspaceTextEditorDialog({
+  locale,
+  state,
+  saving,
+  onClose,
+  onSave,
+}: {
+  locale: LocaleCode;
+  state: FileEditorState;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (text: string) => Promise<boolean>;
+}) {
+  const [draft, setDraft] = useState(state.text);
+  const [copied, setCopied] = useState(false);
+  const dirty = draft !== state.text;
+
+  useEffect(() => {
+    setDraft(state.text);
+  }, [state.path, state.text, state.expectedModifiedAt]);
+
+  async function handleCopy() {
+    if (await writeTextToClipboard(draft)) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onSave(draft);
+  }
+
+  return createPortal(
+    <div className="fulltext-backdrop" role="presentation">
+      <form className="file-editor-dialog" role="dialog" aria-modal="true" aria-label={t(locale, 'fileEditor')} onSubmit={handleSave}>
+        <header>
+          <span>
+            <strong>{t(locale, 'fileEditor')}</strong>
+            <small>{state.path}</small>
+          </span>
+          <button className="icon-button" type="button" aria-label={t(locale, 'closeFileEditor')} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+        <div className="file-editor-meta">
+          <span>{state.filename}</span>
+          <small>{t(locale, 'fileEditorCount', { count: String(draft.length) })}</small>
+        </div>
+        <textarea
+          aria-label={t(locale, 'fileEditorInput')}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <footer>
+          <button className="message-action-button" type="button" onClick={handleCopy}>
+            <Copy size={13} />
+            {copied ? t(locale, 'copied') : t(locale, 'copyFileContent')}
+          </button>
+          <button className="message-action-button" type="button" onClick={onClose}>
+            {t(locale, 'close')}
+          </button>
+          <button className="message-action-button primary-inline-action" type="submit" disabled={!dirty || saving}>
+            <Save size={13} />
+            {saving ? t(locale, 'saving') : t(locale, 'saveFile')}
+          </button>
+        </footer>
+      </form>
+    </div>,
+    document.body,
   );
 }
 

@@ -32,6 +32,7 @@ ALLOWED_JOB_KINDS = {
     "provider_logout",
     "file_list",
     "file_read",
+    "file_write",
 }
 
 SESSION_STATES = {"ready", "queued", "running", "needs_reply", "failed", "terminated"}

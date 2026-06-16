@@ -53,6 +53,16 @@ MAX_FILE_LIST_ENTRIES = 300
 DEFAULT_FILE_READ_BYTES = 200_000
 MAX_FILE_READ_BYTES = 5_000_000
 MAX_INLINE_FILE_BYTES = 5_000_000
+TEXT_WRITEABLE_MIME_TYPES = {
+    "application/json",
+    "application/javascript",
+    "application/typescript",
+    "application/xml",
+    "text/csv",
+    "text/markdown",
+    "text/plain",
+    "text/xml",
+}
 CLAUDE_INTERACTIVE_BRIDGE_ENV = "AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE"
 CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT = "已送达 Claude 交互会话，等待 transcript 同步"
 
@@ -211,6 +221,50 @@ def _execute_file_read(job: dict[str, Any]) -> str:
             "downloadable": inline_downloadable,
             "text": preview.decode("utf-8", errors="replace"),
             **({"data_base64": base64.b64encode(preview).decode("ascii")} if inline_downloadable else {}),
+        }
+    )
+
+
+def _is_probably_text_file(path: Path, content_type: str, sample: bytes) -> bool:
+    if content_type.startswith("text/") or content_type in TEXT_WRITEABLE_MIME_TYPES:
+        return True
+    if path.suffix.lower() in {".md", ".txt", ".log", ".json", ".yml", ".yaml", ".toml", ".ini", ".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".html"}:
+        return True
+    return b"\x00" not in sample[:4096]
+
+
+def _execute_file_write(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    target, relative_text = _relative_workspace_path(root, payload.get("path"))
+    if not target.exists():
+        raise ValueError("File does not exist")
+    if not target.is_file():
+        raise ValueError("Requested path is not a file")
+    expected_modified_at = str(payload.get("expected_modified_at") or "").strip()
+    current_modified_at = _modified_at(target)
+    if expected_modified_at and current_modified_at and expected_modified_at != current_modified_at:
+        raise ValueError("File changed since preview; reload before saving")
+    raw_text = payload.get("text")
+    if not isinstance(raw_text, str):
+        raise ValueError("File write payload requires text")
+    existing = target.read_bytes()
+    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    if not _is_probably_text_file(target, content_type, existing):
+        raise ValueError("Only plain-text files can be edited from AgentHub")
+    encoded = raw_text.encode("utf-8")
+    target.write_bytes(encoded)
+    return _json_result(
+        {
+            "path": relative_text,
+            "filename": target.name,
+            "content_type": content_type,
+            "size_bytes": len(encoded),
+            "truncated": False,
+            "preview_kind": "text",
+            "downloadable": True,
+            "modified_at": _modified_at(target),
+            "text": raw_text,
         }
     )
 
@@ -1592,6 +1646,8 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
         return _execute_file_list(job)
     if kind == "file_read":
         return _execute_file_read(job)
+    if kind == "file_write":
+        return _execute_file_write(job)
     if kind == "session_fast_state_refresh":
         backend = str(job.get("backend") or "").lower()
         if backend != "codex":

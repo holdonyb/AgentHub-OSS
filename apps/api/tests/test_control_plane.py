@@ -2445,6 +2445,47 @@ def test_session_file_read_creates_read_job_without_mutating_session_status(clie
     assert source_after_enqueue["status"] == "ready"
 
 
+def test_session_file_write_creates_write_job_without_mutating_session_status(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+
+    created = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "files-write-source",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "runtime_session_ref": "codex/files-write-source.jsonl",
+            "status": "ready",
+            "title": "编辑文件",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.post(
+        "/api/sessions/files-write-source/files/write",
+        headers=headers,
+        json={"path": "README.md", "text": "# AgentHub\n", "expected_modified_at": "2026-06-15T12:00:00Z"},
+    )
+
+    assert response.status_code == 200, response.text
+    job = response.json()["job"]
+    assert job["kind"] == "file_write"
+    assert job["payload"] == {
+        "path": "README.md",
+        "text": "# AgentHub\n",
+        "expected_modified_at": "2026-06-15T12:00:00Z",
+    }
+    source_after_enqueue = client.get("/api/sessions/files-write-source", headers=headers).json()["session"]
+    assert source_after_enqueue["status"] == "ready"
+
+
 def test_provider_auth_requires_admin_and_creates_whitelisted_job(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

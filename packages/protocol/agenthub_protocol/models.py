@@ -20,6 +20,7 @@ JobKind = Literal[
     "provider_logout",
     "file_list",
     "file_read",
+    "file_write",
 ]
 TimelineItemType = Literal[
     "user_message",

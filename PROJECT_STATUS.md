@@ -14,6 +14,8 @@ The canary deployment has now been moved onto `gpu-server` after the previous Be
 
 This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `agenthub-worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, an official Docker self-host stack under `deploy/docker-compose.selfhost.yml`, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release through Trusted Publishing or an npm automation token, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
 
+The current stabilization round also fixed a real Claude resume regression in the public OSS line. PR `#36` was merged into `main` on `2026-06-15` after adding Windows Claude interactive bridge support, normalizing legacy Claude `approval_mode=never` into the valid `permission_mode=bypassPermissions`, and making Claude runtime session paths such as `.claude/projects/E--work/...jsonl` or `.claude/projects/srv--work/...jsonl` resolve back to the correct workspace root before `claude --resume` runs. The hotfix was already applied to the live `agenthub.ifix.xin` server plus the active Windows worker before the merge landed, and the merged `main` branch then passed CI, Secret Scan, and Android APK workflows again.
+
 ## Active Work
 
 Current focus is release operations for the open-source distribution:
@@ -23,6 +25,7 @@ Current focus is release operations for the open-source distribution:
 - release/test runbook hardening
 - install-surface simplification for server and worker onboarding
 - install-mode consolidation across local, Docker, and VM paths
+- mobile-first file browsing and lightweight file editing inside the Web/App client
 
 ## How to Run
 
@@ -132,6 +135,7 @@ bash scripts/check-selfhost.sh \
 - 2026-05-31: Ran a full remote Docker smoke on `gpu-server`: `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` completed, `/healthz`, `/`, and `/downloads/workers/worker-bundles-manifest.json` all returned `200`, then the temporary stack was torn down. That smoke also exposed a real operator-UX bug in `AGENTHUB_CORS_ORIGINS`, which is now normalized from single-origin and compose-style bracketed values instead of requiring strict JSON parsing.
 - 2026-06-01: Promoted local mode into a first-class preset with `npm run local:dev`, a dedicated website install chooser, and unified defaults of `http://localhost:43073` for Web/UI plus `http://127.0.0.1:43080` for the API. The local-mode smoke remains the same dev shape, but the operator-facing install surface is now aligned across README, docs, website, and local worker defaults.
 - 2026-06-06: Added a public `/press/` page plus `docs/LAUNCH_COPY.md`, so the website, README, GitHub Release body, and community launch copy share one stable wording surface.
+- 2026-06-15: Merged PR `#36` to fix OSS Claude resume stability: Windows Claude now has an interactive bridge path, legacy `approval_mode=never` is translated into `bypassPermissions`, and runtime session refs under `.claude/projects/<bucket>/...jsonl` are resolved back to the correct workspace root before resume.
 
 ## Next Step
 
@@ -139,4 +143,4 @@ Turn the simplified install surface into a public release path:
 
 1. optionally configure npm Trusted Publishing for `agenthub-worker` and then remove `NPM_TOKEN`
 2. optionally deprecate `@myagenthub/worker` with a short migration note
-3. run the full local CI/build suite before the next public release
+3. add a mobile-usable file browser/editor pass for text and image files, then run the web/app validation path again

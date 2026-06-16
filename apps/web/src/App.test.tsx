@@ -618,9 +618,29 @@ const completedFileReadJob = {
     content_type: 'text/plain',
     size_bytes: 128,
     truncated: false,
+    modified_at: '2026-04-26T10:11:00Z',
     text: '# AgentHub\n\nNative mobile file preview.',
   }),
   updated_at: '2026-04-26T10:11:00Z',
+};
+
+const completedFileWriteJob = {
+  ...completedCommandJob,
+  job_id: 'job-file-write',
+  kind: 'file_write',
+  payload: { path: 'README.md', text: '# AgentHub\n\nEdited on mobile.\n', expected_modified_at: '2026-04-26T10:11:00Z' },
+  result_text: JSON.stringify({
+    path: 'README.md',
+    filename: 'README.md',
+    content_type: 'text/plain',
+    size_bytes: 29,
+    truncated: false,
+    preview_kind: 'text',
+    downloadable: true,
+    modified_at: '2026-04-26T10:14:00Z',
+    text: '# AgentHub\n\nEdited on mobile.\n',
+  }),
+  updated_at: '2026-04-26T10:14:00Z',
 };
 
 const nestedFileListJob = {
@@ -3829,6 +3849,64 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: '预览 diagram.png' }));
     expect(await screen.findByAltText('diagram.png')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下载原图' })).toBeInTheDocument();
+  });
+
+  it('edits and saves a text file from the mobile Files pane', async () => {
+    let currentJobs = [completedFileReadJob, completedFileListJob];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: currentJobs });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/sess-1/files/write')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({
+            path: 'README.md',
+            text: '# AgentHub\n\nEdited on mobile.\n',
+            expected_modified_at: '2026-04-26T10:11:00Z',
+          }),
+        );
+        currentJobs = [completedFileWriteJob, ...currentJobs];
+        return jsonResponse({ job: { ...completedFileWriteJob, status: 'queued', result_text: null } });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({ ...sessionSyncPayload, jobs: currentJobs });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /文件/ }));
+    expect(await screen.findByRole('heading', { name: '文件浏览器' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑文本' }));
+    expect(await screen.findByRole('dialog', { name: '文件编辑器' })).toBeInTheDocument();
+
+    const editor = screen.getByLabelText('编辑文件内容');
+    fireEvent.change(editor, { target: { value: '# AgentHub\n\nEdited on mobile.\n' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存文件' }));
+
+    await waitFor(() => {
+      const call = vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url], index) => index > 0 && String(url).endsWith('/api/sessions/sess-1/files/write'));
+      expect(call).toBeTruthy();
+      expect(screen.getByText('Edited on mobile.')).toBeInTheDocument();
+    });
   });
 
   it('sends a generic file attachment with the next reply', async () => {

@@ -22,6 +22,7 @@ from app.schemas import (
     SessionFastToggleIn,
     SessionFileListIn,
     SessionFileReadIn,
+    SessionFileWriteIn,
     SessionForkIn,
     SessionInputIn,
     SessionRenameIn,
@@ -811,6 +812,46 @@ def read_session_file(
         source_id=job.job_id,
         event_type="file.read",
         payload={"session_id": session.session_id, "path": payload.path, "max_bytes": payload.max_bytes},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/write")
+def write_session_file(
+    session_id: str,
+    payload: SessionFileWriteIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_write",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "path": payload.path.strip(),
+            "text": payload.text,
+            "expected_modified_at": payload.expected_modified_at,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.write",
+        payload={"session_id": session.session_id, "path": payload.path},
     )
     db.commit()
     return {"job": job_out(job)}

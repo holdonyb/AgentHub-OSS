@@ -14,7 +14,8 @@ export type JobKind =
   | 'provider_login'
   | 'provider_logout'
   | 'file_list'
-  | 'file_read';
+  | 'file_read'
+  | 'file_write';
 
 export interface User {
   id?: string;

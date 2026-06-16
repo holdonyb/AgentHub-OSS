@@ -690,6 +690,58 @@ def test_file_read_rejects_paths_outside_workspace(tmp_path: Path) -> None:
         )
 
 
+def test_file_write_updates_existing_text_file(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("旧内容\n", encoding="utf-8")
+
+    preview = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-read-before-write",
+                "kind": "file_read",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "notes.md", "max_bytes": 200_000},
+            }
+        )
+    )
+    result = execute_job(
+        {
+            "job_id": "job-file-write",
+            "kind": "file_write",
+            "workspace_root": str(tmp_path),
+            "payload": {
+                "path": "notes.md",
+                "text": "新内容\n第二行\n",
+                "expected_modified_at": preview["modified_at"],
+            },
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["path"] == "notes.md"
+    assert payload["text"] == "新内容\n第二行\n"
+    assert target.read_text(encoding="utf-8") == "新内容\n第二行\n"
+
+
+def test_file_write_rejects_stale_preview_timestamp(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("初始内容\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reload before saving"):
+        execute_job(
+            {
+                "job_id": "job-file-write-stale",
+                "kind": "file_write",
+                "workspace_root": str(tmp_path),
+                "payload": {
+                    "path": "notes.md",
+                    "text": "覆盖内容\n",
+                    "expected_modified_at": "2000-01-01T00:00:00Z",
+                },
+            }
+        )
+
+
 def test_session_input_dry_run_returns_command_without_shell_execution() -> None:
     result = execute_job(
         {
