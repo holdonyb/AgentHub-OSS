@@ -2445,6 +2445,41 @@ def test_session_file_read_creates_read_job_without_mutating_session_status(clie
     assert source_after_enqueue["status"] == "ready"
 
 
+def test_session_file_read_accepts_large_mobile_preview_request(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+
+    created = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "files-read-large",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "runtime_session_ref": "codex/files-read-large.jsonl",
+            "status": "ready",
+            "title": "读取大文件预览",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.post(
+        "/api/sessions/files-read-large/files/read",
+        headers=headers,
+        json={"path": "src/diagram.png", "max_bytes": 5_000_000},
+    )
+
+    assert response.status_code == 200, response.text
+    job = response.json()["job"]
+    assert job["kind"] == "file_read"
+    assert job["payload"] == {"path": "src/diagram.png", "max_bytes": 5_000_000}
+
+
 def test_session_file_write_creates_write_job_without_mutating_session_status(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

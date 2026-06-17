@@ -402,7 +402,7 @@ class SessionFileListIn(BaseModel):
 
 class SessionFileReadIn(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
-    max_bytes: int = Field(default=200_000, ge=1, le=1_000_000)
+    max_bytes: int = Field(default=200_000, ge=1, le=5_000_000)
 
 
 class SessionFileWriteIn(BaseModel):
