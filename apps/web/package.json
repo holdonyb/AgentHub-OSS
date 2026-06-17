@@ -15,7 +15,7 @@
     "@capacitor/local-notifications": "^7.0.6",
     "@vitejs/plugin-react": "^4.3.4",
     "byted-ailab-speech-sdk": "^4.0.10",
-    "dompurify": "^3.2.6",
+    "dompurify": "^3.4.9",
     "lucide-react": "^0.555.0",
     "marked": "^15.0.12",
     "react": "^18.3.1",
