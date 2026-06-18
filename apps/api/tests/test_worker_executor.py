@@ -690,6 +690,162 @@ def test_file_read_rejects_paths_outside_workspace(tmp_path: Path) -> None:
         )
 
 
+def test_file_write_updates_existing_text_file(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("旧内容\n", encoding="utf-8")
+
+    preview = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-read-before-write",
+                "kind": "file_read",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "notes.md", "max_bytes": 200_000},
+            }
+        )
+    )
+    result = execute_job(
+        {
+            "job_id": "job-file-write",
+            "kind": "file_write",
+            "workspace_root": str(tmp_path),
+            "payload": {
+                "path": "notes.md",
+                "text": "新内容\n第二行\n",
+                "expected_modified_at": preview["modified_at"],
+            },
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["path"] == "notes.md"
+    assert payload["text"] == "新内容\n第二行\n"
+    assert target.read_text(encoding="utf-8") == "新内容\n第二行\n"
+
+
+def test_file_write_rejects_stale_preview_timestamp(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("初始内容\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reload before saving"):
+        execute_job(
+            {
+                "job_id": "job-file-write-stale",
+                "kind": "file_write",
+                "workspace_root": str(tmp_path),
+                "payload": {
+                    "path": "notes.md",
+                    "text": "覆盖内容\n",
+                    "expected_modified_at": "2000-01-01T00:00:00Z",
+                },
+            }
+        )
+
+
+def test_file_list_reports_preview_capability(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# AgentHub\n", encoding="utf-8")
+    (tmp_path / "preview.mp3").write_bytes(b"ID3demo-audio")
+
+    result = execute_job(
+        {
+            "job_id": "job-file-list-capability",
+            "kind": "file_list",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "."},
+        }
+    )
+
+    payload = json.loads(result)
+    by_name = {entry["name"]: entry for entry in payload["entries"]}
+    assert by_name["README.md"]["preview_capability"] == "markdown"
+    assert by_name["README.md"]["is_editable"] is True
+    assert by_name["preview.mp3"]["preview_capability"] == "audio"
+
+
+def test_file_read_returns_inline_audio_preview(tmp_path: Path) -> None:
+    target = tmp_path / "voice.mp3"
+    target.write_bytes(b"ID3demo-audio")
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-audio",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "voice.mp3", "max_bytes": 200_000},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["preview_kind"] == "audio"
+    assert payload["downloadable"] is True
+    assert payload["data_base64"] == base64.b64encode(b"ID3demo-audio").decode("ascii")
+
+
+def test_file_upload_writes_into_existing_directory(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+
+    result = execute_job(
+        {
+            "job_id": "job-file-upload",
+            "kind": "file_upload",
+            "workspace_root": str(tmp_path),
+            "payload": {
+                "path": "docs",
+                "filename": "hello.txt",
+                "content_type": "text/plain",
+                "data_base64": base64.b64encode("你好".encode("utf-8")).decode("ascii"),
+                "overwrite": False,
+            },
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["path"] == "docs/hello.txt"
+    assert (tmp_path / "docs" / "hello.txt").read_text(encoding="utf-8") == "你好"
+
+
+def test_file_create_mkdir_and_rename_support_safe_workspace_mutations(tmp_path: Path) -> None:
+    mkdir_payload = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-mkdir",
+                "kind": "file_mkdir",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "notes"},
+            }
+        )
+    )
+    assert mkdir_payload["path"] == "notes"
+    assert (tmp_path / "notes").is_dir()
+
+    create_payload = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-create",
+                "kind": "file_create",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "notes/today.md", "text": "# today\n", "overwrite": False},
+            }
+        )
+    )
+    assert create_payload["path"] == "notes/today.md"
+    assert (tmp_path / "notes" / "today.md").read_text(encoding="utf-8") == "# today\n"
+
+    renamed = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-rename",
+                "kind": "file_rename",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "notes/today.md", "new_path": "notes/tomorrow.md"},
+            }
+        )
+    )
+    assert renamed["path"] == "notes/tomorrow.md"
+    assert not (tmp_path / "notes" / "today.md").exists()
+    assert (tmp_path / "notes" / "tomorrow.md").exists()
+
+
 def test_session_input_dry_run_returns_command_without_shell_execution() -> None:
     result = execute_job(
         {

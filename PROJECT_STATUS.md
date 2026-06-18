@@ -14,6 +14,10 @@ The canary deployment has now been moved onto `gpu-server` after the previous Be
 
 This phase also starts reducing install friction directly in the public repo. The repo now contains a publishable `agenthub-worker` npm workspace that wraps the existing worker bundle installers, a public `scripts/install.sh` Linux entrypoint that maps to the self-host installer, an official Docker self-host stack under `deploy/docker-compose.selfhost.yml`, a dedicated `.github/workflows/npm-worker-publish.yml` workflow for npm release through Trusted Publishing or an npm automation token, and first-class `uv` bootstrap fallback inside both worker install scripts so clean or nonstandard hosts no longer depend on `python` or `py` being exposed on `PATH`.
 
+The current stabilization round also fixed a real Claude resume regression in the public OSS line. PR `#36` was merged into `main` on `2026-06-15` after adding Windows Claude interactive bridge support, normalizing legacy Claude `approval_mode=never` into the valid `permission_mode=bypassPermissions`, and making Claude runtime session paths such as `.claude/projects/E--work/...jsonl` or `.claude/projects/srv--work/...jsonl` resolve back to the correct workspace root before `claude --resume` runs. The hotfix was validated on a downstream self-host deployment before the merge landed, and the merged `main` branch then passed CI, Secret Scan, and Android APK workflows again.
+
+The Web/App client file surface has now been upgraded from a basic preview pane into a broader mobile-first workspace workbench. The current OSS branch supports richer file capability metadata from workers, inline preview for text, Markdown, images, audio, and video, a stronger text editor with line numbers/search/save shortcuts, recent-file chips, file detail sheets, and safe workspace mutations for creating files, creating folders, renaming entries, and uploading single files through worker-side jobs. The API and worker protocol were extended in lockstep so these operations still stay scoped to the worker workspace root instead of writing directly from the control plane.
+
 ## Active Work
 
 Current focus is release operations for the open-source distribution:
@@ -23,6 +27,8 @@ Current focus is release operations for the open-source distribution:
 - release/test runbook hardening
 - install-surface simplification for server and worker onboarding
 - install-mode consolidation across local, Docker, and VM paths
+- mobile-first file browsing and lightweight file editing inside the Web/App client
+- file-workbench stabilization, QA, and deployment for the new upload/create/rename/media-preview path
 
 ## How to Run
 
@@ -111,6 +117,9 @@ bash scripts/check-selfhost.sh \
 - `docs/WEBSITE_DEPLOYMENT.md`: public website deployment guide
 - `docs/SELF_HOST_QUICKSTART.md`: self-host flow including raw-IP precheck path
 - `docs/TESTING.md`: live release-gate guidance
+- `apps/web/src/App.tsx`: unified mobile-first workspace workbench UI, preview flows, and lightweight editor
+- `workers/shared/agenthub_worker/executor.py`: workspace-scoped file mutation path for list/read/write/upload/create/mkdir/rename
+- `apps/api/app/routers/sessions.py`: session file job endpoints for upload/create/mkdir/rename
 
 ## Known Risks / Blockers
 
@@ -132,11 +141,13 @@ bash scripts/check-selfhost.sh \
 - 2026-05-31: Ran a full remote Docker smoke on `gpu-server`: `docker compose -f deploy/docker-compose.selfhost.yml up -d --build` completed, `/healthz`, `/`, and `/downloads/workers/worker-bundles-manifest.json` all returned `200`, then the temporary stack was torn down. That smoke also exposed a real operator-UX bug in `AGENTHUB_CORS_ORIGINS`, which is now normalized from single-origin and compose-style bracketed values instead of requiring strict JSON parsing.
 - 2026-06-01: Promoted local mode into a first-class preset with `npm run local:dev`, a dedicated website install chooser, and unified defaults of `http://localhost:43073` for Web/UI plus `http://127.0.0.1:43080` for the API. The local-mode smoke remains the same dev shape, but the operator-facing install surface is now aligned across README, docs, website, and local worker defaults.
 - 2026-06-06: Added a public `/press/` page plus `docs/LAUNCH_COPY.md`, so the website, README, GitHub Release body, and community launch copy share one stable wording surface.
+- 2026-06-15: Merged PR `#36` to fix OSS Claude resume stability: Windows Claude now has an interactive bridge path, legacy `approval_mode=never` is translated into `bypassPermissions`, and runtime session refs under `.claude/projects/<bucket>/...jsonl` are resolved back to the correct workspace root before resume.
+- 2026-06-18: Expanded the mobile file surface into a workspace workbench with Markdown/image/audio/video preview plus safe create/upload/rename/mkdir mutations routed through worker jobs.
 
 ## Next Step
 
-Turn the simplified install surface into a public release path:
+Deploy and dogfood the upgraded workspace workbench:
 
-1. optionally configure npm Trusted Publishing for `agenthub-worker` and then remove `NPM_TOKEN`
-2. optionally deprecate `@myagenthub/worker` with a short migration note
-3. run the full local CI/build suite before the next public release
+1. push the file-workbench branch changes and deploy API/Web/worker together
+2. validate text/image/audio/video preview plus create/upload/rename on a real mobile client
+3. then return to the public release-track tasks (`agenthub-worker` publishing cleanup and install-surface polish)

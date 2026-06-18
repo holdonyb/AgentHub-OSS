@@ -24,6 +24,11 @@ JobKind = Literal[
     "provider_logout",
     "file_list",
     "file_read",
+    "file_write",
+    "file_upload",
+    "file_create",
+    "file_mkdir",
+    "file_rename",
 ]
 TimelineItemType = Literal[
     "user_message",
@@ -401,7 +406,37 @@ class SessionFileListIn(BaseModel):
 
 class SessionFileReadIn(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
-    max_bytes: int = Field(default=200_000, ge=1, le=1_000_000)
+    max_bytes: int = Field(default=200_000, ge=1, le=5_000_000)
+
+
+class SessionFileWriteIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    text: str = Field(max_length=1_000_000)
+    expected_modified_at: str | None = Field(default=None, max_length=80)
+
+
+class SessionFileUploadIn(BaseModel):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+    filename: str = Field(min_length=1, max_length=180)
+    content_type: str = Field(min_length=1, max_length=120)
+    data_base64: str = Field(min_length=1, max_length=24_000_000)
+    overwrite: bool = False
+
+
+class SessionFileCreateIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    text: str = Field(default="", max_length=1_000_000)
+    overwrite: bool = False
+
+
+class SessionFileMkdirIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+
+
+class SessionFileRenameIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    new_path: str = Field(min_length=1, max_length=1000)
+    expected_modified_at: str | None = Field(default=None, max_length=80)
 
 
 class VoiceTranscribeIn(BaseModel):

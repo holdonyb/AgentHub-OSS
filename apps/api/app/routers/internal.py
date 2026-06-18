@@ -18,7 +18,18 @@ from app.services import ALLOWED_JOB_KINDS, ensure_codex_plan_exit_permission, j
 router = APIRouter()
 PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
 PLAN_CHOICE_RE = re.compile(r"^\s*(?:[-*]|\d+[\.)、]|[A-Za-z][\.)、]|[一二三四五六七八九十]+[、\.)])\s*(?P<label>.+?)\s*$")
-SIDECAR_JOB_KINDS = {"file_list", "file_read", "session_btw", "session_fast_state_refresh", "session_fast_toggle"}
+SIDECAR_JOB_KINDS = {
+    "file_list",
+    "file_read",
+    "file_write",
+    "file_upload",
+    "file_create",
+    "file_mkdir",
+    "file_rename",
+    "session_btw",
+    "session_fast_state_refresh",
+    "session_fast_toggle",
+}
 FAST_SESSION_JOB_KINDS = {"session_fast_state_refresh", "session_fast_toggle"}
 
 
