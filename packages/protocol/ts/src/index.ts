@@ -15,7 +15,11 @@ export type JobKind =
   | 'provider_logout'
   | 'file_list'
   | 'file_read'
-  | 'file_write';
+  | 'file_write'
+  | 'file_upload'
+  | 'file_create'
+  | 'file_mkdir'
+  | 'file_rename';
 
 export interface User {
   id?: string;

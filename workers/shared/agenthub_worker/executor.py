@@ -63,6 +63,7 @@ TEXT_WRITEABLE_MIME_TYPES = {
     "text/plain",
     "text/xml",
 }
+MEDIA_INLINE_MIME_PREFIXES = ("audio/", "video/")
 CLAUDE_INTERACTIVE_BRIDGE_ENV = "AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE"
 CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT = "已送达 Claude 交互会话，等待 transcript 同步"
 
@@ -150,11 +151,17 @@ def _execute_file_list(job: dict[str, Any]) -> str:
         except OSError:
             continue
         _, child_relative = _relative_workspace_path(root, child.relative_to(root).as_posix())
+        content_type = mimetypes.guess_type(child.name)[0] or "application/octet-stream"
+        preview_capability = "directory" if child.is_dir() else _preview_capability_for_file(child.name, content_type)
         entries.append(
             {
                 "name": child.name,
                 "path": child_relative,
                 "kind": "directory" if child.is_dir() else "file",
+                "content_type": None if child.is_dir() else content_type,
+                "extension": child.suffix.lower(),
+                "preview_capability": preview_capability,
+                "is_editable": False if child.is_dir() else _is_editable_path(child, content_type),
                 "size_bytes": None if child.is_dir() else stat.st_size,
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
             }
@@ -205,6 +212,15 @@ def _execute_file_read(job: dict[str, Any]) -> str:
         if inline_downloadable:
             payload["data_base64"] = base64.b64encode(preview).decode("ascii")
         return _json_result(payload)
+    if content_type.startswith(MEDIA_INLINE_MIME_PREFIXES):
+        payload = {
+            **base_payload,
+            "preview_kind": "audio" if content_type.startswith("audio/") else "video",
+            "downloadable": inline_downloadable,
+        }
+        if inline_downloadable:
+            payload["data_base64"] = base64.b64encode(preview).decode("ascii")
+        return _json_result(payload)
     if b"\x00" in preview[:4096]:
         payload = {
             **base_payload,
@@ -231,6 +247,41 @@ def _is_probably_text_file(path: Path, content_type: str, sample: bytes) -> bool
     if path.suffix.lower() in {".md", ".txt", ".log", ".json", ".yml", ".yaml", ".toml", ".ini", ".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".html"}:
         return True
     return b"\x00" not in sample[:4096]
+
+
+def _is_editable_path(path: Path, content_type: str) -> bool:
+    return _is_probably_text_file(path, content_type, b"")
+
+
+def _preview_capability_for_file(name: str, content_type: str) -> str:
+    suffix = Path(name).suffix.lower()
+    if content_type.startswith("image/"):
+        return "image"
+    if content_type.startswith("audio/"):
+        return "audio"
+    if content_type.startswith("video/"):
+        return "video"
+    if suffix in {".md", ".markdown"}:
+        return "markdown"
+    if content_type.startswith("text/") or content_type in TEXT_WRITEABLE_MIME_TYPES or suffix in {
+        ".txt",
+        ".log",
+        ".json",
+        ".yml",
+        ".yaml",
+        ".toml",
+        ".ini",
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".css",
+        ".html",
+        ".csv",
+    }:
+        return "text"
+    return "download"
 
 
 def _execute_file_write(job: dict[str, Any]) -> str:
@@ -265,6 +316,126 @@ def _execute_file_write(job: dict[str, Any]) -> str:
             "downloadable": True,
             "modified_at": _modified_at(target),
             "text": raw_text,
+        }
+    )
+
+
+def _decode_base64_payload(value: Any) -> bytes:
+    try:
+        return base64.b64decode(str(value or ""), validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError("Invalid base64 payload") from None
+
+
+def _execute_file_upload(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    target_dir, relative_dir = _relative_workspace_path(root, payload.get("path", "."))
+    if not target_dir.exists():
+        raise ValueError("Directory does not exist")
+    if not target_dir.is_dir():
+        raise ValueError("Upload target is not a directory")
+    filename = str(payload.get("filename") or "").replace("\\", "/").split("/")[-1].strip()
+    if not filename or filename in {".", ".."}:
+        raise ValueError("Invalid upload filename")
+    target = (target_dir / filename).resolve(strict=False)
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("Requested path is outside workspace") from None
+    overwrite = bool(payload.get("overwrite"))
+    if target.exists() and not overwrite:
+        raise ValueError("File already exists")
+    data = _decode_base64_payload(payload.get("data_base64"))
+    target.write_bytes(data)
+    content_type = str(payload.get("content_type") or mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+    return _json_result(
+        {
+            "path": "." if relative_dir == "." else f"{relative_dir}/{filename}",
+            "parent_path": relative_dir,
+            "filename": target.name,
+            "content_type": content_type,
+            "size_bytes": len(data),
+            "modified_at": _modified_at(target),
+            "preview_capability": _preview_capability_for_file(target.name, content_type),
+            "downloadable": True,
+        }
+    )
+
+
+def _execute_file_create(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    target, relative_text = _relative_workspace_path(root, payload.get("path"))
+    overwrite = bool(payload.get("overwrite"))
+    if target.exists() and target.is_dir():
+        raise ValueError("Requested path is a directory")
+    if target.exists() and not overwrite:
+        raise ValueError("File already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    raw_text = payload.get("text")
+    if not isinstance(raw_text, str):
+        raise ValueError("File create payload requires text")
+    target.write_text(raw_text, encoding="utf-8")
+    content_type = mimetypes.guess_type(target.name)[0] or "text/plain"
+    return _json_result(
+        {
+            "path": relative_text,
+            "filename": target.name,
+            "content_type": content_type,
+            "size_bytes": len(raw_text.encode("utf-8")),
+            "truncated": False,
+            "preview_kind": "text",
+            "downloadable": True,
+            "modified_at": _modified_at(target),
+            "text": raw_text,
+        }
+    )
+
+
+def _execute_file_mkdir(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    target, relative_text = _relative_workspace_path(root, payload.get("path"))
+    if target.exists() and not target.is_dir():
+        raise ValueError("Requested path already exists as a file")
+    target.mkdir(parents=True, exist_ok=True)
+    return _json_result(
+        {
+            "path": relative_text,
+            "kind": "directory",
+            "modified_at": _modified_at(target),
+        }
+    )
+
+
+def _execute_file_rename(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    source, source_relative = _relative_workspace_path(root, payload.get("path"))
+    target, target_relative = _relative_workspace_path(root, payload.get("new_path"))
+    if not source.exists():
+        raise ValueError("Requested path does not exist")
+    if source.parent != target.parent:
+        raise ValueError("Rename must stay within the same parent directory")
+    if target.exists():
+        raise ValueError("Target path already exists")
+    expected_modified_at = str(payload.get("expected_modified_at") or "").strip()
+    current_modified_at = _modified_at(source)
+    if expected_modified_at and current_modified_at and expected_modified_at != current_modified_at:
+        raise ValueError("File changed since preview; reload before renaming")
+    source.rename(target)
+    content_type = None if target.is_dir() else (mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+    return _json_result(
+        {
+            "path": target_relative,
+            "previous_path": source_relative,
+            "filename": target.name,
+            "kind": "directory" if target.is_dir() else "file",
+            "content_type": content_type,
+            "modified_at": _modified_at(target),
+            "preview_capability": "directory" if target.is_dir() else _preview_capability_for_file(target.name, str(content_type or "")),
+            "is_editable": False if target.is_dir() else _is_editable_path(target, str(content_type or "")),
         }
     )
 
@@ -1648,6 +1819,14 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
         return _execute_file_read(job)
     if kind == "file_write":
         return _execute_file_write(job)
+    if kind == "file_upload":
+        return _execute_file_upload(job)
+    if kind == "file_create":
+        return _execute_file_create(job)
+    if kind == "file_mkdir":
+        return _execute_file_mkdir(job)
+    if kind == "file_rename":
+        return _execute_file_rename(job)
     if kind == "session_fast_state_refresh":
         backend = str(job.get("backend") or "").lower()
         if backend != "codex":

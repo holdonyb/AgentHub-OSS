@@ -21,7 +21,11 @@ from app.schemas import (
     SessionCreateIn,
     SessionFastToggleIn,
     SessionFileListIn,
+    SessionFileCreateIn,
+    SessionFileMkdirIn,
     SessionFileReadIn,
+    SessionFileRenameIn,
+    SessionFileUploadIn,
     SessionFileWriteIn,
     SessionForkIn,
     SessionInputIn,
@@ -852,6 +856,160 @@ def write_session_file(
         source_id=job.job_id,
         event_type="file.write",
         payload={"session_id": session.session_id, "path": payload.path},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/upload")
+def upload_session_file(
+    session_id: str,
+    payload: SessionFileUploadIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_upload",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "path": payload.path.strip() or ".",
+            "filename": payload.filename.strip(),
+            "content_type": payload.content_type.strip(),
+            "data_base64": payload.data_base64,
+            "overwrite": payload.overwrite,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.upload",
+        payload={"session_id": session.session_id, "path": payload.path, "filename": payload.filename},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/create")
+def create_session_file(
+    session_id: str,
+    payload: SessionFileCreateIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_create",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={"path": payload.path.strip(), "text": payload.text, "overwrite": payload.overwrite},
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.create",
+        payload={"session_id": session.session_id, "path": payload.path},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/mkdir")
+def mkdir_session_file(
+    session_id: str,
+    payload: SessionFileMkdirIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_mkdir",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={"path": payload.path.strip()},
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.mkdir",
+        payload={"session_id": session.session_id, "path": payload.path},
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/rename")
+def rename_session_file(
+    session_id: str,
+    payload: SessionFileRenameIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_rename",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "path": payload.path.strip(),
+            "new_path": payload.new_path.strip(),
+            "expected_modified_at": payload.expected_modified_at,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.rename",
+        payload={"session_id": session.session_id, "path": payload.path, "new_path": payload.new_path},
     )
     db.commit()
     return {"job": job_out(job)}

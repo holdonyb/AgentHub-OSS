@@ -2521,6 +2521,71 @@ def test_session_file_write_creates_write_job_without_mutating_session_status(cl
     assert source_after_enqueue["status"] == "ready"
 
 
+def test_session_file_mutation_jobs_are_whitelisted_sidecars(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+
+    created = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "files-mutate-source",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "runtime_session_ref": "codex/files-mutate-source.jsonl",
+            "status": "running",
+            "title": "文件变更",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    responses = [
+        client.post(
+            "/api/sessions/files-mutate-source/files/upload",
+            headers=headers,
+            json={
+                "path": ".",
+                "filename": "hello.txt",
+                "content_type": "text/plain",
+                "data_base64": "aGVsbG8=",
+                "overwrite": False,
+            },
+        ),
+        client.post(
+            "/api/sessions/files-mutate-source/files/create",
+            headers=headers,
+            json={"path": "notes/today.md", "text": "# today\n", "overwrite": False},
+        ),
+        client.post(
+            "/api/sessions/files-mutate-source/files/mkdir",
+            headers=headers,
+            json={"path": "notes"},
+        ),
+        client.post(
+            "/api/sessions/files-mutate-source/files/rename",
+            headers=headers,
+            json={"path": "notes/today.md", "new_path": "notes/tomorrow.md"},
+        ),
+    ]
+
+    for response, expected_kind in zip(responses, ["file_upload", "file_create", "file_mkdir", "file_rename"], strict=False):
+        assert response.status_code == 200, response.text
+        assert response.json()["job"]["kind"] == expected_kind
+
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+    claimed_kinds: list[str] = []
+    for _ in range(4):
+        claimed = client.post("/api/internal/jobs/claim", headers=worker_headers, json={"worker_id": worker_id})
+        assert claimed.status_code == 200, claimed.text
+        claimed_kinds.append(claimed.json()["job"]["kind"])
+    assert claimed_kinds == ["file_upload", "file_create", "file_mkdir", "file_rename"]
+
+
 def test_provider_auth_requires_admin_and_creates_whitelisted_job(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

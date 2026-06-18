@@ -3840,7 +3840,7 @@ describe('AgentHub console', () => {
     expect(screen.getAllByText('README.md').length).toBeGreaterThan(0);
     expect(screen.getByText('src')).toBeInTheDocument();
     expect(screen.getByText('# AgentHub')).toBeInTheDocument();
-    expect(screen.getByText('Native mobile file preview.')).toBeInTheDocument();
+    expect(screen.getAllByText('Native mobile file preview.').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '进入 src' }));
     expect(await screen.findByText('diagram.png')).toBeInTheDocument();
@@ -3905,8 +3905,194 @@ describe('AgentHub console', () => {
         .mocked(globalThis.fetch)
         .mock.calls.find(([url], index) => index > 0 && String(url).endsWith('/api/sessions/sess-1/files/write'));
       expect(call).toBeTruthy();
-      expect(screen.getByText('Edited on mobile.')).toBeInTheDocument();
+      expect(screen.getAllByText('Edited on mobile.').length).toBeGreaterThan(0);
     });
+  });
+
+  it('creates folders, renames files, and previews audio from the mobile Files pane', async () => {
+    const initialListJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-list-initial-workbench',
+      kind: 'file_list',
+      payload: { path: '.' },
+      result_text: JSON.stringify({
+        path: '.',
+        workspace_root: 'E:/work/AgentHub',
+        entries: [
+          { name: 'README.md', path: 'README.md', kind: 'file', size_bytes: 2048, modified_at: '2026-04-26T10:02:00Z' },
+          { name: 'voice.mp3', path: 'voice.mp3', kind: 'file', size_bytes: 4096, modified_at: '2026-04-26T10:03:00Z', preview_capability: 'audio' },
+        ],
+        truncated: false,
+      }),
+      updated_at: '2026-04-26T10:10:00Z',
+    };
+    const refreshedListJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-list-refreshed-workbench',
+      kind: 'file_list',
+      payload: { path: '.' },
+      result_text: JSON.stringify({
+        path: '.',
+        workspace_root: 'E:/work/AgentHub',
+        entries: [
+          { name: 'notes', path: 'notes', kind: 'directory', size_bytes: null, modified_at: '2026-04-26T10:15:00Z' },
+          { name: 'GUIDE.md', path: 'GUIDE.md', kind: 'file', size_bytes: 2048, modified_at: '2026-04-26T10:16:00Z', preview_capability: 'markdown', is_editable: true },
+          { name: 'voice.mp3', path: 'voice.mp3', kind: 'file', size_bytes: 4096, modified_at: '2026-04-26T10:03:00Z', preview_capability: 'audio' },
+        ],
+        truncated: false,
+      }),
+      updated_at: '2026-04-26T10:16:00Z',
+    };
+    const createdFolderJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-mkdir-notes',
+      kind: 'file_mkdir',
+      payload: { path: 'notes' },
+      result_text: JSON.stringify({
+        path: 'notes',
+        kind: 'directory',
+        modified_at: '2026-04-26T10:15:00Z',
+      }),
+      updated_at: '2026-04-26T10:15:00Z',
+    };
+    const renamedFileJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-rename-guide',
+      kind: 'file_rename',
+      payload: { path: 'README.md', new_path: 'GUIDE.md', expected_modified_at: '2026-04-26T10:11:00Z' },
+      result_text: JSON.stringify({
+        previous_path: 'README.md',
+        path: 'GUIDE.md',
+        filename: 'GUIDE.md',
+        kind: 'file',
+        content_type: 'text/plain',
+        modified_at: '2026-04-26T10:16:00Z',
+        preview_capability: 'markdown',
+        is_editable: true,
+      }),
+      updated_at: '2026-04-26T10:16:00Z',
+    };
+    const renamedFileReadJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-read-guide',
+      kind: 'file_read',
+      payload: { path: 'GUIDE.md', max_bytes: 5000000 },
+      result_text: JSON.stringify({
+        path: 'GUIDE.md',
+        filename: 'GUIDE.md',
+        content_type: 'text/plain',
+        size_bytes: 128,
+        truncated: false,
+        modified_at: '2026-04-26T10:16:00Z',
+        preview_kind: 'text',
+        downloadable: true,
+        text: '# Guide\n\nRenamed from README.',
+      }),
+      updated_at: '2026-04-26T10:16:00Z',
+    };
+    const audioReadJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-read-audio',
+      kind: 'file_read',
+      payload: { path: 'voice.mp3', max_bytes: 5000000 },
+      result_text: JSON.stringify({
+        path: 'voice.mp3',
+        filename: 'voice.mp3',
+        content_type: 'audio/mpeg',
+        size_bytes: 4096,
+        truncated: false,
+        preview_kind: 'audio',
+        downloadable: true,
+        data_base64: 'SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//uQxAADBzQgAABEVVVVVVVVVVVVVVVVVQ==',
+      }),
+      updated_at: '2026-04-26T10:17:00Z',
+    };
+
+    let currentJobs = [completedFileReadJob, initialListJob];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: currentJobs });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/sessions/sess-1/files/mkdir')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(JSON.stringify({ path: 'notes' }));
+        currentJobs = [createdFolderJob, refreshedListJob, ...currentJobs];
+        return jsonResponse({ job: { ...createdFolderJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/sessions/sess-1/files/list')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(JSON.stringify({ path: '.' }));
+        currentJobs = [refreshedListJob, ...currentJobs];
+        return jsonResponse({ job: { ...refreshedListJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/sessions/sess-1/files/rename')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({
+            path: 'README.md',
+            new_path: 'GUIDE.md',
+            expected_modified_at: '2026-04-26T10:11:00Z',
+          }),
+        );
+        currentJobs = [renamedFileJob, refreshedListJob, ...currentJobs];
+        return jsonResponse({ job: { ...renamedFileJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/sessions/sess-1/files/read')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        if (body.path === 'GUIDE.md') {
+          currentJobs = [renamedFileReadJob, ...currentJobs];
+          return jsonResponse({ job: { ...renamedFileReadJob, status: 'queued', result_text: null } });
+        }
+        if (body.path === 'voice.mp3') {
+          currentJobs = [audioReadJob, ...currentJobs];
+          return jsonResponse({ job: { ...audioReadJob, status: 'queued', result_text: null } });
+        }
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({ ...sessionSyncPayload, jobs: currentJobs });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /文件/ }));
+    expect(await screen.findByRole('heading', { name: '文件浏览器' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建文件夹' }));
+    const createFolderDialog = await screen.findByRole('dialog', { name: '新建文件夹' });
+    fireEvent.change(within(createFolderDialog).getByRole('textbox', { name: '文件夹名' }), { target: { value: 'notes' } });
+    fireEvent.click(within(createFolderDialog).getByRole('button', { name: '创建目录' }));
+    expect(await screen.findByText('notes')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '打开文件详情' }));
+    const detailsDialog = await screen.findByRole('dialog', { name: '文件详情' });
+    fireEvent.click(within(detailsDialog).getByRole('button', { name: '重命名' }));
+    const renameDialog = await screen.findByRole('dialog', { name: '重命名' });
+    fireEvent.change(within(renameDialog).getByRole('textbox', { name: '新名称' }), { target: { value: 'GUIDE.md' } });
+    fireEvent.click(within(renameDialog).getByRole('button', { name: '确认重命名' }));
+    expect(await screen.findByText('GUIDE.md')).toBeInTheDocument();
+    expect((await screen.findAllByText('Renamed from README.')).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: '预览 voice.mp3' }));
+    await waitFor(() => {
+      expect(document.querySelector('.file-media-preview audio')).not.toBeNull();
+    });
+    expect(screen.getByRole('button', { name: '下载文件' })).toBeInTheDocument();
   });
 
   it('sends a generic file attachment with the next reply', async () => {

@@ -1880,26 +1880,66 @@ textarea:disabled {
   gap: 10px;
 }
 
+.file-editor-surface {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid #d7dde3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.file-editor-gutter {
+  margin: 0;
+  padding: 12px 10px;
+  min-width: 42px;
+  background: #eef2f7;
+  color: #64748b;
+  text-align: right;
+  font: 500 12px/1.58 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  user-select: none;
+}
+
 .file-editor-dialog textarea {
   min-height: 0;
   width: 100%;
   resize: none;
-  border: 1px solid #d7dde3;
-  border-radius: 10px;
-  background: #f8fafc;
+  border: 0;
+  background: transparent;
   color: #0f172a;
   padding: 12px;
-  font: inherit;
-  line-height: 1.58;
+  font: 500 13px/1.58 "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
 }
 
 .file-editor-dialog textarea:focus {
   outline: none;
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.file-editor-dirty {
+  margin-right: auto;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.file-image-lightbox {
+  width: min(960px, calc(100vw - 20px));
+  max-height: calc(100vh - 20px);
+  display: grid;
+  gap: 10px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.96);
+  padding: 12px;
+}
+
+.file-image-lightbox img {
+  width: 100%;
+  max-height: calc(100vh - 72px);
+  object-fit: contain;
+  border-radius: 12px;
 }
 
 .viewer-tabs {
@@ -2537,6 +2577,30 @@ textarea:disabled {
   gap: 8px;
 }
 
+.file-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d7dde3;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.file-search-row.compact {
+  padding: 7px 10px;
+}
+
+.file-search-row input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
 .native-icon-button {
   width: 36px;
   height: 36px;
@@ -2614,7 +2678,7 @@ textarea:disabled {
 
 .file-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -2680,6 +2744,127 @@ textarea:disabled {
   border-radius: 10px;
   background: #ffffff;
   object-fit: contain;
+}
+
+.file-image-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  justify-self: start;
+}
+
+.file-media-preview audio,
+.file-media-preview video {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 10px;
+  background: #0f172a;
+}
+
+.file-preview-mode-tabs {
+  display: inline-flex;
+  gap: 4px;
+  width: fit-content;
+  border: 1px solid #d7dde3;
+  border-radius: 999px;
+  background: #f8fafc;
+  padding: 4px;
+}
+
+.file-preview-mode-tabs button,
+.file-recent-chip {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.file-preview-mode-tabs button.selected,
+.file-recent-chip {
+  background: rgba(18, 105, 211, 0.12);
+  color: #1269d3;
+}
+
+.file-markdown-preview {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-markdown-preview pre {
+  white-space: pre-wrap;
+}
+
+.file-recent-strip {
+  display: grid;
+  gap: 8px;
+}
+
+.file-recent-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.file-details-sheet,
+.file-action-dialog {
+  width: min(520px, calc(100vw - 24px));
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d7dde3;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.25);
+  padding: 14px;
+}
+
+.file-details-sheet {
+  margin: auto 0 0;
+}
+
+.file-details-head,
+.file-action-dialog footer,
+.file-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.file-details-head strong,
+.file-details-head small {
+  display: block;
+}
+
+.file-details-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 14px;
+}
+
+.file-action-dialog label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.file-action-dialog input,
+.file-action-dialog textarea {
+  width: 100%;
+  border: 1px solid #d7dde3;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 10px 12px;
+  font: inherit;
 }
 
 .worker-diagnostic-top {

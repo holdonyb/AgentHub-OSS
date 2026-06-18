@@ -385,6 +385,10 @@ interface WorkspaceFileEntry {
   name: string;
   path: string;
   kind: 'directory' | 'file';
+  content_type?: string | null;
+  extension?: string | null;
+  preview_capability?: 'directory' | 'text' | 'markdown' | 'image' | 'audio' | 'video' | 'download';
+  is_editable?: boolean;
   size_bytes?: number | null;
   modified_at?: string | null;
 }
@@ -403,7 +407,7 @@ interface WorkspaceFileReadResult {
   size_bytes: number;
   truncated: boolean;
   modified_at?: string | null;
-  preview_kind?: 'text' | 'image' | 'download';
+  preview_kind?: 'text' | 'image' | 'audio' | 'video' | 'download';
   downloadable?: boolean;
   data_base64?: string;
   text?: string;
@@ -413,6 +417,36 @@ interface FileEditorState {
   path: string;
   filename: string;
   text: string;
+  expectedModifiedAt?: string | null;
+}
+
+interface WorkspaceFileMutationResult {
+  path: string;
+  parent_path?: string;
+  previous_path?: string;
+  filename?: string;
+  content_type?: string | null;
+  size_bytes?: number;
+  modified_at?: string | null;
+  preview_capability?: 'directory' | 'text' | 'markdown' | 'image' | 'audio' | 'video' | 'download';
+  is_editable?: boolean;
+  kind?: 'directory' | 'file';
+  preview_kind?: 'text' | 'image' | 'audio' | 'video' | 'download';
+  downloadable?: boolean;
+  truncated?: boolean;
+  data_base64?: string;
+  text?: string;
+}
+
+interface WorkspaceDetailsTarget {
+  path: string;
+  name: string;
+  kind: 'directory' | 'file';
+  contentType?: string | null;
+  sizeBytes?: number | null;
+  modifiedAt?: string | null;
+  previewCapability?: 'directory' | 'text' | 'markdown' | 'image' | 'audio' | 'video' | 'download';
+  isEditable?: boolean;
   expectedModifiedAt?: string | null;
 }
 
@@ -1789,6 +1823,16 @@ function fileReadResult(jobs: Job[]) {
   };
 }
 
+async function fileToWorkspaceUploadPayload(file: File) {
+  const contentType = inferReplyAttachmentContentType(file) || 'application/octet-stream';
+  return {
+    filename: file.name || 'upload.bin',
+    content_type: contentType,
+    data_base64: arrayBufferToBase64(await file.arrayBuffer()),
+    size_bytes: file.size,
+  };
+}
+
 function fileJobBusy(jobs: Job[]) {
   return jobs.some((job) => ['file_list', 'file_read', 'file_write'].includes(job.kind) && ['queued', 'running'].includes(job.status));
 }
@@ -1798,6 +1842,44 @@ function isEditableWorkspaceText(file: WorkspaceFileReadResult | null) {
   if (file.preview_kind !== 'text') return false;
   if (file.truncated) return false;
   return (file.text?.length ?? 0) <= MAX_FILE_EDITOR_CHARS;
+}
+
+function isMarkdownWorkspaceFile(file: WorkspaceFileReadResult | null) {
+  if (!file || file.preview_kind !== 'text') return false;
+  const contentType = (file.content_type || '').toLowerCase();
+  return contentType === 'text/markdown' || file.filename.toLowerCase().endsWith('.md') || file.filename.toLowerCase().endsWith('.markdown');
+}
+
+function fileEntryCapability(entry: WorkspaceFileEntry) {
+  if (entry.kind === 'directory') return 'directory';
+  return entry.preview_capability ?? 'download';
+}
+
+function fileEntryIcon(entry: WorkspaceFileEntry) {
+  const capability = fileEntryCapability(entry);
+  if (capability === 'directory') return Folder;
+  if (capability === 'image') return ImageIcon;
+  if (capability === 'audio' || capability === 'video') return Play;
+  return FileText;
+}
+
+function previewCapabilityLabel(locale: LocaleCode, capability: 'directory' | 'text' | 'markdown' | 'image' | 'audio' | 'video' | 'download') {
+  switch (capability) {
+    case 'directory':
+      return pickLocale(locale, '目录', 'Directory');
+    case 'text':
+      return pickLocale(locale, '文本', 'Text');
+    case 'markdown':
+      return 'Markdown';
+    case 'image':
+      return pickLocale(locale, '图片', 'Image');
+    case 'audio':
+      return pickLocale(locale, '音频', 'Audio');
+    case 'video':
+      return pickLocale(locale, '视频', 'Video');
+    default:
+      return pickLocale(locale, '下载', 'Download');
+  }
 }
 
 function decodeBase64Bytes(dataBase64: string) {
@@ -4910,6 +4992,35 @@ function App() {
     void submitReply();
   }
 
+  async function runWorkspaceJob<T>(
+    endpoint: string,
+    body: Record<string, unknown>,
+    options: {
+      queuedNotice: string;
+      startNotice: string;
+      successNotice?: string;
+      attempts?: number;
+      delayMs?: number;
+    },
+  ) {
+    if (!selectedSession || !canOperate(user)) return null;
+    const response = await apiPost<{ job: Job }>(endpoint, body, csrfToken);
+    setNotice(options.startNotice);
+    const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, {
+      attempts: options.attempts ?? 20,
+      delayMs: options.delayMs ?? 300,
+    });
+    if (finished?.status === 'failed') {
+      throw new Error(finished.error_text || '未知错误');
+    }
+    if (!finished || ['queued', 'running'].includes(finished.status)) {
+      setNotice(options.queuedNotice);
+      return null;
+    }
+    if (options.successNotice) setNotice(options.successNotice);
+    return parseJobResult<T>(finished);
+  }
+
   async function handleFileList(path = '.') {
     if (!selectedSession || !canOperate(user)) return;
     try {
@@ -4937,22 +5048,15 @@ function App() {
   async function handleFileRead(path: string) {
     if (!selectedSession || !canOperate(user)) return;
     try {
-      const response = await apiPost<{ job: Job }>(
+      await runWorkspaceJob<WorkspaceFileReadResult>(
         `/api/sessions/${selectedSession.session_id}/files/read`,
         { path, max_bytes: 5_000_000 },
-        csrfToken,
+        {
+          startNotice: `正在读取 ${path}`,
+          queuedNotice: `文件读取已入队：${path}`,
+          successNotice: `文件已就绪：${path}`,
+        },
       );
-      setNotice(`正在读取 ${path}`);
-      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 20, delayMs: 300 });
-      if (finished?.status === 'failed') {
-        setNotice(`文件预览失败：${finished.error_text || '未知错误'}`);
-        return;
-      }
-      if (!finished || ['queued', 'running'].includes(finished.status)) {
-        setNotice(`文件读取已入队：${path}`);
-        return;
-      }
-      setNotice(`文件已就绪：${path}`);
     } catch (error) {
       setNotice(`文件预览失败：${error instanceof Error ? error.message : '未知错误'}`);
     }
@@ -4983,22 +5087,16 @@ function App() {
     if (!selectedSession || !canOperate(user) || isSavingFileEditor) return false;
     setIsSavingFileEditor(true);
     try {
-      const response = await apiPost<{ job: Job }>(
+      const saved = await runWorkspaceJob<WorkspaceFileReadResult>(
         `/api/sessions/${selectedSession.session_id}/files/write`,
         { path, text: textValue, expected_modified_at: expectedModifiedAt ?? null },
-        csrfToken,
+        {
+          startNotice: `正在保存 ${path}`,
+          queuedNotice: `保存已入队：${path}`,
+          successNotice: `已保存 ${path}`,
+        },
       );
-      setNotice(`正在保存 ${path}`);
-      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, { attempts: 20, delayMs: 300 });
-      if (finished?.status === 'failed') {
-        setNotice(`保存失败：${finished.error_text || '未知错误'}`);
-        return false;
-      }
-      if (!finished || ['queued', 'running'].includes(finished.status)) {
-        setNotice(`保存已入队：${path}`);
-        return false;
-      }
-      const saved = parseJobResult<WorkspaceFileReadResult>(finished);
+      if (!saved) return false;
       if (saved && typeof saved.path === 'string' && typeof saved.text === 'string') {
         setFileEditor({
           path: saved.path,
@@ -5007,13 +5105,91 @@ function App() {
           expectedModifiedAt: saved.modified_at,
         });
       }
-      setNotice(`已保存 ${path}`);
       return true;
     } catch (error) {
       setNotice(`保存失败：${error instanceof Error ? error.message : '未知错误'}`);
       return false;
     } finally {
       setIsSavingFileEditor(false);
+    }
+  }
+
+  async function handleFileUpload(path: string, file: File, overwrite = false) {
+    if (!selectedSession || !canOperate(user)) return null;
+    const upload = await fileToWorkspaceUploadPayload(file);
+    try {
+      const saved = await runWorkspaceJob<WorkspaceFileMutationResult>(
+        `/api/sessions/${selectedSession.session_id}/files/upload`,
+        { path, ...upload, overwrite },
+        {
+          startNotice: `正在上传 ${upload.filename}`,
+          queuedNotice: `上传已入队：${upload.filename}`,
+          successNotice: `已上传 ${upload.filename}`,
+          attempts: 24,
+          delayMs: 350,
+        },
+      );
+      return saved;
+    } catch (error) {
+      setNotice(`上传失败：${error instanceof Error ? error.message : '未知错误'}`);
+      return null;
+    }
+  }
+
+  async function handleFileCreate(path: string, textValue = '', overwrite = false) {
+    if (!selectedSession || !canOperate(user)) return null;
+    try {
+      const created = await runWorkspaceJob<WorkspaceFileMutationResult>(
+        `/api/sessions/${selectedSession.session_id}/files/create`,
+        { path, text: textValue, overwrite },
+        {
+          startNotice: `正在新建 ${path}`,
+          queuedNotice: `新建已入队：${path}`,
+          successNotice: `已新建 ${path}`,
+        },
+      );
+      return created;
+    } catch (error) {
+      setNotice(`新建失败：${error instanceof Error ? error.message : '未知错误'}`);
+      return null;
+    }
+  }
+
+  async function handleFileMkdir(path: string) {
+    if (!selectedSession || !canOperate(user)) return null;
+    try {
+      const created = await runWorkspaceJob<WorkspaceFileMutationResult>(
+        `/api/sessions/${selectedSession.session_id}/files/mkdir`,
+        { path },
+        {
+          startNotice: `正在创建目录 ${path}`,
+          queuedNotice: `目录创建已入队：${path}`,
+          successNotice: `已创建目录 ${path}`,
+        },
+      );
+      return created;
+    } catch (error) {
+      setNotice(`创建目录失败：${error instanceof Error ? error.message : '未知错误'}`);
+      return null;
+    }
+  }
+
+  async function handleFileRename(path: string, newPath: string, expectedModifiedAt?: string | null) {
+    if (!selectedSession || !canOperate(user)) return null;
+    try {
+      const renamed = await runWorkspaceJob<WorkspaceFileMutationResult>(
+        `/api/sessions/${selectedSession.session_id}/files/rename`,
+        { path, new_path: newPath, expected_modified_at: expectedModifiedAt ?? null },
+        {
+          startNotice: `正在重命名 ${path}`,
+          queuedNotice: `重命名已入队：${path}`,
+          successNotice: `已重命名为 ${newPath}`,
+        },
+      );
+      return renamed;
+    } catch (error) {
+      setNotice(`重命名失败：${error instanceof Error ? error.message : '未知错误'}`);
+      return null;
     }
   }
 
@@ -6563,6 +6739,10 @@ function App() {
           onEdit={handleOpenFileEditor}
           onList={(path) => void handleFileList(path)}
           onRead={(path) => void handleFileRead(path)}
+          onUpload={(path, file, overwrite) => handleFileUpload(path, file, overwrite)}
+          onCreate={(path, text, overwrite) => handleFileCreate(path, text, overwrite)}
+          onMkdir={(path) => handleFileMkdir(path)}
+          onRename={(path, nextPath, expectedModifiedAt) => handleFileRename(path, nextPath, expectedModifiedAt)}
         />
         )}
         {mobilePane === 'workers' && (
@@ -6749,6 +6929,10 @@ function MobileFilesPane({
   onEdit,
   onList,
   onRead,
+  onUpload,
+  onCreate,
+  onMkdir,
+  onRename,
 }: {
   session?: AgentSession | null;
   jobs: Job[];
@@ -6760,11 +6944,24 @@ function MobileFilesPane({
   onEdit: (file: WorkspaceFileReadResult) => void;
   onList: (path: string) => void;
   onRead: (path: string) => void;
+  onUpload: (path: string, file: File, overwrite?: boolean) => Promise<WorkspaceFileMutationResult | null>;
+  onCreate: (path: string, text: string, overwrite?: boolean) => Promise<WorkspaceFileMutationResult | null>;
+  onMkdir: (path: string) => Promise<WorkspaceFileMutationResult | null>;
+  onRename: (path: string, newPath: string, expectedModifiedAt?: string | null) => Promise<WorkspaceFileMutationResult | null>;
 }) {
   const workspaceRoot = session?.workspace_root || '';
   const listResult = fileListResult(jobs);
   const readResult = fileReadResult(jobs);
   const busy = fileJobBusy(jobs);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [query, setQuery] = useState('');
+  const [recentPaths, setRecentPaths] = useState<string[]>([]);
+  const [detailsTarget, setDetailsTarget] = useState<WorkspaceDetailsTarget | null>(null);
+  const [showCreateFile, setShowCreateFile] = useState(false);
+  const [showCreateFolder, setShowCreateFolder] = useState(false);
+  const [showRename, setShowRename] = useState(false);
+  const [markdownPreview, setMarkdownPreview] = useState(true);
+  const [imageLightbox, setImageLightbox] = useState(false);
   const currentPath = listResult?.path || '.';
   const parentPath =
     currentPath === '.'
@@ -6776,8 +6973,104 @@ function MobileFilesPane({
   const previewHeadline = previewLines[0] ?? '';
   const previewSummary = previewLines.find((line) => line !== previewHeadline) ?? '';
   const imagePreviewUrl = readResult?.preview_kind === 'image' ? workspaceFileDataUrl(readResult) : null;
+  const mediaPreviewUrl =
+    readResult && (readResult.preview_kind === 'audio' || readResult.preview_kind === 'video') ? workspaceFileDataUrl(readResult) : null;
+  const markdownHtml = readResult?.text && isMarkdownWorkspaceFile(readResult) ? renderMarkdownPreview(readResult.text) : '';
+  const filteredEntries = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const entries = listResult?.entries ?? [];
+    if (!normalized) return entries;
+    return entries.filter((entry) => entry.name.toLowerCase().includes(normalized) || entry.path.toLowerCase().includes(normalized));
+  }, [listResult?.entries, query]);
+
+  useEffect(() => {
+    if (!readResult?.path) return;
+    setRecentPaths((current) => [readResult.path, ...current.filter((item) => item !== readResult.path)].slice(0, 8));
+    if (!isMarkdownWorkspaceFile(readResult)) setMarkdownPreview(true);
+  }, [readResult?.path, readResult?.filename, readResult?.modified_at]);
+
+  function openDetailsForEntry(entry: WorkspaceFileEntry) {
+    setDetailsTarget({
+      path: entry.path,
+      name: entry.name,
+      kind: entry.kind,
+      contentType: entry.content_type,
+      sizeBytes: entry.size_bytes,
+      modifiedAt: entry.modified_at,
+      previewCapability: fileEntryCapability(entry),
+      isEditable: entry.is_editable,
+    });
+  }
+
+  function openDetailsForPreview() {
+    if (!readResult) return;
+    setDetailsTarget({
+      path: readResult.path,
+      name: readResult.filename,
+      kind: 'file',
+      contentType: readResult.content_type,
+      sizeBytes: readResult.size_bytes,
+      modifiedAt: readResult.modified_at,
+      previewCapability: readResult.preview_kind === 'text' && isMarkdownWorkspaceFile(readResult) ? 'markdown' : (readResult.preview_kind ?? 'download'),
+      isEditable: isEditableWorkspaceText(readResult),
+      expectedModifiedAt: readResult.modified_at,
+    });
+  }
+
+  async function handleCreateFileSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get('path') ?? '').trim();
+    const text = String(form.get('text') ?? '');
+    if (!name) return;
+    const nextPath = currentPath === '.' ? name : `${currentPath}/${name}`;
+    const created = await onCreate(nextPath, text, false);
+    if (!created?.path) return;
+    setShowCreateFile(false);
+    onList(currentPath);
+    onRead(created.path);
+  }
+
+  async function handleCreateFolderSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get('path') ?? '').trim();
+    if (!name) return;
+    const nextPath = currentPath === '.' ? name : `${currentPath}/${name}`;
+    const created = await onMkdir(nextPath);
+    if (!created?.path) return;
+    setShowCreateFolder(false);
+    onList(currentPath);
+  }
+
+  async function handleRenameSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!detailsTarget) return;
+    const form = new FormData(event.currentTarget);
+    const nextName = String(form.get('new_name') ?? '').trim();
+    if (!nextName) return;
+    const parent = detailsTarget.path.includes('/') ? detailsTarget.path.slice(0, detailsTarget.path.lastIndexOf('/')) : '.';
+    const nextPath = parent === '.' ? nextName : `${parent}/${nextName}`;
+    const renamed = await onRename(detailsTarget.path, nextPath, detailsTarget.expectedModifiedAt);
+    if (!renamed?.path) return;
+    setShowRename(false);
+    setDetailsTarget(null);
+    onList(parent === '.' ? '.' : parent);
+    if (detailsTarget.kind === 'file') onRead(renamed.path);
+  }
+
+  async function handleUploadInput(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    const uploaded = await onUpload(currentPath, file, false);
+    if (!uploaded?.path) return;
+    onList(currentPath);
+  }
+
   return (
     <section className="mobile-panel files-pane" aria-label={t(locale, 'filePane')}>
+      <input ref={fileInputRef} type="file" hidden onChange={handleUploadInput} />
       <div className="mobile-panel-head">
         <div>
           <p>{session ? sessionTitle(session) : t(locale, 'currentNoSession')}</p>
@@ -6805,6 +7098,18 @@ function MobileFilesPane({
             <Folder size={13} />
             {t(locale, 'browseWorkspace')}
           </button>
+          <button type="button" className="message-action-button" disabled={!session} onClick={() => setShowCreateFile(true)}>
+            <Plus size={13} />
+            {pickLocale(locale, '新建文件', 'New file')}
+          </button>
+          <button type="button" className="message-action-button" disabled={!session} onClick={() => setShowCreateFolder(true)}>
+            <Folder size={13} />
+            {pickLocale(locale, '新建文件夹', 'New folder')}
+          </button>
+          <button type="button" className="message-action-button" disabled={!session} onClick={() => fileInputRef.current?.click()}>
+            <Download size={13} />
+            {pickLocale(locale, '上传文件', 'Upload file')}
+          </button>
         </div>
       </div>
       <div className="file-browser-card">
@@ -6813,6 +7118,15 @@ function MobileFilesPane({
           {busy && <small>{t(locale, 'syncing')}</small>}
         </div>
         <p className="file-note">{t(locale, 'fileBrowserNote')}</p>
+        <label className="file-search-row">
+          <Search size={15} />
+          <input
+            aria-label={pickLocale(locale, '筛选当前目录', 'Filter current directory')}
+            placeholder={pickLocale(locale, '筛选文件或路径', 'Filter files or paths')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
         {parentPath && (
           <button type="button" className="message-action-button" onClick={() => onList(parentPath)}>
             <RotateCcw size={13} />
@@ -6820,8 +7134,10 @@ function MobileFilesPane({
           </button>
         )}
         {!listResult && <p className="empty">{t(locale, 'browseWorkspaceEmpty')}</p>}
-        {listResult && listResult.entries.length === 0 && <p className="empty">{t(locale, 'emptyDirectory')}</p>}
-        {listResult?.entries.map((entry) => (
+        {listResult && filteredEntries.length === 0 && <p className="empty">{query ? pickLocale(locale, '当前目录没有匹配结果。', 'No matches in this directory.') : t(locale, 'emptyDirectory')}</p>}
+        {filteredEntries.map((entry) => {
+          const EntryIcon = fileEntryIcon(entry);
+          return (
           <div className="file-row" key={entry.path}>
             <button
               type="button"
@@ -6829,18 +7145,38 @@ function MobileFilesPane({
               aria-label={entry.kind === 'directory' ? t(locale, 'enterDirectory', { name: entry.name }) : t(locale, 'previewFile', { name: entry.name })}
               onClick={() => (entry.kind === 'directory' ? onList(entry.path) : onRead(entry.path))}
             >
-              {entry.kind === 'directory' ? <Folder size={17} /> : <FileText size={17} />}
+              <EntryIcon size={17} />
               <span>
                 <strong>{entry.name}</strong>
-                <small>{entry.kind === 'directory' ? t(locale, 'directory') : `${formatFileSize(entry.size_bytes)} · ${formatWhen(entry.modified_at) || entry.path}`}</small>
+                <small>
+                  {entry.kind === 'directory'
+                    ? pickLocale(locale, '目录', 'Directory')
+                    : `${formatFileSize(entry.size_bytes)} · ${previewCapabilityLabel(locale, fileEntryCapability(entry))} · ${formatWhen(entry.modified_at) || entry.path}`}
+                </small>
               </span>
             </button>
             <button type="button" className="native-icon-button small" aria-label={t(locale, 'copyEntryPath', { name: entry.name })} onClick={() => onCopyPath(entry.path)}>
               <Copy size={14} />
             </button>
+            <button type="button" className="native-icon-button small" aria-label={pickLocale(locale, `查看 ${entry.name} 详情`, `Inspect ${entry.name}`)} onClick={() => openDetailsForEntry(entry)}>
+              <MoreHorizontal size={14} />
+            </button>
           </div>
-        ))}
+          );
+        })}
         {listResult?.truncated && <p className="file-note">{t(locale, 'fileListTruncated')}</p>}
+        {recentPaths.length > 0 && (
+          <div className="file-recent-strip">
+            <small>{pickLocale(locale, '最近打开', 'Recent')}</small>
+            <div className="file-recent-chips">
+              {recentPaths.map((path) => (
+                <button key={path} type="button" className="file-recent-chip" onClick={() => onRead(path)}>
+                  {path.split('/').pop() || path}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       {readResult && (
         <div className="file-preview-card">
@@ -6850,8 +7186,14 @@ function MobileFilesPane({
               <small>
                 {readResult.preview_kind === 'image'
                   ? t(locale, 'imagePreview')
+                  : readResult.preview_kind === 'audio'
+                    ? pickLocale(locale, '音频预览', 'Audio preview')
+                    : readResult.preview_kind === 'video'
+                      ? pickLocale(locale, '视频预览', 'Video preview')
                   : readResult.preview_kind === 'text'
-                    ? t(locale, 'textPreview')
+                    ? isMarkdownWorkspaceFile(readResult)
+                      ? pickLocale(locale, 'Markdown 预览', 'Markdown preview')
+                      : t(locale, 'textPreview')
                     : t(locale, 'downloadPreview')}
                 {' · '}
                 {formatFileSize(readResult.size_bytes)}
@@ -6864,6 +7206,9 @@ function MobileFilesPane({
                   <Copy size={14} />
                 </button>
               )}
+              <button type="button" className="native-icon-button small" aria-label={pickLocale(locale, '打开文件详情', 'Open file details')} onClick={openDetailsForPreview}>
+                <MoreHorizontal size={14} />
+              </button>
               {isEditableWorkspaceText(readResult) && (
                 <button type="button" className="message-action-button" onClick={() => onEdit(readResult)}>
                   <FileText size={13} />
@@ -6878,12 +7223,39 @@ function MobileFilesPane({
               )}
             </div>
           </div>
-          {readResult.preview_kind === 'image' && imagePreviewUrl && <img className="file-preview-image" src={imagePreviewUrl} alt={readResult.filename} />}
+          {readResult.preview_kind === 'image' && imagePreviewUrl && (
+            <button type="button" className="file-image-button" onClick={() => setImageLightbox(true)}>
+              <img className="file-preview-image" src={imagePreviewUrl} alt={readResult.filename} />
+            </button>
+          )}
+          {(readResult.preview_kind === 'audio' || readResult.preview_kind === 'video') && mediaPreviewUrl && (
+            <div className="file-media-preview">
+              {readResult.preview_kind === 'audio' ? (
+                <audio controls preload="metadata" src={mediaPreviewUrl} />
+              ) : (
+                <video controls preload="metadata" src={mediaPreviewUrl} />
+              )}
+            </div>
+          )}
           {readResult.preview_kind === 'text' && (
             <>
+              {isMarkdownWorkspaceFile(readResult) && (
+                <div className="file-preview-mode-tabs" role="tablist" aria-label={pickLocale(locale, 'Markdown 模式切换', 'Markdown mode switch')}>
+                  <button type="button" className={markdownPreview ? 'selected' : ''} aria-pressed={markdownPreview} onClick={() => setMarkdownPreview(true)}>
+                    {pickLocale(locale, '预览', 'Preview')}
+                  </button>
+                  <button type="button" className={!markdownPreview ? 'selected' : ''} aria-pressed={!markdownPreview} onClick={() => setMarkdownPreview(false)}>
+                    {pickLocale(locale, '源码', 'Source')}
+                  </button>
+                </div>
+              )}
               {previewHeadline && <strong className="file-preview-title">{previewHeadline}</strong>}
               {previewSummary && <small className="file-preview-summary">{previewSummary}</small>}
-              <pre>{readResult.text}</pre>
+              {isMarkdownWorkspaceFile(readResult) && markdownPreview ? (
+                <div className="file-markdown-preview" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+              ) : (
+                <pre>{readResult.text}</pre>
+              )}
             </>
           )}
           {readResult.preview_kind === 'download' && <p className="empty">{t(locale, 'nonTextDownload')}</p>}
@@ -6898,6 +7270,147 @@ function MobileFilesPane({
               <small>{attachment.content_type} · {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB</small>
             </span>
           ))}
+        </div>
+      )}
+      {detailsTarget && (
+        <div className="dialog-backdrop" role="presentation" onClick={() => setDetailsTarget(null)}>
+          <div className="file-details-sheet" role="dialog" aria-modal="true" aria-label={pickLocale(locale, '文件详情', 'File details')} onClick={(event) => event.stopPropagation()}>
+            <div className="file-details-head">
+              <div>
+                <strong>{detailsTarget.name}</strong>
+                <small>{detailsTarget.path}</small>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setDetailsTarget(null)}>
+                <X size={17} />
+              </button>
+            </div>
+            <div className="file-details-grid">
+              <span>{pickLocale(locale, '类型', 'Type')}</span>
+              <strong>{detailsTarget.kind === 'directory' ? pickLocale(locale, '目录', 'Directory') : previewCapabilityLabel(locale, detailsTarget.previewCapability || 'download')}</strong>
+              <span>{pickLocale(locale, '大小', 'Size')}</span>
+              <strong>{detailsTarget.sizeBytes != null ? formatFileSize(detailsTarget.sizeBytes) : '-'}</strong>
+              <span>{pickLocale(locale, '更新时间', 'Updated')}</span>
+              <strong>{formatWhen(detailsTarget.modifiedAt) || '-'}</strong>
+            </div>
+            <div className="file-toolbar">
+              <button type="button" className="message-action-button" onClick={() => onCopyPath(detailsTarget.path)}>
+                <Copy size={13} />
+                {t(locale, 'copyPath')}
+              </button>
+              {detailsTarget.kind === 'file' && (
+                <button
+                  type="button"
+                  className="message-action-button"
+                  onClick={() => {
+                    setDetailsTarget(null);
+                    onRead(detailsTarget.path);
+                  }}
+                >
+                  <FileText size={13} />
+                  {pickLocale(locale, '打开预览', 'Open preview')}
+                </button>
+              )}
+              <button
+                type="button"
+                className="message-action-button"
+                onClick={() => {
+                  setShowRename(true);
+                }}
+              >
+                <MoreHorizontal size={13} />
+                {pickLocale(locale, '重命名', 'Rename')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showCreateFile && (
+        <div className="dialog-backdrop" role="presentation">
+          <form className="file-action-dialog" role="dialog" aria-modal="true" aria-label={pickLocale(locale, '新建文件', 'New file')} onSubmit={handleCreateFileSubmit}>
+            <div className="file-details-head">
+              <strong>{pickLocale(locale, '新建文件', 'New file')}</strong>
+              <button type="button" className="icon-button" onClick={() => setShowCreateFile(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <label>
+              {pickLocale(locale, '文件名', 'Filename')}
+              <input name="path" autoFocus placeholder="notes.md" />
+            </label>
+            <label>
+              {pickLocale(locale, '初始内容', 'Initial content')}
+              <textarea name="text" rows={8} />
+            </label>
+            <footer>
+              <button type="button" className="message-action-button" onClick={() => setShowCreateFile(false)}>
+                {t(locale, 'close')}
+              </button>
+              <button type="submit" className="message-action-button primary-inline-action">
+                <Save size={13} />
+                {pickLocale(locale, '创建并打开', 'Create and open')}
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
+      {showCreateFolder && (
+        <div className="dialog-backdrop" role="presentation">
+          <form className="file-action-dialog" role="dialog" aria-modal="true" aria-label={pickLocale(locale, '新建文件夹', 'New folder')} onSubmit={handleCreateFolderSubmit}>
+            <div className="file-details-head">
+              <strong>{pickLocale(locale, '新建文件夹', 'New folder')}</strong>
+              <button type="button" className="icon-button" onClick={() => setShowCreateFolder(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <label>
+              {pickLocale(locale, '文件夹名', 'Folder name')}
+              <input name="path" autoFocus placeholder="notes" />
+            </label>
+            <footer>
+              <button type="button" className="message-action-button" onClick={() => setShowCreateFolder(false)}>
+                {t(locale, 'close')}
+              </button>
+              <button type="submit" className="message-action-button primary-inline-action">
+                <Folder size={13} />
+                {pickLocale(locale, '创建目录', 'Create folder')}
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
+      {showRename && detailsTarget && (
+        <div className="dialog-backdrop" role="presentation">
+          <form className="file-action-dialog" role="dialog" aria-modal="true" aria-label={pickLocale(locale, '重命名', 'Rename')} onSubmit={handleRenameSubmit}>
+            <div className="file-details-head">
+              <strong>{pickLocale(locale, '重命名', 'Rename')}</strong>
+              <button type="button" className="icon-button" onClick={() => setShowRename(false)}>
+                <X size={17} />
+              </button>
+            </div>
+            <label>
+              {pickLocale(locale, '新名称', 'New name')}
+              <input name="new_name" autoFocus defaultValue={detailsTarget.name} />
+            </label>
+            <footer>
+              <button type="button" className="message-action-button" onClick={() => setShowRename(false)}>
+                {t(locale, 'close')}
+              </button>
+              <button type="submit" className="message-action-button primary-inline-action">
+                <Save size={13} />
+                {pickLocale(locale, '确认重命名', 'Rename')}
+              </button>
+            </footer>
+          </form>
+        </div>
+      )}
+      {imageLightbox && imagePreviewUrl && (
+        <div className="fulltext-backdrop" role="presentation" onClick={() => setImageLightbox(false)}>
+          <div className="file-image-lightbox" role="dialog" aria-modal="true" aria-label={pickLocale(locale, '图片预览', 'Image preview')} onClick={(event) => event.stopPropagation()}>
+            <button type="button" className="icon-button" onClick={() => setImageLightbox(false)}>
+              <X size={18} />
+            </button>
+            <img src={imagePreviewUrl} alt={readResult?.filename || ''} />
+          </div>
         </div>
       )}
     </section>
@@ -6919,7 +7432,16 @@ function WorkspaceTextEditorDialog({
 }) {
   const [draft, setDraft] = useState(state.text);
   const [copied, setCopied] = useState(false);
+  const [search, setSearch] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const dirty = draft !== state.text;
+  const lineCount = Math.max(1, draft.split('\n').length);
+  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_value, index) => index + 1).join('\n'), [lineCount]);
+  const searchMatchCount = useMemo(() => {
+    const normalized = search.trim();
+    if (!normalized) return 0;
+    return draft.split(normalized).length - 1;
+  }, [draft, search]);
 
   useEffect(() => {
     setDraft(state.text);
@@ -6937,6 +7459,22 @@ function WorkspaceTextEditorDialog({
     await onSave(draft);
   }
 
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 's' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      if (!dirty || saving) return;
+      void onSave(draft);
+    }
+  }
+
+  function jumpToSearch() {
+    if (!search.trim() || !textareaRef.current) return;
+    const index = draft.indexOf(search);
+    if (index < 0) return;
+    textareaRef.current.focus();
+    textareaRef.current.setSelectionRange(index, index + search.length);
+  }
+
   return createPortal(
     <div className="fulltext-backdrop" role="presentation">
       <form className="file-editor-dialog" role="dialog" aria-modal="true" aria-label={t(locale, 'fileEditor')} onSubmit={handleSave}>
@@ -6951,17 +7489,38 @@ function WorkspaceTextEditorDialog({
         </header>
         <div className="file-editor-meta">
           <span>{state.filename}</span>
-          <small>{t(locale, 'fileEditorCount', { count: String(draft.length) })}</small>
+          <small>{t(locale, 'fileEditorCount', { count: String(draft.length) })} · {pickLocale(locale, `${lineCount} 行`, `${lineCount} lines`)}</small>
         </div>
-        <textarea
-          aria-label={t(locale, 'fileEditorInput')}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-        />
+        <div className="file-editor-toolbar">
+          <label className="file-search-row compact">
+            <Search size={14} />
+            <input
+              aria-label={pickLocale(locale, '查找当前文件', 'Search in file')}
+              placeholder={pickLocale(locale, '查找文本', 'Find text')}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+          <button type="button" className="message-action-button" onClick={jumpToSearch} disabled={!search.trim() || searchMatchCount === 0}>
+            <Search size={13} />
+            {pickLocale(locale, searchMatchCount > 0 ? `${searchMatchCount} 处匹配` : '查找', searchMatchCount > 0 ? `${searchMatchCount} matches` : 'Find')}
+          </button>
+        </div>
+        <div className="file-editor-surface">
+          <pre className="file-editor-gutter" aria-hidden="true">{lineNumbers}</pre>
+          <textarea
+            ref={textareaRef}
+            aria-label={t(locale, 'fileEditorInput')}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleKeyDown}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+        </div>
         <footer>
+          <span className="file-editor-dirty">{dirty ? pickLocale(locale, '有未保存修改', 'Unsaved changes') : pickLocale(locale, '已同步', 'Saved')}</span>
           <button className="message-action-button" type="button" onClick={handleCopy}>
             <Copy size={13} />
             {copied ? t(locale, 'copied') : t(locale, 'copyFileContent')}

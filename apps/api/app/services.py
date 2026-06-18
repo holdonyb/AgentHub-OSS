@@ -33,6 +33,10 @@ ALLOWED_JOB_KINDS = {
     "file_list",
     "file_read",
     "file_write",
+    "file_upload",
+    "file_create",
+    "file_mkdir",
+    "file_rename",
 }
 
 SESSION_STATES = {"ready", "queued", "running", "needs_reply", "failed", "terminated"}
