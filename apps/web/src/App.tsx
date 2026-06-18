@@ -41,7 +41,7 @@ import {
   UserCircle,
   Users,
 } from 'lucide-react';
-import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -2131,12 +2131,85 @@ function preferredPreviewMode(kind: MessageRenderKind): 'plain' | 'markdown' | '
   return 'plain';
 }
 
+function decodeLinkPath(value: string) {
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function stripLinkPathDecorations(value: string) {
+  return decodeLinkPath(value.trim()).split('#', 1)[0].split('?', 1)[0].trim();
+}
+
+function normalizeWorkspacePath(value: string) {
+  return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function workspacePathUnderRoot(absolutePath: string, workspaceRoot?: string | null) {
+  if (!workspaceRoot) return null;
+  const normalizedPath = normalizeWorkspacePath(absolutePath);
+  const normalizedRoot = normalizeWorkspacePath(workspaceRoot);
+  if (!normalizedRoot) return null;
+  const pathKey = normalizedPath.toLowerCase();
+  const rootKey = normalizedRoot.toLowerCase();
+  if (pathKey === rootKey) return '.';
+  if (!pathKey.startsWith(`${rootKey}/`)) return null;
+  return normalizedPath.slice(normalizedRoot.length + 1);
+}
+
+function fileHrefToPath(href: string) {
+  if (!/^file:\/\//i.test(href)) return null;
+  try {
+    const url = new URL(href);
+    const pathname = decodeURIComponent(url.pathname);
+    return pathname.replace(/^\/([A-Za-z]:\/)/, '$1');
+  } catch {
+    return null;
+  }
+}
+
+function isExternalHref(href: string) {
+  return /^(https?:|mailto:|tel:)/i.test(href) || href.startsWith('//');
+}
+
+function isAbsoluteWorkspacePath(path: string) {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('/');
+}
+
+function isLikelyWorkspaceFile(path: string) {
+  return /(?:^|\/)[^/]+\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(path);
+}
+
+function normalizeRelativeWorkspaceFilePath(path: string) {
+  const normalized = normalizeWorkspacePath(path).replace(/^\.\//, '');
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized.includes('/../')) return null;
+  if (!isLikelyWorkspaceFile(normalized)) return null;
+  return normalized;
+}
+
+function workspaceFilePathFromLink(href: string, workspaceRoot?: string | null) {
+  const rawHref = stripLinkPathDecorations(href);
+  if (!rawHref || rawHref.startsWith('#') || isExternalHref(rawHref)) return null;
+  const filePath = fileHrefToPath(rawHref);
+  const candidate = filePath ?? rawHref;
+  if (isAbsoluteWorkspacePath(candidate)) {
+    const relativePath = workspacePathUnderRoot(candidate, workspaceRoot);
+    return relativePath ? normalizeRelativeWorkspaceFilePath(relativePath) : null;
+  }
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/i.test(candidate)) return null;
+  return normalizeRelativeWorkspaceFilePath(candidate);
+}
+
 function TimelineText({
   text,
   allowRenderPreview = false,
+  onOpenWorkspaceFile,
 }: {
   text?: string | null;
   allowRenderPreview?: boolean;
+  onOpenWorkspaceFile?: (href: string) => boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -2161,6 +2234,16 @@ function TimelineText({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     }
+  };
+  const handleMarkdownPreviewClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!onOpenWorkspaceFile) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const link = target?.closest('a');
+    const href = link?.getAttribute('href') || '';
+    if (!href || !onOpenWorkspaceFile(href)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setViewerOpen(false);
   };
   const viewer = (
     <div className="fulltext-backdrop" role="presentation">
@@ -2214,7 +2297,11 @@ function TimelineText({
         ) : null}
         {viewerMode === 'plain' ? <pre>{value || '暂无输出'}</pre> : null}
         {viewerMode === 'markdown' ? (
-          <div className="rich-preview" dangerouslySetInnerHTML={{ __html: markdownPreview || '<p>暂无输出</p>' }} />
+          <div
+            className="rich-preview"
+            onClick={handleMarkdownPreviewClick}
+            dangerouslySetInnerHTML={{ __html: markdownPreview || '<p>暂无输出</p>' }}
+          />
         ) : null}
         {viewerMode === 'html' && canRenderHtml ? (
           <iframe className="html-preview-frame" sandbox="" srcDoc={htmlPreview} title="HTML 预览" />
@@ -5062,6 +5149,15 @@ function App() {
     }
   }
 
+  function handleOpenWorkspaceFileLink(href: string) {
+    if (!selectedSession || !canOperate(user)) return false;
+    const path = workspaceFilePathFromLink(href, selectedSession.workspace_root);
+    if (!path) return false;
+    navigateMobilePane('files', selectedSession.session_id);
+    void handleFileRead(path);
+    return true;
+  }
+
   function handleOpenFileEditor(file: WorkspaceFileReadResult) {
     if (file.preview_kind !== 'text') {
       setNotice('当前只支持编辑文本文件');
@@ -5914,11 +6010,15 @@ function App() {
                                   ? failureSummary(message.text)
                                   : compactText(message.tool_name || message.text, 90) || '工具调用'}
                               </summary>
-                              <TimelineText text={message.text} />
+                              <TimelineText text={message.text} onOpenWorkspaceFile={handleOpenWorkspaceFileLink} />
                             </details>
                           ) : (
                             <>
-                              <TimelineText text={message.text} allowRenderPreview={message.item_type === 'assistant_message'} />
+                              <TimelineText
+                                text={message.text}
+                                allowRenderPreview={message.item_type === 'assistant_message'}
+                                onOpenWorkspaceFile={handleOpenWorkspaceFileLink}
+                              />
                               {attachments.length > 0 && (
                                 <div className="timeline-attachments" aria-label="消息附件">
                                   {attachments.map((attachment, index) => (

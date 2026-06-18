@@ -2646,6 +2646,79 @@ describe('AgentHub console', () => {
     expect(within(dialog).getByRole('tab', { name: 'Markdown' })).toBeInTheDocument();
   });
 
+  it('opens workspace markdown links from the full reader in the file workbench', async () => {
+    const linkedPath = '2026-06-18-trade-discipline-and-analysis.md';
+    const linkedFileReadJob = {
+      ...completedCommandJob,
+      job_id: 'job-file-read-linked-plan',
+      kind: 'file_read',
+      payload: { path: linkedPath, max_bytes: 5000000 },
+      result_text: JSON.stringify({
+        path: linkedPath,
+        filename: linkedPath,
+        content_type: 'text/markdown',
+        size_bytes: 96,
+        truncated: false,
+        modified_at: '2026-06-18T09:10:00Z',
+        preview_kind: 'text',
+        downloadable: true,
+        text: '# 交易纪律计划\n\n从会话里的计划链接直接打开。',
+      }),
+      updated_at: '2026-06-18T09:10:00Z',
+    };
+    let currentJobs = [completedFileListJob];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: currentJobs });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        return jsonResponse({
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 1,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: `计划已经写好并提交了：\n\n- 计划文件：[${linkedPath}](${linkedPath})\n- 提交：\`9a1e54c docs: add trade discipline plan\``,
+              created_at: '2026-06-18T09:10:00Z',
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/sessions/sess-1/files/read')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(JSON.stringify({ path: linkedPath, max_bytes: 5000000 }));
+        currentJobs = [linkedFileReadJob, ...currentJobs];
+        return jsonResponse({ job: { ...linkedFileReadJob, status: 'queued', result_text: null } });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse({ ...sessionSyncPayload, jobs: currentJobs });
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '全文阅读' }));
+    const dialog = await screen.findByRole('dialog', { name: '全文阅读' });
+    fireEvent.click(within(dialog).getByRole('link', { name: linkedPath }));
+
+    expect(await screen.findByRole('heading', { name: '文件浏览器' })).toBeInTheDocument();
+    expect(await screen.findByText('交易纪律计划')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '全文阅读' })).toBeNull();
+  });
+
   it('does not show html or markdown preview tabs for tool content', async () => {
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
