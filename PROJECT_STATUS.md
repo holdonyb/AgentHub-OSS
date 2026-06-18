@@ -118,7 +118,7 @@ bash scripts/check-selfhost.sh \
 - `docs/SELF_HOST_QUICKSTART.md`: self-host flow including raw-IP precheck path
 - `docs/TESTING.md`: live release-gate guidance
 - `apps/web/src/App.tsx`: unified mobile-first workspace workbench UI, preview flows, and lightweight editor
-- `workers/shared/agenthub_worker/executor.py`: workspace-scoped file mutation التنفيذ path for list/read/write/upload/create/mkdir/rename
+- `workers/shared/agenthub_worker/executor.py`: workspace-scoped file mutation path for list/read/write/upload/create/mkdir/rename
 - `apps/api/app/routers/sessions.py`: session file job endpoints for upload/create/mkdir/rename
 
 ## Known Risks / Blockers
