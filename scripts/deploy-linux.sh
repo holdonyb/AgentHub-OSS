@@ -213,6 +213,9 @@ if [[ -d "$downloads_dir" ]]; then
   cp -a "$downloads_dir"/. apps/web/dist/downloads/
 fi
 
+log "ensuring worker helper scripts are executable"
+chmod +x scripts/update-linux-worker.sh
+
 if command -v nginx >/dev/null 2>&1; then
   log "validating nginx"
   nginx -t
