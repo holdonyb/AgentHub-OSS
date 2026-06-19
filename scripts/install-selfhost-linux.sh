@@ -312,6 +312,7 @@ install_nginx_site() {
     "__AGENTHUB_TLS_CERT__" "$cert" \
     "__AGENTHUB_TLS_KEY__" "$key" \
     "__AGENTHUB_WEB_ROOT__" "$install_root/apps/web/dist" \
+    "__AGENTHUB_DOWNLOADS_ROOT__" "$data_dir/downloads" \
     "__AGENTHUB_API_UPSTREAM__" "$api_host:$api_port"
 }
 

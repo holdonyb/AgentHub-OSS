@@ -86,6 +86,14 @@ server {
         proxy_pass http://__AGENTHUB_API_UPSTREAM__;
     }
 
+    location ^~ /downloads/workers/ {
+        alias __AGENTHUB_DOWNLOADS_ROOT__/workers/;
+        default_type application/octet-stream;
+        add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+        add_header Cache-Control "no-store" always;
+        try_files $uri =404;
+    }
+
     location /downloads/ {
         try_files $uri =404;
     }

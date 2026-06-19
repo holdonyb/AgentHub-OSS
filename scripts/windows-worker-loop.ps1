@@ -17,6 +17,7 @@ $stderrPath = Join-Path $runtimeRoot "agenthub-windows-worker.stderr.log"
 $pidPath = Join-Path $runtimeRoot "agenthub-windows-worker.pid"
 $lockPath = Join-Path $runtimeRoot "agenthub-windows-worker.lock"
 $lockStream = $null
+$workerPathResolved = [System.IO.Path]::GetFullPath($workerPath)
 
 New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 
@@ -88,6 +89,38 @@ function Test-PidOwnership {
     return $currentPidText -eq [string]$PID
 }
 
+function Get-WorkerProcessIds {
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Name -eq "python.exe" -or $_.Name -eq "pythonw.exe") -and
+        $_.CommandLine -and
+        $_.CommandLine -like "*$workerPathResolved*"
+    }
+    return @($processes | Select-Object -ExpandProperty ProcessId)
+}
+
+function Stop-StaleWorkerProcesses {
+    $processIds = @(Get-WorkerProcessIds)
+    if ($processIds.Count -eq 0) {
+        return
+    }
+
+    $stoppedIds = @()
+    foreach ($processId in $processIds) {
+        try {
+            Stop-Process -Id $processId -Force -ErrorAction Stop
+            $stoppedIds += [string]$processId
+        }
+        catch {
+            Write-WorkerLog "failed to stop stale worker process pid=${processId}: $($_.Exception.Message)"
+        }
+    }
+
+    if ($stoppedIds.Count -gt 0) {
+        Write-WorkerLog "stopped stale worker processes: $($stoppedIds -join ',')"
+        Start-Sleep -Seconds 1
+    }
+}
+
 try {
     $lockStream = [System.IO.FileStream]::new(
         $lockPath,
@@ -111,6 +144,8 @@ if (Test-Path $pidPath) {
 
     Write-WorkerLog "removing stale worker pid file: $existingPidText"
 }
+
+Stop-StaleWorkerProcesses
 
 if (!$Once -and !$DryRun -and (Test-Path -LiteralPath $updaterPath)) {
     try {

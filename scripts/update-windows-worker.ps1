@@ -69,13 +69,26 @@ try {
         $arguments += "--dry-run"
     }
 
-    & $pythonPath @arguments 2>&1 | ForEach-Object { Write-UpdateLog ([string]$_) }
-    if ($LASTEXITCODE -ne 0) {
-        Write-UpdateLog "worker auto-update exited code=$LASTEXITCODE"
+    $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    try {
+        $output = & $pythonPath @arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+    }
+
+    foreach ($line in @($output)) {
+        Write-UpdateLog ([string]$line)
+    }
+
+    if ($exitCode -ne 0) {
+        Write-UpdateLog "worker auto-update exited code=$exitCode"
     }
 }
 catch {
-    Write-UpdateLog "worker auto-update exception: $($_.Exception.Message)"
+    Write-UpdateLog "worker auto-update exception: $($_.Exception.GetType().FullName): $($_.Exception.Message)"
 }
 
 exit 0
