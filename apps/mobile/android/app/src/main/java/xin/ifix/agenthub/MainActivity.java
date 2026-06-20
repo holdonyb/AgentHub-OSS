@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import androidx.core.app.ActivityCompat;
@@ -48,6 +49,7 @@ public class MainActivity extends BridgeActivity {
     protected void load() {
         super.load();
         installSystemBarInsets();
+        configureWebViewCookies();
         createAgentHubNotificationChannel();
         bridge.getWebView().setWebChromeClient(new AgentHubWebChromeClient(bridge, this));
         bridge.getWebView().addJavascriptInterface(new AgentHubAndroidBridge(this), "AgentHubAndroid");
@@ -59,6 +61,14 @@ public class MainActivity extends BridgeActivity {
         }
         startNotificationServiceIfAllowed();
         bridge.getWebView().loadUrl(configuredUrl);
+    }
+
+    private void configureWebViewCookies() {
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            cookieManager.setAcceptThirdPartyCookies(bridge.getWebView(), true);
+        }
     }
 
     private void installSystemBarInsets() {
@@ -116,6 +126,13 @@ public class MainActivity extends BridgeActivity {
 
     private boolean stopNotificationService() {
         stopService(new Intent(this, AgentHubNotificationService.class));
+        return true;
+    }
+
+    private boolean flushCookies() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            CookieManager.getInstance().flush();
+        }
         return true;
     }
 
@@ -264,6 +281,11 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public boolean stopNotificationService() {
             return activity.stopNotificationService();
+        }
+
+        @JavascriptInterface
+        public boolean flushCookies() {
+            return activity.flushCookies();
         }
 
         @JavascriptInterface
