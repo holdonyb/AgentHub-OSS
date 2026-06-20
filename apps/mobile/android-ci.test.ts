@@ -83,10 +83,15 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(mainActivity).toContain('request.grant(request.getResources())');
     expect(mainActivity).toContain('@JavascriptInterface');
     expect(mainActivity).toContain('AgentHubAndroidBridge');
+    expect(mainActivity).toContain('CookieManager.getInstance()');
+    expect(mainActivity).toContain('setAcceptCookie(true)');
+    expect(mainActivity).toContain('setAcceptThirdPartyCookies');
+    expect(mainActivity).toContain('configureWebViewCookies');
     expect(mainActivity).toContain('microphonePermissionState');
     expect(mainActivity).toContain('requestMicrophonePermission');
     expect(mainActivity).toContain('startNotificationService');
     expect(mainActivity).toContain('stopNotificationService');
+    expect(mainActivity).toContain('flushCookies');
     expect(mainActivity).toContain('appVersionName');
     expect(mainActivity).toContain('appVersionCode');
     expect(mainActivity).toContain('downloadLatestApk');

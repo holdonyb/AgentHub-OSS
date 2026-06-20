@@ -838,8 +838,41 @@ describe('AgentHub console', () => {
 
   afterEach(() => {
     cleanup();
+    delete window.AgentHubAndroid;
     window.history.pushState({}, '', '/');
     vi.unstubAllGlobals();
+  });
+
+  it('flushes Android WebView cookies after login before loading the console', async () => {
+    const flushCookies = vi.fn(() => true);
+    window.AgentHubAndroid = { flushCookies };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) return jsonResponse({}, 401);
+      if (url.endsWith('/api/auth/login')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-login' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'owner@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign in/ }));
+
+    await waitFor(() => expect(flushCookies).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
   });
 
   it('loads the session inbox, escapes message text, and sends a reply job', async () => {

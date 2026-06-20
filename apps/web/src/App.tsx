@@ -134,6 +134,7 @@ declare global {
       requestMicrophonePermission?: () => boolean;
       startNotificationService?: () => boolean;
       stopNotificationService?: () => boolean;
+      flushCookies?: () => boolean;
       appVersionName?: () => string;
       appVersionCode?: () => number;
       downloadLatestApk?: (url: string, filename: string) => string;
@@ -1427,6 +1428,14 @@ function startNativeNotificationService() {
 function stopNativeNotificationService() {
   try {
     return window.AgentHubAndroid?.stopNotificationService?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+function flushNativeCookies() {
+  try {
+    return window.AgentHubAndroid?.flushCookies?.() === true;
   } catch {
     return false;
   }
@@ -3725,6 +3734,7 @@ function App() {
       email: String(form.get('email')),
       password: String(form.get('password')),
     });
+    flushNativeCookies();
     setUser(payload.user);
     setCsrfToken(payload.csrf_token);
     await loadSettings();
