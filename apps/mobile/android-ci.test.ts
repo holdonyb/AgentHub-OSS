@@ -37,8 +37,8 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(releaseWorkflow).toContain('agenthub-android-release.apk');
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
-    expect(buildGradle).toContain('versionCode 15');
-    expect(buildGradle).toContain('versionName "0.1.1"');
+    expect(buildGradle).toContain('versionCode 16');
+    expect(buildGradle).toContain('versionName "0.1.2"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);
@@ -78,6 +78,8 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(manifest).toContain('android.permission.RECORD_AUDIO');
     expect(manifest).toContain('android.permission.MODIFY_AUDIO_SETTINGS');
     expect(manifest).toContain('android.permission.REQUEST_INSTALL_PACKAGES');
+    expect(manifest).toContain('android:icon="@mipmap/ic_launcher"');
+    expect(manifest).toContain('android:roundIcon="@mipmap/ic_launcher_round"');
     expect(mainActivity).toContain('AgentHubWebChromeClient');
     expect(mainActivity).toContain('PermissionRequest.RESOURCE_AUDIO_CAPTURE');
     expect(mainActivity).toContain('request.grant(request.getResources())');

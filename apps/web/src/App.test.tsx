@@ -3677,7 +3677,7 @@ describe('AgentHub console', () => {
       if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
-      if (url.endsWith('/downloads/agenthub-debug.apk') && init?.method === 'HEAD') {
+      if (url.endsWith('/downloads/agenthub-android-release.apk') && init?.method === 'HEAD') {
         return headResponse({
           'content-length': '4193987',
           'last-modified': 'Sun, 10 May 2026 06:23:42 GMT',
@@ -3699,7 +3699,7 @@ describe('AgentHub console', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '下载最新 APK' }));
     await waitFor(() => {
-      expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-debug\.apk$/), 'agenthub-debug.apk');
+      expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), 'agenthub-android-release.apk');
     });
     expect(await screen.findByText(/APK 下载已开始/)).toBeInTheDocument();
   });
@@ -3725,10 +3725,10 @@ describe('AgentHub console', () => {
       if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
-      if (url.endsWith('/downloads/agenthub-debug.apk') && init?.method === 'HEAD') {
+      if (url.endsWith('/downloads/agenthub-android-release.apk') && init?.method === 'HEAD') {
         return headResponse({}, 405);
       }
-      if (url.endsWith('/downloads/agenthub-debug.apk') && init?.method === 'GET') {
+      if (url.endsWith('/downloads/agenthub-android-release.apk') && init?.method === 'GET') {
         expect(init.headers).toMatchObject({ Range: 'bytes=0-0' });
         return headResponse({
           'content-length': '1',
@@ -3769,8 +3769,8 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: '下载最新 APK' }));
 
     await waitFor(() => {
-      expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-debug\.apk$/), 'agenthub-debug.apk');
-      expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-debug\.apk$/), '_blank', 'noopener,noreferrer');
+      expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), 'agenthub-android-release.apk');
+      expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), '_blank', 'noopener,noreferrer');
     });
     expect(await screen.findByText(/原生下载启动失败，已打开 APK 下载地址/)).toBeInTheDocument();
   });

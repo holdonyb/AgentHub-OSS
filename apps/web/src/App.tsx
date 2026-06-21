@@ -117,8 +117,8 @@ const VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   },
 };
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
-const APK_DOWNLOAD_PATH = '/downloads/agenthub-debug.apk';
-const APK_DOWNLOAD_FILENAME = 'agenthub-debug.apk';
+const APK_DOWNLOAD_PATH = '/downloads/agenthub-android-release.apk';
+const APK_DOWNLOAD_FILENAME = 'agenthub-android-release.apk';
 const THEME_STORAGE_KEY = 'agenthub.theme';
 const LOCALE_STORAGE_KEY = 'agenthub.locale';
 const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
