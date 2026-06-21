@@ -1094,6 +1094,23 @@ describe('AgentHub console', () => {
 
     expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
 
+    const replyForm = document.querySelector('.reply-box');
+    expect(replyForm).toHaveClass('is-compact');
+
+    fireEvent.focus(screen.getByLabelText('回复当前会话'));
+    await waitFor(() => expect(replyForm).not.toHaveClass('is-compact'));
+    fireEvent.blur(screen.getByLabelText('回复当前会话'));
+    await waitFor(() => expect(replyForm).toHaveClass('is-compact'));
+
+    const transcript = screen.getByLabelText('Transcript') as HTMLElement;
+    Object.defineProperties(transcript, {
+      scrollHeight: { configurable: true, value: 1200 },
+      clientHeight: { configurable: true, value: 320 },
+      scrollTop: { configurable: true, value: 360 },
+    });
+    fireEvent.scroll(transcript);
+    await waitFor(() => expect(document.querySelector('.thread-pane')).toHaveClass('is-reading'));
+
     const statusToggle = screen.getByRole('button', { name: '展开会话状态' });
     expect(statusToggle).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(statusToggle);
@@ -1101,7 +1118,6 @@ describe('AgentHub console', () => {
       expect(screen.getByRole('button', { name: '收起会话状态' })).toHaveAttribute('aria-expanded', 'true'),
     );
 
-    const replyForm = document.querySelector('.reply-box');
     expect(replyForm).not.toHaveClass('is-expanded');
     fireEvent.click(screen.getByRole('button', { name: '展开输入框' }));
     expect(replyForm).toHaveClass('is-expanded');
