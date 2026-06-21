@@ -4065,6 +4065,7 @@ textarea:disabled {
     max-width: 100%;
     overflow: hidden;
     gap: 8px;
+    transition: padding 160ms ease, gap 160ms ease;
   }
 
   .thread-head > div:first-child {
@@ -4166,6 +4167,36 @@ textarea:disabled {
   .section-heading h1 {
     font-size: 20px;
     color: #f8fafc;
+  }
+
+  .thread-pane.is-reading {
+    gap: 5px;
+  }
+
+  .thread-pane.is-reading .thread-head {
+    gap: 6px;
+  }
+
+  .thread-pane.is-reading .thread-head p {
+    display: none;
+  }
+
+  .thread-pane.is-reading .thread-head h2 {
+    max-width: 100%;
+    font-size: 16px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .thread-pane.is-reading .thread-status-strip:not(.expanded) {
+    max-height: 24px;
+    margin-top: 4px;
+  }
+
+  .thread-pane.is-reading .thread-status-strip:not(.expanded) span:not(.state-pill):not(:nth-child(3)) {
+    display: none;
   }
 
   .section-heading {
@@ -4525,6 +4556,7 @@ textarea:disabled {
     background: rgba(17, 19, 23, 0.96);
     box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.32);
     backdrop-filter: blur(18px);
+    transition: padding 160ms ease, gap 160ms ease, box-shadow 160ms ease;
   }
 
   .reply-box,
@@ -4540,6 +4572,53 @@ textarea:disabled {
     max-height: 82px;
     color: #f8fafc;
     background: #171a20;
+  }
+
+  .reply-box.is-compact {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 5px 6px;
+    padding: 6px;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.26);
+  }
+
+  .reply-box.is-compact .reply-mode-tabs,
+  .reply-box.is-compact .voice-mode-bar,
+  .reply-box.is-compact .quick-reply-strip {
+    display: none;
+  }
+
+  .reply-box.is-compact textarea {
+    grid-column: 1;
+    min-height: 40px;
+    max-height: 40px;
+    resize: none;
+    padding: 8px 7px;
+  }
+
+  .reply-box.is-compact .reply-status {
+    grid-column: 1 / -1;
+    order: 3;
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .reply-box.is-compact .reply-footer {
+    grid-column: 2;
+    min-width: max-content;
+  }
+
+  .reply-box.is-compact .reply-actions {
+    gap: 4px;
+  }
+
+  .reply-box.is-compact .reply-icon-button,
+  .reply-box.is-compact .reply-send-button {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    flex-basis: 36px;
   }
 
   .reply-box.is-expanded textarea {

@@ -41,7 +41,7 @@ import {
   UserCircle,
   Users,
 } from 'lucide-react';
-import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent, FocusEvent, FormEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -2662,9 +2662,11 @@ function App() {
   const [mobileSessionActionsOpen, setMobileSessionActionsOpen] = useState(false);
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
   const [fileEditor, setFileEditor] = useState<FileEditorState | null>(null);
   const [isSavingFileEditor, setIsSavingFileEditor] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [isTranscriptScrolled, setIsTranscriptScrolled] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => initialThemeMode());
   const [locale, setLocale] = useState<LocaleCode>(() => initialLocale());
   const [settings, setSettings] = useState<AgentHubSettings>(() => defaultSettings());
@@ -2868,6 +2870,15 @@ function App() {
   const isRefreshNotice = notice.includes('后台刷新') || notice.startsWith('刷新失败');
   const visibleReplyStatus =
     replyBlockedReason || (notice && !isRefreshNotice && !notice.includes('会话等待回复') ? notice : '');
+  const composerHasDraft = reply.trim().length > 0 || replyAttachments.length > 0 || visibleSlashCommands.length > 0;
+  const composerCompact =
+    !composerExpanded &&
+    !composerFocused &&
+    !composerHasDraft &&
+    !isRecording &&
+    !isTranscribing &&
+    !isPreparingAttachment;
+  const threadPaneClassName = `thread-pane ${isTranscriptScrolled && !statusDetailsOpen ? 'is-reading' : ''}`.trim();
   const selectedJobs = selectedSession
     ? jobs
         .filter((job) => job.target_session_id === selectedSession.session_id)
@@ -2933,11 +2944,13 @@ function App() {
     if (!transcript) {
       transcriptPinnedToBottomRef.current = true;
       setShowScrollToBottom(false);
+      setIsTranscriptScrolled(false);
       return;
     }
     const pinned = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 96;
     transcriptPinnedToBottomRef.current = pinned;
     setShowScrollToBottom(!pinned);
+    setIsTranscriptScrolled(transcript.scrollTop > 12);
   }
 
   function scrollTranscriptToBottom(behavior: ScrollBehavior = 'smooth') {
@@ -2951,6 +2964,12 @@ function App() {
 
   function handleTranscriptScroll() {
     updateScrollToBottomState();
+  }
+
+  function handleComposerBlur(event: FocusEvent<HTMLFormElement>) {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setComposerFocused(false);
   }
 
   function insertQuickReply(value: string) {
@@ -4306,6 +4325,7 @@ function App() {
   function openSession(sessionId: string, pane: MobilePane = 'thread') {
     shouldScrollTranscriptToBottomRef.current = true;
     preserveTranscriptScrollRef.current = null;
+    setIsTranscriptScrolled(false);
     navigateMobilePane(pane, sessionId);
     void loadTimelineForSession(sessionId, { force: true }).catch(() => setNotice('会话详情同步失败，稍后会自动重试'));
   }
@@ -5079,6 +5099,8 @@ function App() {
     rememberOptimisticUserMessage(confirmedOptimisticItem);
     setReply('');
     setReplyAttachmentsSafely([]);
+    setComposerFocused(false);
+    replyTextareaRef.current?.blur();
     const queuedNotice =
       selectedSession.status === 'running' || selectedSession.status === 'queued'
         ? '已排队，当前作业结束后自动执行'
@@ -5852,7 +5874,7 @@ function App() {
           ))}
         </aside>
 
-        <section className="thread-pane">
+        <section className={threadPaneClassName}>
           {selectedSession ? (
             <>
               <div className="thread-head">
@@ -6086,8 +6108,10 @@ function App() {
               )}
 
               <form
-                className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''}`}
+                className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''} ${composerCompact ? 'is-compact' : ''}`}
                 onSubmit={handleReply}
+                onFocus={() => setComposerFocused(true)}
+                onBlur={handleComposerBlur}
               >
                 <label className="reply-title" htmlFor="reply">{pickLocale(locale, '回复当前会话', 'Reply to this session')}</label>
                 <div className="reply-mode-tabs" role="group" aria-label={pickLocale(locale, '回复模式', 'Reply mode')}>

@@ -100,6 +100,11 @@ describe('mobile WebView layout guardrails', () => {
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
 
     expect(mobileBlock).toMatch(/\.thread-status-strip\.expanded\s*{[^}]*max-height:\s*none[^}]*flex-wrap:\s*wrap/s);
+    expect(styles).toContain('.thread-pane.is-reading .thread-head p');
+    expect(styles).toContain('.thread-pane.is-reading .thread-status-strip:not(.expanded) span:not(.state-pill):not(:nth-child(3))');
+    expect(styles).toContain('.reply-box.is-compact .reply-mode-tabs');
+    expect(styles).toContain('.reply-box.is-compact .voice-mode-bar');
+    expect(styles).toContain('.reply-box.is-compact .quick-reply-strip');
     expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*min-height:\s*142px/s);
     expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*max-height:\s*min\(42dvh,\s*260px\)/s);
   });
