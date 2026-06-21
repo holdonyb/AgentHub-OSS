@@ -111,9 +111,9 @@ const MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024;
 const VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     channelCount: 1,
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
   },
 };
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
@@ -241,6 +241,25 @@ interface VoiceTurnResponse {
   spoken_text: string;
   status: 'ok' | 'partial' | 'failed';
   actions: Array<Record<string, unknown>>;
+}
+
+function AgentHubBrandMark({ size = 22, className = '' }: { size?: number; className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <g transform="rotate(45 12 12)">
+        <path d="M7.7 8.4h2.6v3.7h5.6v2.6h-5.6v3.7H7.7v-3.7H2.1v-2.6h5.6z" fill="#6CC8FF" />
+        <path d="M16.2 5.8h2.6v3.7h3v2.6h-3v3.7h-2.6v-3.7h-5.6V9.5h5.6z" fill="#58B6FF" />
+      </g>
+    </svg>
+  );
 }
 
 interface NotificationInboxItem {
@@ -5493,7 +5512,7 @@ function App() {
       <main className="login-shell text-ink bg-paper">
         <form className="login-panel" onSubmit={handleLogin}>
           <div className="brand-row">
-            <Shield size={24} />
+            <AgentHubBrandMark size={24} />
             <span>AgentHub</span>
           </div>
           <label>
@@ -5559,7 +5578,7 @@ function App() {
           >
             <Menu size={20} />
           </button>
-          <TerminalSquare size={22} />
+          <AgentHubBrandMark size={22} />
           <span>AgentHub</span>
         </div>
         <div className="mobile-worker-signal">
@@ -8410,7 +8429,7 @@ function IslandConsole({
     <main className="island-shell text-ink bg-paper">
       <header className="island-topbar">
         <div className="brand-row">
-          <TerminalSquare size={20} />
+          <AgentHubBrandMark size={20} />
           <span>AgentHub Island</span>
         </div>
         <div className="topbar-actions">

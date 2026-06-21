@@ -98,9 +98,9 @@ describe('voiceStreaming', () => {
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
       },
     });
     expect(onClose).not.toHaveBeenCalled();

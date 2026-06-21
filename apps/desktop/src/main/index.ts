@@ -25,10 +25,10 @@ if (!hasSingleInstanceLock) {
 function createIcon(): Electron.NativeImage {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
-      <rect width="32" height="32" rx="8" fill="#0f172a"/>
-      <path d="M8 10h16v12H8z" fill="#f8fafc"/>
-      <path d="M11 14l3 2-3 2" fill="none" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M16 19h5" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+      <g transform="rotate(45 16 16)">
+        <path d="M10.2 11.2h3.4v4.8h7.2v3.4h-7.2v4.8h-3.4v-4.8H3v-3.4h7.2z" fill="#6CC8FF"/>
+        <path d="M21 7.8h3.4v4.8H28v3.4h-3.6v4.8H21V16h-7.2v-3.4H21z" fill="#58B6FF"/>
+      </g>
     </svg>
   `;
   return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`);

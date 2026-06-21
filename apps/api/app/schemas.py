@@ -455,6 +455,7 @@ class VoiceTranscribeDiagnostics(BaseModel):
     asr_format: str
     input_bytes: int
     prepared_bytes: int
+    gain_applied_db: float | None = None
     duration_ms: int | None = None
     chunk_count: int | None = None
 

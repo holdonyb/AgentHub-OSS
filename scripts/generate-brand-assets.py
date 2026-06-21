@@ -6,27 +6,26 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INK = "#111827"
-BORDER = "#D9E4EF"
+LIGHT = "#6CC8FF"
+DARK = "#58B6FF"
+BORDER = "#DCE8F6"
 
 
 ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
   <title>AgentHub</title>
   <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="{BORDER}" stroke-width="8"/>
-  <g fill="none" stroke="{INK}" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="168" y="216" width="688" height="592" rx="72"/>
-    <path d="M326 408 462 512 326 616"/>
-    <path d="M536 632h170"/>
+  <g transform="rotate(45 512 512)">
+    <path fill="{LIGHT}" d="M274 344h116v164h248v116H390v164H274V624H26V508h248z"/>
+    <path fill="{DARK}" d="M750 236h116v164h132v116H866v164H750V516H502V400h248z"/>
   </g>
 </svg>
 """
 
 MARK_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
-  <title>AgentHub terminal mark</title>
-  <g fill="none" stroke="{INK}" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="144" y="192" width="736" height="640" rx="76"/>
-    <path d="M312 388 454 512 312 636"/>
-    <path d="M526 646h184"/>
+  <title>AgentHub</title>
+  <g transform="rotate(45 512 512)">
+    <path fill="{LIGHT}" d="M330 362h112v158h240v112H442v158H330V632H90V520h240z"/>
+    <path fill="{DARK}" d="M694 250h112v158h128v112H806v158H694V520H454V408h240z"/>
   </g>
 </svg>
 """
@@ -38,29 +37,11 @@ FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/a
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#00000000"
-        android:pathData="M0,0h108v108h-108z" />
+        android:fillColor="{LIGHT}"
+        android:pathData="M44.53,13.61l8.22,8.22l-13.15,13.15h19.87v11.63h-31.5v16.41h-11.63v-16.41h-19.87v-11.63h19.87v-16.41h11.63v16.41h3.46z" />
     <path
-        android:fillColor="#00000000"
-        android:pathData="M19,26h70q8,0 8,8v50q0,8 -8,8h-70q-8,0 -8,-8v-50q0,-8 8,-8z"
-        android:strokeColor="{INK}"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="7.5" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M31,47l14,12l-14,12"
-        android:strokeColor="{INK}"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="7.5" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,73h21"
-        android:strokeColor="{INK}"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="7.5" />
+        android:fillColor="{DARK}"
+        android:pathData="M75.73,24.24h11.63v16.41h8.74v11.63h-8.74v16.41h-11.63v-16.41h-19.87v-11.63h19.87z" />
 </vector>
 """
 
@@ -85,26 +66,11 @@ NOTIFICATION_VECTOR = """<?xml version="1.0" encoding="utf-8"?>
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:fillColor="#00000000"
-        android:pathData="M4.5,5.5h15q1.8,0 1.8,1.8v9.4q0,1.8 -1.8,1.8h-15q-1.8,0 -1.8,-1.8v-9.4q0,-1.8 1.8,-1.8z"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="1.8" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.91,3.02h2.58v3.64h4.22v2.58h-4.22v3.64H9.91V9.24H5.69V6.66h4.22z" />
     <path
-        android:fillColor="#00000000"
-        android:pathData="M7.4,9.2l3.1,2.8l-3.1,2.8"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="1.8" />
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M12.4,15h4.2"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeWidth="1.8" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M15.04,8.1h2.58v3.64h1.94v2.58h-1.94v3.64h-2.58v-3.64h-4.22v-2.58h4.22z" />
 </vector>
 """
 
@@ -112,7 +78,7 @@ NOTIFICATION_VECTOR = """<?xml version="1.0" encoding="utf-8"?>
 ADAPTIVE_ICON_XML = """<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background"/>
-    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
 </adaptive-icon>
 """
 
@@ -136,7 +102,6 @@ def render_icon(size: int, include_background: bool = True) -> Image.Image:
         radius = s(196)
         draw.rounded_rectangle(rect, radius=radius, fill="white", outline=BORDER, width=max(1, s(8)))
 
-
     mark = render_mark(size)
     if include_background:
         mark = mark.resize((s(688), s(688)), Image.Resampling.LANCZOS)
@@ -156,15 +121,20 @@ def render_mark(size: int) -> Image.Image:
     def s(value: float) -> int:
         return round(value * canvas / 1024)
 
-    stroke = max(1, s(72))
-    draw.rounded_rectangle(
-        [s(144), s(192), s(880), s(832)],
-        radius=s(76),
-        outline=INK,
-        width=stroke,
-    )
-    draw.line([(s(312), s(388)), (s(454), s(512)), (s(312), s(636))], fill=INK, width=stroke, joint="curve")
-    draw.line([(s(526), s(646)), (s(710), s(646))], fill=INK, width=stroke)
+    light = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    dark = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    light_draw = ImageDraw.Draw(light)
+    dark_draw = ImageDraw.Draw(dark)
+
+    light_draw.rectangle([s(330), s(362), s(442), s(790)], fill=LIGHT)
+    light_draw.rectangle([s(90), s(520), s(682), s(632)], fill=LIGHT)
+    dark_draw.rectangle([s(694), s(250), s(806), s(678)], fill=DARK)
+    dark_draw.rectangle([s(454), s(408), s(934), s(520)], fill=DARK)
+
+    light = light.rotate(45, resample=Image.Resampling.BICUBIC, center=(canvas // 2, canvas // 2))
+    dark = dark.rotate(45, resample=Image.Resampling.BICUBIC, center=(canvas // 2, canvas // 2))
+    image.alpha_composite(light)
+    image.alpha_composite(dark)
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 

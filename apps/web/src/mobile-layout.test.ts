@@ -19,9 +19,10 @@ describe('mobile WebView layout guardrails', () => {
 
     expect(index).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg" />');
     expect(index).toContain('<meta name="theme-color" content="#0d66d0" />');
-    expect(favicon).toContain('<title>AgentHub terminal mark</title>');
-    expect(favicon).toContain('#111827');
-    expect(favicon).toContain('<rect x="144" y="192"');
+    expect(favicon).toContain('<title>AgentHub</title>');
+    expect(favicon).toContain('#6CC8FF');
+    expect(favicon).toContain('#58B6FF');
+    expect(favicon).toContain('rotate(45 512 512)');
     expect(favicon).not.toContain('agenthub-icon-mask');
   });
 
