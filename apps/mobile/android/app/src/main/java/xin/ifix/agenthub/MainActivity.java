@@ -159,7 +159,7 @@ public class MainActivity extends BridgeActivity {
         try {
             DownloadManager downloadManager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (downloadManager == null) return "failed:download-manager-unavailable";
-            String safeFilename = filename == null || filename.trim().isEmpty() ? "agenthub-debug.apk" : filename.trim();
+            String safeFilename = filename == null || filename.trim().isEmpty() ? "agenthub-android-release.apk" : filename.trim();
             String targetFilename = uniqueApkFilename(safeFilename);
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
             request.setTitle("AgentHub 更新包");
@@ -179,7 +179,7 @@ public class MainActivity extends BridgeActivity {
 
     private String uniqueApkFilename(String filename) {
         String clean = filename.replaceAll("[^A-Za-z0-9._-]", "-");
-        if (clean.isEmpty()) clean = "agenthub-debug.apk";
+        if (clean.isEmpty()) clean = "agenthub-android-release.apk";
         int suffixIndex = clean.toLowerCase().endsWith(".apk") ? clean.length() - 4 : clean.length();
         return clean.substring(0, suffixIndex) + "-" + System.currentTimeMillis() + ".apk";
     }
