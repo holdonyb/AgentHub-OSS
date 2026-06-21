@@ -111,9 +111,9 @@ const MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024;
 const VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     channelCount: 1,
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
   },
 };
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';

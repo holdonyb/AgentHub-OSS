@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import base64
+import io
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+import wave
 
 from conftest import auth_headers, bootstrap_owner, create_worker, login
 from app.services import DoubaoAsrFacade, doubao_asr
+from app.routers.voice import _boost_quiet_wav
 
 
 def test_voice_transcribe_accepts_base64_audio_and_returns_text(
@@ -78,6 +81,7 @@ def test_voice_transcribe_returns_recording_diagnostics(
             "asr_format": "wav",
             "input_bytes": len(b"fake-audio"),
             "prepared_bytes": len(b"fake-audio"),
+            "gain_applied_db": None,
             "duration_ms": 2345,
             "chunk_count": 7,
         },
@@ -175,6 +179,7 @@ def test_voice_transcribe_reports_provider_http_errors_without_500(
                 "asr_format": "wav",
                 "input_bytes": len(b"fake-audio"),
                 "prepared_bytes": len(b"fake-audio"),
+                "gain_applied_db": None,
                 "duration_ms": None,
                 "chunk_count": None,
             },
@@ -217,6 +222,7 @@ def test_voice_transcribe_reports_provider_timeout_without_500(
                 "asr_format": "wav",
                 "input_bytes": len(b"fake-audio"),
                 "prepared_bytes": len(b"fake-audio"),
+                "gain_applied_db": None,
                 "duration_ms": None,
                 "chunk_count": None,
             },
@@ -257,6 +263,34 @@ def test_voice_stream_auth_returns_streaming_config(client: TestClient, monkeypa
     assert payload["config"]["request"]["model_name"] == "bigmodel"
     assert payload["expires_in_seconds"] == 300
     assert calls["uid"]
+
+
+def _quiet_wav_bytes(amplitude: int) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16000)
+        frame = int(amplitude).to_bytes(2, "little", signed=True)
+        writer.writeframes(frame * 1600)
+    return buffer.getvalue()
+
+
+def test_boost_quiet_wav_increases_low_input_gain() -> None:
+    original = _quiet_wav_bytes(800)
+    boosted, gain_applied_db = _boost_quiet_wav(original)
+
+    assert gain_applied_db is not None
+    assert gain_applied_db > 0
+    assert boosted != original
+
+
+def test_boost_quiet_wav_keeps_normal_input_unchanged() -> None:
+    original = _quiet_wav_bytes(12000)
+    boosted, gain_applied_db = _boost_quiet_wav(original)
+
+    assert boosted == original
+    assert gain_applied_db is None
 
 
 def test_voice_stream_auth_reports_missing_credentials_without_500(client: TestClient, monkeypatch) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import io
+import math
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +13,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+import wave
 
 from app.core.audit import write_event
 from app.core.json import loads_json
@@ -38,6 +41,9 @@ ALLOWED_AUDIO_TYPES = {
 }
 DOUBAO_STANDARD_AUDIO_FORMATS = {"wav", "mp3", "ogg", "raw"}
 TRANSCODABLE_AUDIO_FORMATS = {"webm", "mp4", "m4a", "aac"}
+QUIET_WAV_PEAK_THRESHOLD = 0.18
+TARGET_WAV_PEAK = 0.52
+MAX_WAV_GAIN_MULTIPLIER = 6.0
 
 
 def _audio_format(payload: VoiceTranscribeIn) -> str:
@@ -99,6 +105,53 @@ def _prepare_audio_for_asr(audio_bytes: bytes, audio_format: str) -> tuple[bytes
     raise HTTPException(status_code=400, detail={"message": "Unsupported audio type", "code": "VOICE_TYPE"})
 
 
+def _boost_quiet_wav(audio_bytes: bytes) -> tuple[bytes, float | None]:
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as reader:
+            params = reader.getparams()
+            if params.sampwidth != 2:
+                return audio_bytes, None
+            frame_bytes = reader.readframes(params.nframes)
+    except wave.Error:
+        return audio_bytes, None
+    if not frame_bytes:
+        return audio_bytes, None
+
+    sample_count = len(frame_bytes) // 2
+    if sample_count <= 0:
+        return audio_bytes, None
+
+    peak = 0.0
+    samples: list[int] = []
+    for index in range(0, len(frame_bytes), 2):
+        sample = int.from_bytes(frame_bytes[index : index + 2], "little", signed=True)
+        samples.append(sample)
+        normalized = abs(sample) / 32767
+        if normalized > peak:
+            peak = normalized
+    if peak <= 0 or peak >= QUIET_WAV_PEAK_THRESHOLD:
+        return audio_bytes, None
+
+    gain = min(MAX_WAV_GAIN_MULTIPLIER, TARGET_WAV_PEAK / peak)
+    if gain <= 1.05:
+        return audio_bytes, None
+
+    boosted = bytearray()
+    for sample in samples:
+        value = int(round(sample * gain))
+        if value > 32767:
+            value = 32767
+        elif value < -32768:
+            value = -32768
+        boosted.extend(int(value).to_bytes(2, "little", signed=True))
+
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setparams(params)
+        writer.writeframes(bytes(boosted))
+    return output.getvalue(), round(20 * math.log10(gain), 1)
+
+
 def _asr_http_error_message(exc: httpx.HTTPStatusError) -> str:
     reason = exc.response.reason_phrase.strip() if exc.response else ""
     suffix = f" {reason}" if reason else ""
@@ -121,6 +174,7 @@ def _voice_diagnostics(
     asr_format: str,
     input_bytes: int,
     prepared_bytes: int,
+    gain_applied_db: float | None = None,
 ) -> dict[str, object]:
     return {
         "filename": payload.filename,
@@ -129,6 +183,7 @@ def _voice_diagnostics(
         "asr_format": asr_format,
         "input_bytes": input_bytes,
         "prepared_bytes": prepared_bytes,
+        "gain_applied_db": gain_applied_db,
         "duration_ms": payload.duration_ms,
         "chunk_count": payload.chunk_count,
     }
@@ -160,12 +215,16 @@ async def _transcribe_with_config(payload: VoiceTranscribeIn, source_audio_bytes
         )
         return text, diagnostics
     audio_bytes, audio_format = _prepare_audio_for_asr(source_audio_bytes, input_format)
+    gain_applied_db: float | None = None
+    if audio_format == "wav":
+        audio_bytes, gain_applied_db = _boost_quiet_wav(audio_bytes)
     diagnostics = _voice_diagnostics(
         payload,
         input_format=input_format,
         asr_format=audio_format,
         input_bytes=len(source_audio_bytes),
         prepared_bytes=len(audio_bytes),
+        gain_applied_db=gain_applied_db,
     )
     if len(audio_bytes) > settings.max_voice_audio_bytes:
         raise HTTPException(status_code=413, detail={"message": "Audio is too large", "code": "VOICE_TOO_LARGE"})

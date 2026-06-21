@@ -7,9 +7,9 @@ const DEFAULT_MAX_RECONNECT_ATTEMPTS = 2;
 const STREAMING_VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   audio: {
     channelCount: 1,
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
   },
 };
 
