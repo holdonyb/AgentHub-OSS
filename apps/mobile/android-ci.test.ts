@@ -37,8 +37,8 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(releaseWorkflow).toContain('agenthub-android-release.apk');
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
-    expect(buildGradle).toContain('versionCode 16');
-    expect(buildGradle).toContain('versionName "0.1.2"');
+    expect(buildGradle).toContain('versionCode 17');
+    expect(buildGradle).toContain('versionName "0.1.3"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);
@@ -146,7 +146,8 @@ describe('Android APK GitHub Actions workflow', () => {
     const webFavicon = readFileSync(new URL('../web/public/favicon.svg', import.meta.url), 'utf-8');
 
     expect(launcher).toContain('@drawable/ic_launcher_background');
-    expect(launcher).toContain('@mipmap/ic_launcher_foreground');
+    expect(launcher).toContain('@drawable/ic_launcher_foreground');
+    expect(launcher).not.toContain('@mipmap/ic_launcher_foreground');
     expect(foreground).toContain('#111827');
     expect(foreground).toContain('M31,47l14,12l-14,12');
     expect(notificationIcon).toContain('strokeWidth="1.8"');
