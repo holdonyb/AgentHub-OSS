@@ -108,13 +108,17 @@ type CapacitorBackButtonEvent = { canGoBack?: boolean };
 
 const mobilePanes = ['sessions', 'thread', 'controls', 'files', 'workers', 'me'] as const;
 const MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024;
-const VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-  },
+const RAW_NATIVE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+const PROCESSED_BROWSER_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
 };
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
 const APK_DOWNLOAD_PATH = '/downloads/agenthub-android-release.apk';
@@ -1452,6 +1456,22 @@ function stopNativeNotificationService() {
   }
 }
 
+function hasNativeAndroidAudioBridge() {
+  try {
+    return typeof window.AgentHubAndroid?.microphonePermissionState === 'function';
+  } catch {
+    return false;
+  }
+}
+
+function voiceMediaConstraints(): MediaStreamConstraints {
+  return {
+    audio: {
+      ...(hasNativeAndroidAudioBridge() ? RAW_NATIVE_AUDIO_CONSTRAINTS : PROCESSED_BROWSER_AUDIO_CONSTRAINTS),
+    },
+  };
+}
+
 function flushNativeCookies() {
   try {
     return window.AgentHubAndroid?.flushCookies?.() === true;
@@ -2699,6 +2719,7 @@ function App() {
   const [inviteDraft, setInviteDraft] = useState<InviteDraft>(emptyInviteDraft);
   const [createdInvite, setCreatedInvite] = useState<InviteCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const sessionsRef = useRef<AgentSession[]>([]);
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
@@ -2797,6 +2818,10 @@ function App() {
       })
       .sort((left, right) => sessionTimestamp(right) - sessionTimestamp(left));
   }, [providerFilter, query, sessions]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   const selectedVisibleSessionIds = useMemo(
     () => filteredSessions.map((session) => session.session_id).filter((sessionId) => selectedSessionIds.has(sessionId)),
@@ -3360,12 +3385,17 @@ function App() {
     const path = params.toString() ? `/api/sync/inbox?${params.toString()}` : '/api/sync/inbox';
     const payload = await apiGet<InboxSyncPayload>(path);
     inboxCursorRef.current[archiveView] = payload.cursor;
-    if (payload.items.length === 0 && payload.removed_session_ids.length === 0) return;
-    const merged = mergeSessionList(sessions, payload.items, payload.removed_session_ids);
+    if (payload.items.length === 0 && payload.removed_session_ids.length === 0) return payload;
+    const merged = mergeSessionList(sessionsRef.current, payload.items, payload.removed_session_ids);
     if (archiveView === 'active') {
       alertNewNeedsReplySessions(merged, permissions);
     }
-    setSessions((current) => mergeSessionList(current, payload.items, payload.removed_session_ids));
+    setSessions((current) => {
+      const next = mergeSessionList(current, payload.items, payload.removed_session_ids);
+      sessionsRef.current = next;
+      return next;
+    });
+    return payload;
   }
 
   async function loadPermissionDelta() {
@@ -3723,10 +3753,27 @@ function App() {
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        await loadInboxDelta(sessionArchiveView);
+        const selectedSessionId = selectedIdRef.current;
+        const selectedBeforeSync =
+          selectedSessionId
+            ? sessionsRef.current.find((session) => session.session_id === selectedSessionId) ?? null
+            : null;
+        const inboxDelta = await loadInboxDelta(sessionArchiveView);
         await loadPermissionDelta();
-        if (selectedIdRef.current) {
-          await loadSessionDelta(selectedIdRef.current);
+        if (selectedSessionId) {
+          const sessionDelta = await loadSessionDelta(selectedSessionId);
+          const selectedInboxSession =
+            inboxDelta?.items.find((session) => session.session_id === selectedSessionId) ?? null;
+          const summaryChanged =
+            Boolean(selectedInboxSession) &&
+            (
+              selectedInboxSession?.last_activity_at !== selectedBeforeSync?.last_activity_at ||
+              selectedInboxSession?.last_message !== selectedBeforeSync?.last_message ||
+              selectedInboxSession?.status !== selectedBeforeSync?.status
+            );
+          if (summaryChanged && sessionDelta.items.length === 0) {
+            await loadTimelineForSession(selectedSessionId, { force: true });
+          }
         }
         setLastSyncedAt(new Date().toISOString());
       } catch {
@@ -4732,7 +4779,7 @@ function App() {
     }
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia(VOICE_MEDIA_CONSTRAINTS);
+      stream = await navigator.mediaDevices.getUserMedia(voiceMediaConstraints());
     } catch (error) {
       setIsRecording(false);
       setNotice(recordingFailureNotice(error, nativeMicrophonePermissionState()));
@@ -4780,6 +4827,7 @@ function App() {
       const auth = await fetchVoiceStreamAuth();
       const controller = await startStreamingVoice({
         auth,
+        mediaConstraints: voiceMediaConstraints(),
         onStart: () => {
           setIsRecording(true);
           setNotice('正在流式识别语音');

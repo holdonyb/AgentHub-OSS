@@ -2695,6 +2695,112 @@ describe('AgentHub console', () => {
     expect(within(dialog).getByRole('tab', { name: 'Markdown' })).toBeInTheDocument();
   });
 
+  it('does not let optimistic timeline seq break later incremental session sync', async () => {
+    let timelineFetchCount = 0;
+    const sessionDeltaUrls: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) {
+        if (timelineFetchCount === 0) return jsonResponse(sessionPayload);
+        return jsonResponse({
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '真正同步回来的最终回复',
+              last_activity_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetchCount += 1;
+        return jsonResponse(timelinePayload);
+      }
+      if (url.endsWith('/api/sessions/sess-1/input')) {
+        expect(JSON.parse(String(init?.body ?? '{}'))).toEqual({ prompt: '刷新期间别丢消息' });
+        return jsonResponse({ job: { job_id: 'job-sticky-optimistic', status: 'queued' } });
+      }
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:03:00Z|sess-1',
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '真正同步回来的最终回复',
+              last_activity_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        sessionDeltaUrls.push(url);
+        if (url.includes('after_seq=2')) {
+          return jsonResponse({
+            ...sessionSyncPayload,
+            session: {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '真正同步回来的最终回复',
+              last_activity_at: '2026-04-26T10:03:00Z',
+            },
+            items: [
+              {
+                session_id: 'sess-1',
+                seq: 3,
+                item_type: 'assistant_message',
+                role: 'assistant',
+                text: '真正同步回来的最终回复',
+                created_at: '2026-04-26T10:03:00Z',
+              },
+            ],
+            next_after_seq: 3,
+          });
+        }
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            status: 'needs_reply',
+            last_message: '真正同步回来的最终回复',
+            last_activity_at: '2026-04-26T10:03:00Z',
+          },
+          items: [],
+          next_after_seq: 3,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('回复当前会话'), { target: { value: '刷新期间别丢消息' } });
+    fireEvent.click(screen.getByRole('button', { name: /发送/ }));
+    expect(await screen.findByText('刷新期间别丢消息')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /刷新/ }));
+    await screen.findByText(/后台刷新完成/);
+
+    fireEvent.focus(window);
+
+    expect(await screen.findByText('真正同步回来的最终回复')).toBeInTheDocument();
+    expect(sessionDeltaUrls.some((url) => url.includes('after_seq=2'))).toBe(true);
+  });
+
   it('opens workspace markdown links from the full reader in the file workbench', async () => {
     const linkedPath = '2026-06-18-trade-discipline-and-analysis.md';
     const linkedFileReadJob = {
@@ -4667,9 +4773,9 @@ describe('AgentHub console', () => {
       expect(getUserMedia).toHaveBeenCalledWith({
         audio: {
           channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         },
       }),
     );
@@ -5189,6 +5295,96 @@ describe('AgentHub console', () => {
     expect(screen.getByText('增量同步到了新回复')).toBeInTheDocument();
   });
 
+  it('falls back to a full timeline refresh when session summary changes but delta items stay empty', async () => {
+    let timelineFetches = 0;
+    const staleTimeline = {
+      items: [
+        {
+          session_id: 'sess-1',
+          seq: 1,
+          item_type: 'user_message',
+          role: 'user',
+          text: '先看看',
+          created_at: '2026-04-26T10:00:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 2,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '处理中',
+          created_at: '2026-04-26T10:01:00Z',
+        },
+      ],
+    };
+    const refreshedTimeline = {
+      items: [
+        staleTimeline.items[0],
+        {
+          ...staleTimeline.items[1],
+          text: '最终回复已经到了',
+          created_at: '2026-04-26T10:03:00Z',
+        },
+      ],
+    };
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        return jsonResponse(timelineFetches > 1 ? refreshedTimeline : staleTimeline);
+      }
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:03:00Z|sess-1',
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '最终回复已经到了',
+              last_activity_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            status: 'needs_reply',
+            last_message: '最终回复已经到了',
+            last_activity_at: '2026-04-26T10:03:00Z',
+          },
+          items: [],
+          next_after_seq: 2,
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('处理中')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
+    expect(timelineFetches).toBeGreaterThan(1);
+  });
+
   it('flushes recorder data before stop so Android WebView does not lose the final audio chunk', async () => {
     let resolveVoice: (() => void) | undefined;
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -5386,6 +5582,39 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: '语音' }));
 
     expect(await screen.findByRole('button', { name: '停止' })).toBeEnabled();
+  });
+
+  it('uses processed browser audio constraints for standard web recording', async () => {
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [] });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    class MockMediaRecorder {
+      static isTypeSupported = () => true;
+      ondataavailable: ((event: { data: Blob }) => void) | null = null;
+      onstop: (() => void) | null = null;
+      start() {}
+      stop() {
+        this.ondataavailable?.({ data: new Blob([new Uint8Array([4, 5])], { type: 'audio/webm' }) });
+        this.onstop?.();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder);
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '语音' }));
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
   });
 
   it('reports recorder setup errors separately from microphone permission errors', async () => {
