@@ -493,6 +493,76 @@ def test_session_sync_returns_only_new_timeline_rows_and_recent_session_jobs(cli
     assert unchanged.json()["items"] == []
 
 
+def test_session_sync_cursor_returns_same_seq_timeline_updates(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-cursor",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-cursor",
+            "status": "ready",
+            "title": "Delta cursor",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-cursor/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {"seq": 1, "item_type": "user_message", "role": "user", "text": "hello"},
+                {"seq": 2, "item_type": "assistant_message", "role": "assistant", "text": "draft"},
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-cursor", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert [item["seq"] for item in first_payload["items"]] == [1, 2]
+    assert first_payload["items"][1]["text"] == "draft"
+    assert first_payload["next_after_cursor"]
+
+    second_publish = client.post(
+        "/api/internal/sessions/sess-delta-cursor/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {"seq": 2, "item_type": "assistant_message", "role": "assistant", "text": "final"},
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    second = client.get(
+        "/api/sync/session/sess-delta-cursor",
+        params={"cursor": first_payload["next_after_cursor"]},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert [item["seq"] for item in second_payload["items"]] == [2]
+    assert second_payload["items"][0]["text"] == "final"
+
+
 def test_permission_sync_returns_incremental_pending_and_resolved_updates(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

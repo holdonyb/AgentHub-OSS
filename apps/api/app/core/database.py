@@ -103,23 +103,31 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
         return
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
+    table_columns = {
+        table_name: {column["name"] for column in inspector.get_columns(table_name)}
+        for table_name in table_names
+    }
     index_statements = {
         "events": [
-            "CREATE INDEX IF NOT EXISTS ix_events_space_created_at ON events (space_id, created_at DESC)",
+            ("CREATE INDEX IF NOT EXISTS ix_events_space_created_at ON events (space_id, created_at DESC)", {"space_id", "created_at"}),
         ],
         "jobs": [
-            "CREATE INDEX IF NOT EXISTS ix_jobs_space_created_at ON jobs (space_id, created_at DESC)",
-            "CREATE INDEX IF NOT EXISTS ix_jobs_space_target_updated_at ON jobs (space_id, target_session_id, updated_at DESC)",
+            ("CREATE INDEX IF NOT EXISTS ix_jobs_space_created_at ON jobs (space_id, created_at DESC)", {"space_id", "created_at"}),
+            ("CREATE INDEX IF NOT EXISTS ix_jobs_space_target_updated_at ON jobs (space_id, target_session_id, updated_at DESC)", {"space_id", "target_session_id", "updated_at"}),
         ],
         "agent_timeline": [
-            "CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_created_seq ON agent_timeline (space_id, session_id, created_at DESC, seq DESC)",
+            ("CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_created_seq ON agent_timeline (space_id, session_id, created_at DESC, seq DESC)", {"space_id", "session_id", "created_at", "seq"}),
+            ("CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_updated_id ON agent_timeline (space_id, session_id, updated_at ASC, seq ASC)", {"space_id", "session_id", "updated_at", "seq"}),
         ],
     }
     with engine.begin() as conn:
         for table_name, statements in index_statements.items():
             if table_name not in table_names:
                 continue
-            for statement in statements:
+            columns = table_columns.get(table_name, set())
+            for statement, required_columns in statements:
+                if not required_columns.issubset(columns):
+                    continue
                 conn.execute(text(statement))
 
 

@@ -232,6 +232,7 @@ def timeline_item_out(item: AgentTimeline) -> dict[str, Any]:
         "status": item.status,
         "payload": sanitize_text(loads_json(item.payload_json, {})),
         "created_at": item.created_at,
+        "updated_at": item.updated_at,
     }
 
 
@@ -816,6 +817,7 @@ def upsert_timeline_items(
     existing = {item.seq: item for item in existing_rows}
     next_seq = (max(existing) + 1) if existing else 1
     saved: list[AgentTimeline] = []
+    now = utcnow()
     for raw in items:
         payload = _timeline_payload(raw)
         item_type = str(payload.get("item_type") or "")
@@ -839,6 +841,7 @@ def upsert_timeline_items(
         item.status = payload.get("status") if isinstance(payload.get("status"), str) else None
         item.payload_json = dumps_json(payload.get("payload") if isinstance(payload.get("payload"), dict) else {})
         item.created_at = _parse_created_at(payload.get("created_at"))
+        item.updated_at = now
         saved.append(item)
     db.flush()
     return saved
