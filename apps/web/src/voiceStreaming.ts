@@ -4,13 +4,17 @@ import { LabASR } from 'byted-ailab-speech-sdk';
 const STOP_FALLBACK_MS = 1500;
 const RECONNECT_BASE_MS = 450;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 2;
-const STREAMING_VOICE_MEDIA_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-  },
+const RAW_NATIVE_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+const PROCESSED_BROWSER_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  channelCount: 1,
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
 };
 
 export interface VoiceStreamAuthPayload {
@@ -43,12 +47,28 @@ export interface StreamingVoiceController {
 
 export interface StartStreamingVoiceOptions {
   auth: VoiceStreamAuthPayload;
+  mediaConstraints?: MediaStreamConstraints;
   onStart?: () => void;
   onPartialText?: (text: string, fullData: unknown) => void;
   onRecovering?: (attempt: number) => void;
   onClose?: () => void;
   onError?: () => void;
   maxReconnectAttempts?: number;
+}
+
+function hasNativeAndroidAudioBridge() {
+  const bridge = (globalThis as typeof globalThis & {
+    AgentHubAndroid?: { microphonePermissionState?: () => string };
+  }).AgentHubAndroid;
+  return typeof bridge?.microphonePermissionState === 'function';
+}
+
+function defaultStreamingVoiceMediaConstraints(): MediaStreamConstraints {
+  return {
+    audio: {
+      ...(hasNativeAndroidAudioBridge() ? RAW_NATIVE_AUDIO_CONSTRAINTS : PROCESSED_BROWSER_AUDIO_CONSTRAINTS),
+    },
+  };
 }
 
 function buildStreamingUrl(url: string, auth: Record<string, string>) {
@@ -61,7 +81,7 @@ function buildStreamingUrl(url: string, auth: Record<string, string>) {
 
 function mergeVoiceConstraints(requested: MediaStreamConstraints | undefined): MediaStreamConstraints {
   const baseAudioConstraints = {
-    ...(STREAMING_VOICE_MEDIA_CONSTRAINTS.audio as MediaTrackConstraints),
+    ...((defaultStreamingVoiceMediaConstraints().audio ?? {}) as MediaTrackConstraints),
   };
   const requestedAudio = requested?.audio;
   if (requestedAudio && typeof requestedAudio === 'object' && !Array.isArray(requestedAudio)) {

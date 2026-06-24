@@ -98,9 +98,9 @@ describe('voiceStreaming', () => {
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
       },
     });
     expect(onClose).not.toHaveBeenCalled();
@@ -109,6 +109,48 @@ describe('voiceStreaming', () => {
 
     expect(stopTrack).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses processed browser audio constraints when no native Android shell is present', async () => {
+    const stopTrack = vi.fn();
+    const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia,
+      },
+    });
+    sdkState.setNoCloseStop();
+
+    const controller = await startStreamingVoice({
+      auth: {
+        url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+        auth: {
+          api_resource_id: 'volc.bigasr.sauc.duration',
+          api_app_key: 'app-key',
+          api_access_key: 'Jwt; token-123',
+        },
+        config: {
+          user: { uid: 'user-1' },
+          audio: { format: 'pcm', rate: 16000, bits: 16, channel: 1 },
+          request: { model_name: 'bigmodel' },
+        },
+        expires_in_seconds: 300,
+      },
+    });
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    controller.stop();
+    vi.advanceTimersByTime(1500);
   });
 
   it('does not double-finish when the SDK closes normally', async () => {
