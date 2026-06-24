@@ -63,7 +63,19 @@ def get_session_timeline(
     rows = query.order_by(AgentTimeline.created_at.desc(), AgentTimeline.seq.desc()).limit(page_size + 1).all()
     has_more = len(rows) > page_size
     page_rows = rows[:page_size]
-    return {"items": [timeline_item_out(item) for item in reversed(page_rows)], "has_more": has_more}
+    ordered_rows = list(reversed(page_rows))
+    next_after_seq = max((item.seq for item in ordered_rows), default=0)
+    next_after_cursor = ""
+    if ordered_rows:
+        tail = ordered_rows[-1]
+        tail_updated = tail.updated_at.astimezone(timezone.utc) if tail.updated_at.tzinfo else tail.updated_at.replace(tzinfo=timezone.utc)
+        next_after_cursor = f"{tail_updated.isoformat()}|{tail.seq}"
+    return {
+        "items": [timeline_item_out(item) for item in ordered_rows],
+        "has_more": has_more,
+        "next_after_seq": next_after_seq,
+        "next_after_cursor": next_after_cursor,
+    }
 
 
 @router.post("/api/internal/sessions/{session_id}/timeline")

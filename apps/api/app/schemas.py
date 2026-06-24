@@ -329,6 +329,7 @@ class AgentTimelineItemOut(BaseModel):
     status: str | None
     payload: dict[str, Any]
     created_at: datetime
+    updated_at: datetime
 
 
 class TimelinePublishIn(BaseModel):
@@ -510,6 +511,7 @@ class SessionSyncOut(BaseModel):
     items: list[AgentTimelineItemOut]
     jobs: list["JobOut"] = Field(default_factory=list)
     next_after_seq: int = 0
+    next_after_cursor: str = ""
     has_more: bool = False
 
 

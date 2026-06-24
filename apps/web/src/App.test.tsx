@@ -65,6 +65,8 @@ const twoSessionPayload = {
 };
 
 const timelinePayload = {
+  next_after_seq: 2,
+  next_after_cursor: '2026-04-26T10:00:00Z|2',
   items: [
     {
       session_id: 'sess-1',
@@ -86,6 +88,8 @@ const timelinePayload = {
 };
 
 const outOfOrderTimelinePayload = {
+  next_after_seq: 31891,
+  next_after_cursor: '2026-05-15T13:19:13Z|31891',
   items: [
     {
       session_id: 'sess-1',
@@ -5327,6 +5331,7 @@ describe('AgentHub console', () => {
         },
       ],
     };
+
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/auth/me')) {
@@ -5371,6 +5376,7 @@ describe('AgentHub console', () => {
           next_after_seq: 2,
         });
       }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
       return jsonResponse({}, 404);
     });
 
@@ -5383,6 +5389,80 @@ describe('AgentHub console', () => {
 
     expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
     expect(timelineFetches).toBeGreaterThan(1);
+  });
+
+  it('uses timeline cursors so same-seq thread updates arrive without leaving the session', async () => {
+    let timelineFetches = 0;
+    const sessionDeltaUrls: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        return jsonResponse(timelinePayload);
+      }
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:03:00Z|sess-1',
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '同一条消息后来补全了',
+              last_activity_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        sessionDeltaUrls.push(url);
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            status: 'needs_reply',
+            last_message: '同一条消息后来补全了',
+            last_activity_at: '2026-04-26T10:03:00Z',
+          },
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 2,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: '同一条消息后来补全了',
+              created_at: '2026-04-26T10:00:00Z',
+            },
+          ],
+          next_after_seq: 2,
+          next_after_cursor: '2026-04-26T10:03:00Z|2',
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('<script>alert("xss")</script>')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('同一条消息后来补全了')).toBeInTheDocument();
+    expect(timelineFetches).toBe(1);
+    expect(sessionDeltaUrls.some((url) => decodeURIComponent(url).includes('cursor=2026-04-26T10:00:00Z|2'))).toBe(true);
   });
 
   it('flushes recorder data before stop so Android WebView does not lose the final audio chunk', async () => {

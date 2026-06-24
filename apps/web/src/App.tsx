@@ -295,6 +295,8 @@ interface PermissionQuestion {
 interface TimelinePayload {
   items: AgentTimelineItem[];
   has_more?: boolean;
+  next_after_seq?: number;
+  next_after_cursor?: string;
 }
 
 interface InboxSyncPayload {
@@ -309,6 +311,7 @@ interface SessionSyncPayload {
   items: AgentTimelineItem[];
   jobs: Job[];
   next_after_seq: number;
+  next_after_cursor?: string;
   has_more: boolean;
 }
 
@@ -2737,6 +2740,7 @@ function App() {
   const inboxCursorRef = useRef<Record<SessionArchiveView, string>>({ active: '', archived: '' });
   const permissionCursorRef = useRef('');
   const sessionAfterSeqRef = useRef<Record<string, number>>({});
+  const sessionAfterCursorRef = useRef<Record<string, string>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
   const transcriptSessionRef = useRef<string | null>(null);
   const sessionSwipeStartRef = useRef<{ sessionId: string; x: number; y: number } | null>(null);
@@ -3265,7 +3269,8 @@ function App() {
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
       }));
       setTimelineHasOlder((current) => (sessionId in current ? current : { ...current, [sessionId]: Boolean(payload.has_more) }));
-      sessionAfterSeqRef.current[sessionId] = Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
+      sessionAfterSeqRef.current[sessionId] = payload.next_after_seq ?? Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
+      sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? '';
     } finally {
       timelineLoadingRef.current.delete(sessionId);
     }
@@ -3414,7 +3419,9 @@ function App() {
 
   async function loadSessionDelta(sessionId: string) {
     const afterSeq = sessionAfterSeqRef.current[sessionId] ?? 0;
+    const cursor = sessionAfterCursorRef.current[sessionId] ?? '';
     const params = new URLSearchParams();
+    if (cursor) params.set('cursor', cursor);
     if (afterSeq > 0) params.set('after_seq', String(afterSeq));
     const payload = await apiGet<SessionSyncPayload>(`/api/sync/session/${sessionId}?${params.toString()}`);
     const keepPinnedToBottom =
@@ -3434,6 +3441,7 @@ function App() {
       }
     }
     sessionAfterSeqRef.current[sessionId] = payload.next_after_seq;
+    sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? sessionAfterCursorRef.current[sessionId] ?? '';
     return payload;
   }
 
@@ -3495,7 +3503,9 @@ function App() {
     });
     setLastSyncedAt(new Date().toISOString());
     if (nextSelectedId) {
-      sessionAfterSeqRef.current[nextSelectedId] = Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
+      sessionAfterSeqRef.current[nextSelectedId] =
+        timelinePayload.next_after_seq ?? Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
+      sessionAfterCursorRef.current[nextSelectedId] = timelinePayload.next_after_cursor ?? '';
       setTimelineBySession((current) => ({
         ...current,
         [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),

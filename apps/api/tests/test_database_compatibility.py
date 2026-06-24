@@ -29,7 +29,7 @@ def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_p
         conn.execute(
             text(
                 "CREATE TABLE agent_timeline ("
-                "id VARCHAR(64), space_id VARCHAR(64), session_id VARCHAR(180), created_at DATETIME, seq INTEGER"
+                "id VARCHAR(64), space_id VARCHAR(64), session_id VARCHAR(180), created_at DATETIME, updated_at DATETIME, seq INTEGER"
                 ")"
             )
         )
@@ -40,6 +40,7 @@ def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_p
     assert "ix_jobs_space_created_at" in _sqlite_index_names(engine, "jobs")
     assert "ix_jobs_space_target_updated_at" in _sqlite_index_names(engine, "jobs")
     assert "ix_agent_timeline_space_session_created_seq" in _sqlite_index_names(engine, "agent_timeline")
+    assert "ix_agent_timeline_space_session_updated_id" in _sqlite_index_names(engine, "agent_timeline")
 
 
 def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: Path) -> None:

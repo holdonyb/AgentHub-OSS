@@ -202,6 +202,42 @@ def _decode_cursor(cursor: str | None) -> tuple[datetime, str]:
     return _cursor_datetime(parsed), raw_item.strip()
 
 
+def _encode_timeline_cursor(value: datetime | None, seq: int | None) -> str:
+    return f"{_cursor_datetime(value).isoformat()}|{int(seq or 0)}"
+
+
+def _decode_timeline_cursor(cursor: str | None) -> tuple[datetime, int]:
+    changed_after, raw_seq = _decode_cursor(cursor)
+    try:
+        seq_after = int(raw_seq or "0")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": "Invalid timeline sync cursor", "code": "SYNC_CURSOR_INVALID"}) from exc
+    return changed_after, max(0, seq_after)
+
+
+def _timeline_delta_query(
+    db: DbSession,
+    space_id: str | None,
+    session_id: str,
+    *,
+    cursor: str | None,
+    after_seq: int,
+):
+    query = db.query(AgentTimeline).filter(AgentTimeline.space_id == space_id, AgentTimeline.session_id == session_id)
+    if cursor:
+        updated_after, seq_after = _decode_timeline_cursor(cursor)
+        query = query.filter(
+            or_(
+                AgentTimeline.updated_at > updated_after,
+                and_(AgentTimeline.updated_at == updated_after, AgentTimeline.seq > seq_after),
+            )
+        )
+        return query.order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
+    if after_seq > 0:
+        query = query.filter(AgentTimeline.seq > after_seq)
+    return query.order_by(AgentTimeline.seq.asc())
+
+
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
     updated_after, session_after = _decode_cursor(cursor)
     query = db.query(AgentSession).options(load_only(*SESSION_SYNC_LOAD_ONLY)).filter(AgentSession.space_id == space_id)
@@ -307,6 +343,7 @@ def get_inbox_sync(
 def get_session_sync(
     session_id: str,
     db: DbSession,
+    cursor: str = Query(default=""),
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),
     actor: Actor = Depends(require_min_role("viewer")),
@@ -318,13 +355,13 @@ def get_session_sync(
     )
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    timeline_rows = (
-        db.query(AgentTimeline)
-        .filter(AgentTimeline.space_id == actor.space_id, AgentTimeline.session_id == session_id, AgentTimeline.seq > after_seq)
-        .order_by(AgentTimeline.seq.asc())
-        .limit(limit + 1)
-        .all()
-    )
+    timeline_rows = _timeline_delta_query(
+        db,
+        actor.space_id,
+        session_id,
+        cursor=cursor,
+        after_seq=after_seq,
+    ).limit(limit + 1).all()
     has_more = len(timeline_rows) > limit
     page_rows = timeline_rows[:limit]
     job_rows = (
@@ -337,11 +374,15 @@ def get_session_sync(
     next_after_seq = after_seq
     if page_rows:
         next_after_seq = max(after_seq, page_rows[-1].seq)
+    next_after_cursor = cursor
+    if page_rows:
+        next_after_cursor = _encode_timeline_cursor(page_rows[-1].updated_at, page_rows[-1].seq)
     return SessionSyncOut(
         session=session_out(session),
         items=[timeline_item_out(item) for item in page_rows],
         jobs=[job_out(job) for job in job_rows],
         next_after_seq=next_after_seq,
+        next_after_cursor=next_after_cursor,
         has_more=has_more,
     )
 

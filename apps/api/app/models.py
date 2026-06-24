@@ -201,6 +201,7 @@ class AgentTimeline(Base):
     status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     payload_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
 
 
 class AgentPermission(Base):
