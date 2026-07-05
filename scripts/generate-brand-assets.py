@@ -6,47 +6,116 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LIGHT = "#6CC8FF"
-DARK = "#58B6FF"
+
+# Brand geometry is reverse-engineered from the original Android splash mark
+# (apps/mobile/.../drawable-land-xxxhdpi/splash.png), which is the canonical logo.
+# In the axis-aligned frame (before the 45° counter-clockwise rotation) the mark is
+# two facing half-crosses: a full-height bar plus a single centered arm each,
+# separated by a diagonal negative-space channel.
+#
+# All coordinates below live on a 1024x1024 design canvas.
+GRAD_START = "#79D1FF"  # lower-left end of the diagonal gradient
+GRAD_END = "#3EA5FF"  # upper-right end
+GRAD_START_RGB = (121, 209, 255)
+GRAD_END_RGB = (62, 165, 255)
+# Flat per-piece approximations for surfaces that cannot carry a gradient
+# (Android vector drawables): sampled at each piece's centroid on the gradient.
+LIGHT_FLAT = "#67C4FF"
+DARK_FLAT = "#50B2FF"
 BORDER = "#DCE8F6"
 
+# (x0, y0, x1, y1) rectangles in the axis-aligned 1024 frame.
+RECTS_LIGHT = [
+    (348, 234, 460, 790),  # bar
+    (125, 456, 460, 568),  # arm pointing outward (left)
+]
+RECTS_DARK = [
+    (564, 234, 676, 790),  # bar
+    (564, 456, 899, 568),  # arm pointing outward (right)
+]
+MARK_X0, MARK_X1 = 125, 899  # gradient span across the mark
 
-ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
-  <title>AgentHub</title>
-  <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="{BORDER}" stroke-width="8"/>
-  <g transform="rotate(45 512 512)">
-    <path fill="{LIGHT}" d="M274 344h116v164h248v116H390v164H274V624H26V508h248z"/>
-    <path fill="{DARK}" d="M750 236h116v164h132v116H866v164H750V516H502V400h248z"/>
-  </g>
-</svg>
-"""
+# The original mark is the axis frame rotated 45° counter-clockwise (visually).
+# PIL Image.rotate(45) is counter-clockwise; SVG/Android rotate(45) is clockwise,
+# so vector surfaces must use -45. Do not "fix" one side without the other.
+PIL_ROTATION = 45
+SVG_ROTATION = -45
+
+
+def _svg_rects(scale: float = 1.0, dx: float = 0.0, dy: float = 0.0) -> str:
+    parts = []
+    for x0, y0, x1, y1 in RECTS_LIGHT + RECTS_DARK:
+        parts.append(
+            f'    <rect x="{x0 * scale + dx:g}" y="{y0 * scale + dy:g}" '
+            f'width="{(x1 - x0) * scale:g}" height="{(y1 - y0) * scale:g}"/>'
+        )
+    return "\n".join(parts)
+
+
+def _gradient_def(gid: str) -> str:
+    return (
+        f'<linearGradient id="{gid}" gradientUnits="userSpaceOnUse" '
+        f'x1="{MARK_X0}" y1="512" x2="{MARK_X1}" y2="512">'
+        f'<stop offset="0" stop-color="{GRAD_START}"/>'
+        f'<stop offset="1" stop-color="{GRAD_END}"/></linearGradient>'
+    )
+
 
 MARK_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
   <title>AgentHub</title>
-  <g transform="rotate(45 512 512)">
-    <path fill="{LIGHT}" d="M330 362h112v158h240v112H442v158H330V632H90V520h240z"/>
-    <path fill="{DARK}" d="M694 250h112v158h128v112H806v158H694V520H454V408h240z"/>
+  <defs>{_gradient_def("ahMarkGradient")}</defs>
+  <g transform="rotate({SVG_ROTATION} 512 512)" fill="url(#ahMarkGradient)">
+{_svg_rects()}
+  </g>
+</svg>
+"""
+
+ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
+  <title>AgentHub</title>
+  <defs>{_gradient_def("ahIconGradient")}</defs>
+  <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="{BORDER}" stroke-width="8"/>
+  <g transform="translate(168 168) scale(0.671875)">
+    <g transform="rotate({SVG_ROTATION} 512 512)" fill="url(#ahIconGradient)">
+{_svg_rects()}
+    </g>
   </g>
 </svg>
 """
 
 
+def _vector_rect_path(x0: float, y0: float, x1: float, y1: float, scale: float) -> str:
+    x, y = x0 * scale, y0 * scale
+    w, h = (x1 - x0) * scale, (y1 - y0) * scale
+    return f"M{x:.2f},{y:.2f}h{w:.2f}v{h:.2f}h-{w:.2f}z"
+
+
+def _vector_paths(rects, color: str, scale: float) -> str:
+    data = "".join(_vector_rect_path(*r, scale) for r in rects)
+    return (
+        f'        <path\n'
+        f'            android:fillColor="{color}"\n'
+        f'            android:pathData="{data}" />'
+    )
+
+
+_FG_SCALE = 108 / 1024
 FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="{LIGHT}"
-        android:pathData="M44.53,13.61l8.22,8.22l-13.15,13.15h19.87v11.63h-31.5v16.41h-11.63v-16.41h-19.87v-11.63h19.87v-16.41h11.63v16.41h3.46z" />
-    <path
-        android:fillColor="{DARK}"
-        android:pathData="M75.73,24.24h11.63v16.41h8.74v11.63h-8.74v16.41h-11.63v-16.41h-19.87v-11.63h19.87z" />
+    <group
+        android:rotation="{SVG_ROTATION}"
+        android:pivotX="54"
+        android:pivotY="54">
+{_vector_paths(RECTS_LIGHT, LIGHT_FLAT, _FG_SCALE)}
+{_vector_paths(RECTS_DARK, DARK_FLAT, _FG_SCALE)}
+    </group>
 </vector>
 """
 
 
-BACKGROUND_VECTOR = f"""<?xml version="1.0" encoding="utf-8"?>
+BACKGROUND_VECTOR = """<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -59,18 +128,20 @@ BACKGROUND_VECTOR = f"""<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-NOTIFICATION_VECTOR = """<?xml version="1.0" encoding="utf-8"?>
+_NOTIF_SCALE = 24 / 1024
+NOTIFICATION_VECTOR = f"""<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M9.91,3.02h2.58v3.64h4.22v2.58h-4.22v3.64H9.91V9.24H5.69V6.66h4.22z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M15.04,8.1h2.58v3.64h1.94v2.58h-1.94v3.64h-2.58v-3.64h-4.22v-2.58h4.22z" />
+    <group
+        android:rotation="{SVG_ROTATION}"
+        android:pivotX="12"
+        android:pivotY="12">
+{_vector_paths(RECTS_LIGHT, "#FFFFFFFF", _NOTIF_SCALE)}
+{_vector_paths(RECTS_DARK, "#FFFFFFFF", _NOTIF_SCALE)}
+    </group>
 </vector>
 """
 
@@ -115,26 +186,31 @@ def render_icon(size: int, include_background: bool = True) -> Image.Image:
 def render_mark(size: int) -> Image.Image:
     scale = 4
     canvas = size * scale
-    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
 
     def s(value: float) -> int:
         return round(value * canvas / 1024)
 
-    light = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    dark = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
-    light_draw = ImageDraw.Draw(light)
-    dark_draw = ImageDraw.Draw(dark)
+    mask = Image.new("L", (canvas, canvas), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    for x0, y0, x1, y1 in RECTS_LIGHT + RECTS_DARK:
+        mask_draw.rectangle([s(x0), s(y0), s(x1), s(y1)], fill=255)
 
-    light_draw.rectangle([s(330), s(362), s(442), s(790)], fill=LIGHT)
-    light_draw.rectangle([s(90), s(520), s(682), s(632)], fill=LIGHT)
-    dark_draw.rectangle([s(694), s(250), s(806), s(678)], fill=DARK)
-    dark_draw.rectangle([s(454), s(408), s(934), s(520)], fill=DARK)
+    # Horizontal gradient across the mark extent in the axis-aligned frame;
+    # after rotation it runs along the mark's diagonal like the original splash.
+    gradient_row = Image.new("RGBA", (canvas, 1))
+    gx0, gx1 = s(MARK_X0), s(MARK_X1)
+    span = max(1, gx1 - gx0)
+    for x in range(canvas):
+        t = min(1.0, max(0.0, (x - gx0) / span))
+        color = tuple(
+            round(GRAD_START_RGB[i] + t * (GRAD_END_RGB[i] - GRAD_START_RGB[i])) for i in range(3)
+        )
+        gradient_row.putpixel((x, 0), color + (255,))
+    gradient = gradient_row.resize((canvas, canvas), Image.Resampling.NEAREST)
 
-    light = light.rotate(45, resample=Image.Resampling.BICUBIC, center=(canvas // 2, canvas // 2))
-    dark = dark.rotate(45, resample=Image.Resampling.BICUBIC, center=(canvas // 2, canvas // 2))
-    image.alpha_composite(light)
-    image.alpha_composite(dark)
+    image = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
+    image.paste(gradient, (0, 0), mask)
+    image = image.rotate(PIL_ROTATION, resample=Image.Resampling.BICUBIC, center=(canvas // 2, canvas // 2))
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 

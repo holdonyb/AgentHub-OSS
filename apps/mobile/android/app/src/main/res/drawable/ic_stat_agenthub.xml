@@ -4,10 +4,15 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M9.91,3.02h2.58v3.64h4.22v2.58h-4.22v3.64H9.91V9.24H5.69V6.66h4.22z" />
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M15.04,8.1h2.58v3.64h1.94v2.58h-1.94v3.64h-2.58v-3.64h-4.22v-2.58h4.22z" />
+    <group
+        android:rotation="-45"
+        android:pivotX="12"
+        android:pivotY="12">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M8.16,5.48h2.62v13.03h-2.62zM2.93,10.69h7.85v2.62h-7.85z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M13.22,5.48h2.62v13.03h-2.62zM13.22,10.69h7.85v2.62h-7.85z" />
+    </group>
 </vector>
