@@ -953,8 +953,15 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
             )
             if created is None:
                 raise RuntimeError("Claude interactive bridge submitted the prompt but no new session was discovered")
+            created, result_text = _require_created_session_result(
+                created,
+                roots=roots,
+                backend=backend,
+                timeout_seconds=_job_timeout_seconds(payload),
+                cli_output=CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT,
+            )
             created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
-            return f"created_session_id={created_session_id}\n{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）"
+            return f"created_session_id={created_session_id}\n{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）\n{result_text}".strip()
         args = build_session_start_command(job, output_file=output_file, prompt_override=prompt_override)
         timeout_seconds = _job_timeout_seconds(payload)
         if payload.get("dry_run"):
@@ -973,8 +980,15 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
             detail = cli_output.strip()
             suffix = f": {detail[:2000]}" if detail else ""
             raise RuntimeError(f"Backend CLI completed but no new session was discovered{suffix}")
+        created, result_text = _require_created_session_result(
+            created,
+            roots=roots,
+            backend=backend,
+            timeout_seconds=timeout_seconds,
+            cli_output=cli_output,
+        )
         created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
-        return f"created_session_id={created_session_id}\n{cli_output}".strip()
+        return f"created_session_id={created_session_id}\n{result_text}".strip()
     finally:
         if output_file:
             Path(output_file).unlink(missing_ok=True)
@@ -1124,6 +1138,9 @@ def _looks_like_backend_auth_error(output: str) -> bool:
         or "invalid api key" in lowered
         or "authentication failed" in lowered
         or "unauthorized" in lowered and "api" in lowered
+        or "unsupported_country_region_territory" in lowered
+        or "failed to refresh token" in lowered
+        or "country, region, or territory not supported" in lowered
     )
 
 
@@ -1638,6 +1655,29 @@ def _poll_session_result_text(
                     return current, text
         time.sleep(0.75)
     return last_session, last_text
+
+
+def _require_created_session_result(
+    session: dict[str, Any],
+    *,
+    roots: list[Path],
+    backend: str,
+    timeout_seconds: int,
+    cli_output: str = "",
+) -> tuple[dict[str, Any], str]:
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        raise RuntimeError(f"Created {backend} session is missing session_id")
+    refreshed, result_text = _poll_session_result_text(
+        session_id,
+        roots=roots,
+        timeout_seconds=timeout_seconds,
+    )
+    if result_text.strip():
+        return refreshed or session, result_text.strip()
+    detail = cli_output.strip()
+    suffix = f": {detail[:2000]}" if detail else ""
+    raise RuntimeError(f"Created {backend} session {session_id} did not produce assistant output{suffix}")
 
 
 def _kill_tmux_session(session_name: str, cwd: str, env: dict[str, str] | None) -> None:
