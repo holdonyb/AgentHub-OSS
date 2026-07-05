@@ -246,6 +246,7 @@ install_dependencies_and_build() {
   fi
 
   log "building Web assets"
+  rm -rf apps/web/dist
   npm run web:build
 
   log "building worker bundles"

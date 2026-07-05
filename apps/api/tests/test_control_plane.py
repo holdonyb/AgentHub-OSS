@@ -787,6 +787,102 @@ def test_session_sync_after_seq_returns_newer_lower_seq_rows_for_legacy_clients(
     assert by_seq[15]["text"] == "preserved local input"
 
 
+def test_session_sync_after_seq_includes_summary_row_when_replace_reorders_seq(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-summary-compat",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-summary-compat",
+            "status": "ready",
+            "title": "Delta summary compat",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_created_at = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-summary-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 10,
+                    "item_type": "user_message",
+                    "role": "user",
+                    "text": "old prompt",
+                    "created_at": old_created_at,
+                },
+                {
+                    "seq": 20,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "old visible reply",
+                    "created_at": old_created_at,
+                },
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-summary-compat", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["next_after_seq"] == 20
+
+    summary_text = "replace publish produced a lower seq final answer"
+    second_publish = client.post(
+        "/api/internal/sessions/sess-delta-summary-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 15,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": summary_text,
+                    "created_at": old_created_at,
+                },
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-delta-summary-compat").one()
+        session.last_message = summary_text
+        session.last_role = "assistant"
+        session.last_activity_at = datetime.utcnow()
+        session.updated_at = datetime.utcnow()
+        db.commit()
+
+    second = client.get(
+        "/api/sync/session/sess-delta-summary-compat",
+        params={"after_seq": 20},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    by_seq = {item["seq"]: item for item in second_payload["items"]}
+    assert 15 in by_seq
+    assert by_seq[15]["text"] == summary_text
+
+
 def test_permission_sync_returns_incremental_pending_and_resolved_updates(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
