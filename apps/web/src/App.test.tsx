@@ -5771,6 +5771,110 @@ describe('AgentHub console', () => {
     expect(sessionDeltaUrls.some((url) => decodeURIComponent(url).includes('cursor=2026-04-26T10:00:00Z|2'))).toBe(true);
   });
 
+  it('derives a timeline cursor when preserved local inputs make seq order non-chronological', async () => {
+    const nonChronologicalTimeline = {
+      next_after_seq: 10,
+      items: [
+        {
+          session_id: 'sess-1',
+          seq: 2,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '处理中',
+          created_at: '2026-04-26T10:00:00Z',
+          updated_at: '2026-04-26T11:00:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 10,
+          item_type: 'user_message',
+          role: 'user',
+          text: '旧的本地输入',
+          created_at: '2026-04-26T09:00:00Z',
+          updated_at: '2026-04-26T11:00:00Z',
+        },
+      ],
+    };
+    const sessionDeltaUrls: string[] = [];
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(nonChronologicalTimeline);
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T11:05:00Z|sess-1',
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '非单调 seq 后补回来的最终回复',
+              last_activity_at: '2026-04-26T10:05:00Z',
+            },
+          ],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        sessionDeltaUrls.push(url);
+        const decoded = decodeURIComponent(url);
+        if (!decoded.includes('cursor=2026-04-26T11:00:00Z|10')) {
+          return jsonResponse({
+            ...sessionSyncPayload,
+            items: [],
+            next_after_seq: 10,
+            has_more: false,
+          });
+        }
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            status: 'needs_reply',
+            last_message: '非单调 seq 后补回来的最终回复',
+            last_activity_at: '2026-04-26T10:05:00Z',
+          },
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 2,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: '非单调 seq 后补回来的最终回复',
+              created_at: '2026-04-26T10:05:00Z',
+              updated_at: '2026-04-26T11:05:00Z',
+            },
+          ],
+          next_after_seq: 10,
+          next_after_cursor: '2026-04-26T11:05:00Z|2',
+          has_more: false,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('处理中')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('非单调 seq 后补回来的最终回复')).toBeInTheDocument();
+    expect(sessionDeltaUrls.some((url) => decodeURIComponent(url).includes('cursor=2026-04-26T11:00:00Z|10'))).toBe(true);
+  });
+
   it('continues paginated session delta sync so replace publishes do not hide the latest message', async () => {
     const sessionDeltaUrls: string[] = [];
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {

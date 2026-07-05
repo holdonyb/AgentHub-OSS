@@ -3364,7 +3364,8 @@ function App() {
       };
       setTimelineHasOlder((current) => (sessionId in current ? current : { ...current, [sessionId]: Boolean(payload.has_more) }));
       sessionAfterSeqRef.current[sessionId] = payload.next_after_seq ?? Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
-      sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? '';
+      sessionAfterCursorRef.current[sessionId] =
+        payload.next_after_cursor || timelineCursorForItems(payload.items) || timelineCursorForItems(merged);
     } finally {
       timelineLoadingRef.current.delete(sessionId);
     }
@@ -3461,6 +3462,20 @@ function App() {
     return `${tail.updated_at ?? ''}|${tail.session_id}`;
   }
 
+  function timelineCursorForItems(items: AgentTimelineItem[]) {
+    const itemUpdatedAt = (item: AgentTimelineItem) => (item as AgentTimelineItem & { updated_at?: string }).updated_at ?? '';
+    const ordered = items
+      .filter((item) => Number.isFinite(new Date(itemUpdatedAt(item)).getTime()))
+      .slice()
+      .sort((left, right) => {
+        const leftTime = new Date(itemUpdatedAt(left)).getTime();
+        const rightTime = new Date(itemUpdatedAt(right)).getTime();
+        return leftTime === rightTime ? timelineSeq(left) - timelineSeq(right) : leftTime - rightTime;
+      });
+    const tail = ordered[ordered.length - 1];
+    return tail ? `${itemUpdatedAt(tail)}|${timelineSeq(tail)}` : '';
+  }
+
   function permissionCursorForItems(items: AgentPermission[]) {
     if (items.length === 0) return '';
     const ordered = items
@@ -3513,7 +3528,7 @@ function App() {
 
   async function loadSessionDelta(sessionId: string) {
     let afterSeq = sessionAfterSeqRef.current[sessionId] ?? 0;
-    let cursor = sessionAfterCursorRef.current[sessionId] ?? '';
+    let cursor = sessionAfterCursorRef.current[sessionId] || timelineCursorForItems(timelineBySessionRef.current[sessionId] ?? []);
     let payload: SessionSyncPayload | null = null;
     let items: AgentTimelineItem[] = [];
     let jobs: Job[] = [];
@@ -3654,7 +3669,7 @@ function App() {
     if (nextSelectedId) {
       sessionAfterSeqRef.current[nextSelectedId] =
         timelinePayload.next_after_seq ?? Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
-      sessionAfterCursorRef.current[nextSelectedId] = timelinePayload.next_after_cursor ?? '';
+      sessionAfterCursorRef.current[nextSelectedId] = timelinePayload.next_after_cursor || timelineCursorForItems(timelinePayload.items);
       setTimelineBySession((current) => ({
         ...current,
         [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),
