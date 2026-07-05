@@ -6,6 +6,9 @@ const apiProxyUrl = process.env.VITE_AGENTHUB_API_PROXY_URL || 'http://127.0.0.1
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    emptyOutDir: true,
+  },
   server: {
     port: webPort,
     proxy: {

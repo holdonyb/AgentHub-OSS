@@ -204,6 +204,7 @@ test -f "$worker_downloads_dir/agenthub-worker-windows.zip"
 test -f "$worker_downloads_dir/agenthub-worker-linux.tar.gz"
 
 log "building Web console"
+rm -rf apps/web/dist
 npm run web:build
 test -f apps/web/dist/index.html
 

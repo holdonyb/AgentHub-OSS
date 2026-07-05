@@ -256,6 +256,8 @@ def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_
     if row.seq > after_seq:
         return True
     if row.seq == after_seq:
+        if row.item_type == "user_message":
+            return False
         return _cursor_datetime(row.updated_at) > _cursor_datetime(row.created_at)
     if legacy_updated_since is None:
         return False
@@ -263,6 +265,48 @@ def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_
     row_created_at = _cursor_datetime(row.created_at)
     row_updated_at = _cursor_datetime(row.updated_at)
     return row_created_at > changed_after or (row_created_at >= changed_after and row_updated_at > row_created_at)
+
+
+def _timeline_reflects_session_last_message(session: AgentSession, rows: list[AgentTimeline]) -> bool:
+    last_message = (session.last_message or "").strip()
+    if not last_message:
+        return True
+    return any((row.text or "").strip() == last_message for row in rows)
+
+
+def _append_summary_timeline_rows_for_legacy_after_seq(
+    db: DbSession,
+    session: AgentSession,
+    rows: list[AgentTimeline],
+    *,
+    after_seq: int,
+    cursor: str | None,
+) -> list[AgentTimeline]:
+    if after_seq <= 0 or cursor or _timeline_reflects_session_last_message(session, rows):
+        return rows
+    if session.last_role == "user":
+        return rows
+    last_message = (session.last_message or "").strip()
+    if not last_message:
+        return rows
+    summary_rows = (
+        db.query(AgentTimeline)
+        .filter(
+            AgentTimeline.space_id == session.space_id,
+            AgentTimeline.session_id == session.session_id,
+            AgentTimeline.item_type != "user_message",
+            AgentTimeline.text == last_message,
+        )
+        .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+        .limit(3)
+        .all()
+    )
+    if not summary_rows:
+        return rows
+    by_identity = {row.id: row for row in rows}
+    for row in summary_rows:
+        by_identity[row.id] = row
+    return sorted(by_identity.values(), key=lambda row: (_cursor_datetime(row.updated_at), row.seq))
 
 
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
@@ -401,6 +445,13 @@ def get_session_sync(
                 legacy_updated_since=legacy_updated_since,
             )
         ]
+        timeline_rows = _append_summary_timeline_rows_for_legacy_after_seq(
+            db,
+            session,
+            timeline_rows,
+            after_seq=after_seq,
+            cursor=cursor,
+        )
     has_more = len(timeline_rows) > limit
     page_rows = timeline_rows[:limit]
     job_rows = (
