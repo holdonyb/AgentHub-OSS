@@ -1088,7 +1088,22 @@ function latestMessages(session: AgentSession) {
 }
 
 function timelineFallback(session: AgentSession): AgentTimelineItem[] {
-  return latestMessages(session).map((message, index) => ({
+  const messages = latestMessages(session);
+  const fallbackMessages = messages.length > 0
+    ? messages
+    : session.last_message
+      ? [
+          {
+            session_id: session.session_id,
+            seq: 1,
+            role: session.last_role ?? 'assistant',
+            kind: session.last_role === 'user' ? 'user_message' : 'assistant_message',
+            text: session.last_message,
+            created_at: session.last_activity_at ?? '',
+          },
+        ]
+      : [];
+  return fallbackMessages.map((message, index) => ({
     session_id: session.session_id,
     seq: index + 1,
     item_type: String(message.kind ?? 'assistant_message') as AgentTimelineItem['item_type'],
@@ -1103,9 +1118,31 @@ function timelineFallback(session: AgentSession): AgentTimelineItem[] {
 }
 
 function sessionTimeline(session: AgentSession, loadedTimeline: AgentTimelineItem[] | undefined) {
-  if (loadedTimeline && usefulTimelineItems(loadedTimeline).length > 0) return loadedTimeline;
   const fallback = timelineFallback(session);
-  return fallback.length > 0 ? fallback : loadedTimeline ?? [];
+  if (!loadedTimeline || usefulTimelineItems(loadedTimeline).length === 0) {
+    return fallback.length > 0 ? fallback : loadedTimeline ?? [];
+  }
+  if (
+    timelineReflectsSessionLastMessage(session, loadedTimeline) ||
+    !sessionSummaryOutrunsTimeline(session, loadedTimeline) ||
+    fallback.length === 0
+  ) {
+    return loadedTimeline;
+  }
+  const existingTexts = new Set(
+    loadedTimeline.map((item) => normalizedTimelineSearchText(item.text)).filter(Boolean),
+  );
+  const maxSeq = Math.max(0, ...loadedTimeline.map((item) => timelineSeq(item)).filter(Number.isFinite));
+  const missingFallback = fallback
+    .filter((item) => {
+      const text = normalizedTimelineSearchText(item.text);
+      return Boolean(text) && !existingTexts.has(text);
+    })
+    .map((item, index) => ({
+      ...item,
+      seq: maxSeq + index + 1,
+    }));
+  return missingFallback.length > 0 ? sortTimelineItemsByCreatedAt([...loadedTimeline, ...missingFallback]) : loadedTimeline;
 }
 
 function modeOptions(provider: ProviderSnapshot | undefined, kind: string, fallback: string[]) {
@@ -2140,6 +2177,31 @@ function mergeTimelineItems(existing: AgentTimelineItem[], incoming: AgentTimeli
   return sortTimelineItemsByCreatedAt(Array.from(bySeq.values()));
 }
 
+function normalizedTimelineSearchText(value: string | null | undefined) {
+  return compactText(value ?? '', 8_000).replace(/\s+/g, ' ').trim();
+}
+
+function timelineReflectsSessionLastMessage(session: AgentSession | null | undefined, items: AgentTimelineItem[]) {
+  const lastMessage = normalizedTimelineSearchText(session?.last_message);
+  if (!lastMessage) return true;
+  return items.some((item) => {
+    const text = normalizedTimelineSearchText(item.text);
+    if (!text) return false;
+    if (text === lastMessage) return true;
+    if (lastMessage.length >= 40 && text.includes(lastMessage)) return true;
+    return text.length >= 40 && lastMessage.includes(text);
+  });
+}
+
+function latestTimelineItemTime(items: AgentTimelineItem[]) {
+  return Math.max(0, ...items.map((item) => new Date(item.created_at ?? '').getTime()).filter(Number.isFinite));
+}
+
+function sessionSummaryOutrunsTimeline(session: AgentSession, items: AgentTimelineItem[]) {
+  const sessionTime = new Date(session.last_activity_at ?? '').getTime();
+  return Number.isFinite(sessionTime) && sessionTime > latestTimelineItemTime(items);
+}
+
 function optimisticMessageKey(item: AgentTimelineItem) {
   const clientId = item.payload && typeof item.payload.client_id === 'string' ? item.payload.client_id : '';
   return clientId || `${item.session_id}:${compactText(item.text, 400)}:${item.created_at}`;
@@ -2740,6 +2802,7 @@ function App() {
   const [createdInvite, setCreatedInvite] = useState<InviteCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<AgentSession[]>([]);
+  const timelineBySessionRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
@@ -2843,6 +2906,10 @@ function App() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    timelineBySessionRef.current = timelineBySession;
+  }, [timelineBySession]);
 
   const selectedVisibleSessionIds = useMemo(
     () => filteredSessions.map((session) => session.session_id).filter((sessionId) => selectedSessionIds.has(sessionId)),
@@ -3275,16 +3342,20 @@ function App() {
   }
 
   async function loadTimelineForSession(sessionId: string, options: { force?: boolean } = {}) {
-    if (!options.force && timelineBySession[sessionId]) return;
+    if (!options.force && timelineBySessionRef.current[sessionId]) return;
     if (timelineLoadingRef.current.has(sessionId)) return;
     timelineLoadingRef.current.add(sessionId);
     try {
       const payload = await apiGet<TimelinePayload>(`/api/sessions/${sessionId}/timeline`);
-      const merged = mergeServerTimeline(sessionId, timelineBySession[sessionId] ?? [], payload.items);
+      const merged = mergeServerTimeline(sessionId, timelineBySessionRef.current[sessionId] ?? [], payload.items);
       setTimelineBySession((current) => ({
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [sessionId]: merged,
+      };
       setTimelineHasOlder((current) => (sessionId in current ? current : { ...current, [sessionId]: Boolean(payload.has_more) }));
       sessionAfterSeqRef.current[sessionId] = payload.next_after_seq ?? Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
       sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? '';
@@ -3474,6 +3545,10 @@ function App() {
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [sessionId]: mergeServerTimeline(sessionId, timelineBySessionRef.current[sessionId] ?? [], items),
+      };
       if (keepPinnedToBottom) {
         window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
       }
@@ -3555,6 +3630,14 @@ function App() {
         ...current,
         [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [nextSelectedId]: mergeServerTimeline(
+          nextSelectedId,
+          timelineBySessionRef.current[nextSelectedId] ?? [],
+          timelinePayload.items,
+        ),
+      };
       setTimelineHasOlder((current) => (
         nextSelectedId in current ? current : { ...current, [nextSelectedId]: Boolean(timelinePayload.has_more) }
       ));
@@ -3816,17 +3899,22 @@ function App() {
         const inboxDelta = await loadInboxDelta(sessionArchiveView);
         await loadPermissionDelta();
         if (selectedSessionId) {
+          const timelineBeforeDelta = timelineBySessionRef.current[selectedSessionId] ?? [];
           const sessionDelta = await loadSessionDelta(selectedSessionId);
           const selectedInboxSession =
             inboxDelta?.items.find((session) => session.session_id === selectedSessionId) ?? null;
+          const selectedSyncedSession = selectedInboxSession ?? sessionDelta.session;
           const summaryChanged =
-            Boolean(selectedInboxSession) &&
+            Boolean(selectedSyncedSession && selectedBeforeSync) &&
             (
-              selectedInboxSession?.last_activity_at !== selectedBeforeSync?.last_activity_at ||
-              selectedInboxSession?.last_message !== selectedBeforeSync?.last_message ||
-              selectedInboxSession?.status !== selectedBeforeSync?.status
+              selectedSyncedSession.last_activity_at !== selectedBeforeSync?.last_activity_at ||
+              selectedSyncedSession.last_message !== selectedBeforeSync?.last_message ||
+              selectedSyncedSession.status !== selectedBeforeSync?.status
             );
-          if (summaryChanged && sessionDelta.items.length === 0) {
+          const mergedDeltaTimeline = mergeTimelineItems(timelineBeforeDelta, sessionDelta.items);
+          const timelineStillMissingSummary =
+            summaryChanged && !timelineReflectsSessionLastMessage(selectedSyncedSession, mergedDeltaTimeline);
+          if (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) {
             await loadTimelineForSession(selectedSessionId, { force: true });
           }
         }

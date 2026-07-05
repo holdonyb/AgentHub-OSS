@@ -123,6 +123,75 @@ def test_sync_status_changes_only_when_relevant_state_changes(client: TestClient
     assert changed_payload["workers_digest"] == first_payload["workers_digest"]
 
 
+def test_sync_status_digest_changes_when_same_timeline_seq_is_updated(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    session_response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-sync-status-same-seq",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-sync-status-same-seq",
+            "status": "ready",
+            "title": "Same seq sync",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert session_response.status_code == 200, session_response.text
+
+    first_publish = client.post(
+        "/api/internal/sessions/sess-sync-status-same-seq/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 2,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "处理中",
+                    "created_at": "2026-04-26T10:01:00Z",
+                }
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+    first = client.get("/api/sync/status?selected_session_id=sess-sync-status-same-seq", headers=headers)
+    assert first.status_code == 200, first.text
+
+    second_publish = client.post(
+        "/api/internal/sessions/sess-sync-status-same-seq/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 2,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "最终回复已经到了",
+                    "created_at": "2026-04-26T10:01:00Z",
+                }
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+    second = client.get("/api/sync/status?selected_session_id=sess-sync-status-same-seq", headers=headers)
+    assert second.status_code == 200, second.text
+    assert second.json()["selected_timeline_digest"] != first.json()["selected_timeline_digest"]
+
+
 def test_operator_can_enqueue_session_fast_refresh_and_toggle_jobs(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
