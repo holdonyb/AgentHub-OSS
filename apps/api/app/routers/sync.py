@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, or_
+from sqlalchemy import and_, case, func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import load_only
 
 from app.core.deps import Actor, DbSession, require_min_role
@@ -274,6 +275,74 @@ def _timeline_reflects_session_last_message(session: AgentSession, rows: list[Ag
     return any((row.text or "").strip() == last_message for row in rows)
 
 
+def _timeline_type_for_summary_role(role: str) -> str:
+    if role == "system":
+        return "error"
+    return "assistant_message"
+
+
+def _latest_summary_timeline_rows(db: DbSession, session: AgentSession, last_message: str) -> list[AgentTimeline]:
+    return (
+        db.query(AgentTimeline)
+        .filter(
+            AgentTimeline.space_id == session.space_id,
+            AgentTimeline.session_id == session.session_id,
+            AgentTimeline.item_type != "user_message",
+            AgentTimeline.text == last_message,
+        )
+        .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+        .limit(3)
+        .all()
+    )
+
+
+def _materialize_summary_timeline_row(db: DbSession, session: AgentSession, last_message: str) -> AgentTimeline | None:
+    role = session.last_role or "assistant"
+    created_at = session.last_activity_at or session.updated_at or datetime.utcnow()
+    updated_at = session.updated_at or datetime.utcnow()
+    for _ in range(2):
+        max_seq = (
+            db.query(func.max(AgentTimeline.seq))
+            .filter(AgentTimeline.session_id == session.session_id)
+            .scalar()
+            or 0
+        )
+        row = AgentTimeline(
+            space_id=session.space_id,
+            session_id=session.session_id,
+            seq=int(max_seq) + 1,
+            item_type=_timeline_type_for_summary_role(role),
+            role=role,
+            text=last_message,
+            status="completed",
+            payload_json=dumps_json({"source": "session_summary_reconciliation"}),
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+        db.add(row)
+        try:
+            db.flush()
+            db.commit()
+            return row
+        except IntegrityError:
+            db.rollback()
+            existing = _latest_summary_timeline_rows(db, session, last_message)
+            if existing:
+                return existing[0]
+    return None
+
+
+def _merge_summary_rows_first(rows: list[AgentTimeline], summary_rows: list[AgentTimeline]) -> list[AgentTimeline]:
+    merged: list[AgentTimeline] = []
+    seen: set[str] = set()
+    for row in [*summary_rows, *rows]:
+        if row.id in seen:
+            continue
+        seen.add(row.id)
+        merged.append(row)
+    return merged
+
+
 def _append_summary_timeline_rows_for_legacy_after_seq(
     db: DbSession,
     session: AgentSession,
@@ -289,24 +358,13 @@ def _append_summary_timeline_rows_for_legacy_after_seq(
     last_message = (session.last_message or "").strip()
     if not last_message:
         return rows
-    summary_rows = (
-        db.query(AgentTimeline)
-        .filter(
-            AgentTimeline.space_id == session.space_id,
-            AgentTimeline.session_id == session.session_id,
-            AgentTimeline.item_type != "user_message",
-            AgentTimeline.text == last_message,
-        )
-        .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
-        .limit(3)
-        .all()
-    )
+    summary_rows = _latest_summary_timeline_rows(db, session, last_message)
+    if not summary_rows:
+        materialized = _materialize_summary_timeline_row(db, session, last_message)
+        summary_rows = [materialized] if materialized is not None else []
     if not summary_rows:
         return rows
-    by_identity = {row.id: row for row in rows}
-    for row in summary_rows:
-        by_identity[row.id] = row
-    return sorted(by_identity.values(), key=lambda row: (_cursor_datetime(row.updated_at), row.seq))
+    return _merge_summary_rows_first(rows, summary_rows)
 
 
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
