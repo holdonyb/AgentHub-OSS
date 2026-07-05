@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 
 from app.core.audit import write_event
 from app.core.config import get_settings
@@ -739,6 +740,7 @@ def _preserved_session_input_rows(existing_rows: list[AgentTimeline]) -> list[di
             continue
         preserved.append(
             {
+                "seq": row.seq,
                 "item_type": row.item_type,
                 "role": row.role,
                 "text": row.text,
@@ -797,6 +799,41 @@ def _merge_replace_timeline_with_local_inputs(existing_rows: list[AgentTimeline]
     return merged
 
 
+def _payload_created_at_supplied(payload: dict[str, Any]) -> bool:
+    return payload.get("created_at") is not None
+
+
+def _timeline_row_matches_payload(
+    item: AgentTimeline,
+    payload: dict[str, Any],
+    *,
+    item_type: str,
+    text: str,
+    payload_json: dict[str, Any],
+    created_at: datetime | None,
+    space_id: str | None,
+) -> bool:
+    if item.space_id is None and space_id is not None:
+        return False
+    if item.item_type != item_type:
+        return False
+    if item.role != (payload.get("role") if isinstance(payload.get("role"), str) else None):
+        return False
+    if item.text != text:
+        return False
+    if item.tool_call_id != (payload.get("tool_call_id") if isinstance(payload.get("tool_call_id"), str) else None):
+        return False
+    if item.tool_name != (payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else None):
+        return False
+    if item.status != (payload.get("status") if isinstance(payload.get("status"), str) else None):
+        return False
+    if loads_json(item.payload_json, {}) != payload_json:
+        return False
+    if _payload_created_at_supplied(payload) and created_at is not None and item.created_at != created_at:
+        return False
+    return True
+
+
 def upsert_timeline_items(
     db: Any,
     session_id: str,
@@ -811,9 +848,6 @@ def upsert_timeline_items(
     existing_rows = existing_query.all()
     if replace:
         items = _merge_replace_timeline_with_local_inputs(existing_rows, items)
-        existing_query.delete()
-        db.flush()
-        existing_rows = []
     existing = {item.seq: item for item in existing_rows}
     next_seq = (max(existing) + 1) if existing else 1
     saved: list[AgentTimeline] = []
@@ -828,25 +862,100 @@ def upsert_timeline_items(
         next_seq = max(next_seq, seq + 1)
         item = existing.get(seq)
         is_new_item = item is None
+        text = strip_ansi(str(payload.get("text") or ""))
+        payload_json = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        created_at = _parse_created_at(payload.get("created_at")) if is_new_item or _payload_created_at_supplied(payload) else None
         if item is None:
             item = AgentTimeline(space_id=space_id, session_id=session_id, seq=seq)
             db.add(item)
             existing[seq] = item
-        elif item.space_id is None and space_id is not None:
+        changed = is_new_item or not _timeline_row_matches_payload(
+            item,
+            payload,
+            item_type=item_type,
+            text=text,
+            payload_json=payload_json,
+            created_at=created_at,
+            space_id=space_id,
+        )
+        if item.space_id is None and space_id is not None:
             item.space_id = space_id
+            changed = True
         item.item_type = item_type
         item.role = payload.get("role") if isinstance(payload.get("role"), str) else None
-        item.text = strip_ansi(str(payload.get("text") or ""))
+        item.text = text
         item.tool_call_id = payload.get("tool_call_id") if isinstance(payload.get("tool_call_id"), str) else None
         item.tool_name = payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else None
         item.status = payload.get("status") if isinstance(payload.get("status"), str) else None
-        item.payload_json = dumps_json(payload.get("payload") if isinstance(payload.get("payload"), dict) else {})
-        if is_new_item or payload.get("created_at") is not None:
-            item.created_at = _parse_created_at(payload.get("created_at"))
-        item.updated_at = now
+        item.payload_json = dumps_json(payload_json)
+        if created_at is not None:
+            item.created_at = created_at
+        if changed:
+            item.updated_at = now
         saved.append(item)
     db.flush()
     return saved
+
+
+def _summary_timeline_item_type_for_role(role: str) -> str:
+    if role == "system":
+        return "error"
+    return "assistant_message"
+
+
+def _latest_summary_timeline_row(db: Any, session: AgentSession, last_message: str) -> AgentTimeline | None:
+    return (
+        db.query(AgentTimeline)
+        .filter(
+            AgentTimeline.space_id == session.space_id,
+            AgentTimeline.session_id == session.session_id,
+            AgentTimeline.item_type != "user_message",
+            AgentTimeline.text == last_message,
+        )
+        .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+        .first()
+    )
+
+
+def session_needs_summary_timeline_row(db: Any, session: AgentSession) -> bool:
+    last_message = (session.last_message or "").strip()
+    if not last_message or session.last_role == "user":
+        return False
+    return _latest_summary_timeline_row(db, session, last_message) is None
+
+
+def ensure_session_summary_timeline_row(db: Any, session: AgentSession) -> AgentTimeline | None:
+    last_message = (session.last_message or "").strip()
+    if not session_needs_summary_timeline_row(db, session):
+        return None
+    max_seq_row = (
+        db.query(AgentTimeline.seq)
+        .filter(AgentTimeline.session_id == session.session_id)
+        .order_by(AgentTimeline.seq.desc())
+        .first()
+    )
+    next_seq = int(max_seq_row[0]) + 1 if max_seq_row else 1
+    role = session.last_role or "assistant"
+    created_at = session.last_activity_at or session.updated_at or utcnow()
+    row = AgentTimeline(
+        space_id=session.space_id,
+        session_id=session.session_id,
+        seq=next_seq,
+        item_type=_summary_timeline_item_type_for_role(role),
+        role=role,
+        text=last_message,
+        status="completed",
+        payload_json=dumps_json({"source": "session_summary_reconciliation"}),
+        created_at=created_at,
+        updated_at=utcnow(),
+    )
+    db.add(row)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        return None
+    return row
 
 
 def _message_from_timeline(item: AgentTimeline) -> dict[str, Any] | None:

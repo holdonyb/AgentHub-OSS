@@ -13,7 +13,14 @@ from app.core.deps import Actor, DbSession, require_min_role
 from app.core.json import dumps_json
 from app.models import AgentPermission, AgentSession, AgentTimeline, Job, ProviderSnapshot, Schedule, Worker
 from app.schemas import InboxSyncOut, PermissionSyncOut, SessionSyncOut, SyncStatusOut
-from app.services import job_out, permission_out, session_out, session_summary_out, timeline_item_out
+from app.services import (
+    ensure_session_summary_timeline_row,
+    job_out,
+    permission_out,
+    session_out,
+    session_summary_out,
+    timeline_item_out,
+)
 
 router = APIRouter()
 EPOCH_UTC = datetime.fromtimestamp(0, tz=timezone.utc)
@@ -243,12 +250,59 @@ def _timeline_delta_query(
             legacy_filters.append(
                 and_(
                     AgentTimeline.seq < after_seq,
-                    AgentTimeline.created_at >= legacy_updated_since,
+                    or_(
+                        AgentTimeline.created_at >= legacy_updated_since,
+                        AgentTimeline.updated_at >= legacy_updated_since,
+                    ),
                 )
             )
         query = query.filter(or_(*legacy_filters))
         return query.order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
     return query.order_by(AgentTimeline.seq.asc())
+
+
+def _timeline_cursor_filter(updated_after: datetime, seq_after: int):
+    return or_(
+        AgentTimeline.updated_at > updated_after,
+        and_(AgentTimeline.updated_at == updated_after, AgentTimeline.seq > seq_after),
+    )
+
+
+def _cursor_timeline_rows(
+    db: DbSession,
+    space_id: str | None,
+    session: AgentSession,
+    *,
+    cursor: str,
+    limit: int,
+) -> list[AgentTimeline]:
+    updated_after, seq_after = _decode_timeline_cursor(cursor)
+    base_filters = (
+        AgentTimeline.space_id == space_id,
+        AgentTimeline.session_id == session.session_id,
+        _timeline_cursor_filter(updated_after, seq_after),
+    )
+    live_rows = (
+        db.query(AgentTimeline)
+        .filter(*base_filters)
+        .filter(AgentTimeline.created_at >= updated_after)
+        .order_by(AgentTimeline.created_at.asc(), AgentTimeline.seq.asc())
+        .limit(limit + 1)
+        .all()
+    )
+    if len(live_rows) > limit:
+        return live_rows
+
+    backfill_limit = max(1, limit + 1 - len(live_rows))
+    backfill_rows = (
+        db.query(AgentTimeline)
+        .filter(*base_filters)
+        .filter(AgentTimeline.created_at < updated_after)
+        .order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
+        .limit(backfill_limit)
+        .all()
+    )
+    return _dedupe_timeline_rows([*live_rows, *backfill_rows])
 
 
 def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_updated_since: datetime | None) -> bool:
@@ -265,7 +319,10 @@ def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_
     changed_after = _cursor_datetime(legacy_updated_since)
     row_created_at = _cursor_datetime(row.created_at)
     row_updated_at = _cursor_datetime(row.updated_at)
-    return row_created_at > changed_after or (row_created_at >= changed_after and row_updated_at > row_created_at)
+    return (
+        row_created_at > changed_after
+        or (row_updated_at > row_created_at and row_updated_at >= changed_after)
+    )
 
 
 def _timeline_reflects_session_last_message(session: AgentSession, rows: list[AgentTimeline]) -> bool:
@@ -365,6 +422,98 @@ def _append_summary_timeline_rows_for_legacy_after_seq(
     if not summary_rows:
         return rows
     return _merge_summary_rows_first(rows, summary_rows)
+
+
+def _append_summary_timeline_rows_for_cursor(
+    db: DbSession,
+    session: AgentSession,
+    rows: list[AgentTimeline],
+    *,
+    cursor: str,
+) -> list[AgentTimeline]:
+    if not cursor or _timeline_reflects_session_last_message(session, rows):
+        return rows
+    if session.last_role == "user":
+        return rows
+    last_message = (session.last_message or "").strip()
+    if not last_message:
+        return rows
+    summary_rows = _latest_summary_timeline_rows(db, session, last_message)
+    if not summary_rows:
+        materialized = _materialize_summary_timeline_row(db, session, last_message)
+        summary_rows = [materialized] if materialized is not None else []
+    if not summary_rows:
+        return rows
+    updated_after, seq_after = _decode_timeline_cursor(cursor)
+    summary_rows = [
+        row
+        for row in summary_rows
+        if _cursor_datetime(row.updated_at) > updated_after
+        or (_cursor_datetime(row.updated_at) == updated_after and row.seq > seq_after)
+    ]
+    if not summary_rows:
+        return rows
+    return _merge_summary_rows_first(rows, summary_rows)
+
+
+def _dedupe_timeline_rows(rows: list[AgentTimeline]) -> list[AgentTimeline]:
+    merged: list[AgentTimeline] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.id in seen:
+            continue
+        seen.add(row.id)
+        merged.append(row)
+    return merged
+
+
+def _legacy_after_seq_timeline_rows(
+    db: DbSession,
+    space_id: str | None,
+    session: AgentSession,
+    *,
+    after_seq: int,
+    legacy_updated_since: datetime | None,
+    limit: int,
+) -> list[AgentTimeline]:
+    newer_rows = (
+        db.query(AgentTimeline)
+        .filter(AgentTimeline.space_id == space_id, AgentTimeline.session_id == session.session_id)
+        .filter(AgentTimeline.seq >= after_seq)
+        .order_by(AgentTimeline.seq.asc())
+        .limit(limit + 1)
+        .all()
+    )
+    lower_updated_rows: list[AgentTimeline] = []
+    if legacy_updated_since is not None:
+        lower_updated_rows = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.space_id == space_id, AgentTimeline.session_id == session.session_id)
+            .filter(
+                AgentTimeline.seq < after_seq,
+                or_(
+                    AgentTimeline.created_at >= legacy_updated_since,
+                    AgentTimeline.updated_at >= legacy_updated_since,
+                ),
+            )
+            .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.seq.desc())
+            .limit(limit + 1)
+            .all()
+        )
+
+    rows = [
+        row
+        for row in [*newer_rows, *lower_updated_rows]
+        if _include_legacy_after_seq_row(row, after_seq=after_seq, legacy_updated_since=legacy_updated_since)
+    ]
+    rows = _append_summary_timeline_rows_for_legacy_after_seq(
+        db,
+        session,
+        _dedupe_timeline_rows(rows),
+        after_seq=after_seq,
+        cursor=None,
+    )
+    return _dedupe_timeline_rows(rows)
 
 
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
@@ -484,32 +633,40 @@ def get_session_sync(
     )
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    if ensure_session_summary_timeline_row(db, session) is not None:
+        db.commit()
     legacy_updated_since = session.last_activity_at or session.updated_at
-    timeline_rows = _timeline_delta_query(
-        db,
-        actor.space_id,
-        session_id,
-        cursor=cursor,
-        after_seq=after_seq,
-        legacy_updated_since=legacy_updated_since,
-    ).limit(limit + 1).all()
-    if after_seq > 0 and not cursor:
-        timeline_rows = [
-            row
-            for row in timeline_rows
-            if _include_legacy_after_seq_row(
-                row,
-                after_seq=after_seq,
-                legacy_updated_since=legacy_updated_since,
-            )
-        ]
-        timeline_rows = _append_summary_timeline_rows_for_legacy_after_seq(
+    if cursor:
+        timeline_rows = _append_summary_timeline_rows_for_cursor(
             db,
             session,
-            timeline_rows,
-            after_seq=after_seq,
+            _cursor_timeline_rows(
+                db,
+                actor.space_id,
+                session,
+                cursor=cursor,
+                limit=limit,
+            ),
             cursor=cursor,
         )
+    elif after_seq > 0:
+        timeline_rows = _legacy_after_seq_timeline_rows(
+            db,
+            actor.space_id,
+            session,
+            after_seq=after_seq,
+            legacy_updated_since=legacy_updated_since,
+            limit=limit,
+        )
+    else:
+        timeline_rows = _timeline_delta_query(
+            db,
+            actor.space_id,
+            session_id,
+            cursor=cursor,
+            after_seq=after_seq,
+            legacy_updated_since=legacy_updated_since,
+        ).limit(limit + 1).all()
     has_more = len(timeline_rows) > limit
     page_rows = timeline_rows[:limit]
     job_rows = (
@@ -524,7 +681,8 @@ def get_session_sync(
         next_after_seq = max([after_seq, *(row.seq for row in page_rows)])
     next_after_cursor = cursor
     if page_rows:
-        next_after_cursor = _encode_timeline_cursor(page_rows[-1].updated_at, page_rows[-1].seq)
+        cursor_tail = max(page_rows, key=lambda row: (_cursor_datetime(row.updated_at), row.seq))
+        next_after_cursor = _encode_timeline_cursor(cursor_tail.updated_at, cursor_tail.seq)
     return SessionSyncOut(
         session=session_out(session),
         items=[timeline_item_out(item) for item in page_rows],

@@ -87,6 +87,7 @@ def _recover_job_rows(db: Session, jobs: list[Job], *, worker_id_for_event: str)
             event_type="job.fail_stale",
             level="warning",
             payload={
+                "type": "stale_job",
                 "worker_id": job.worker_id or worker_id_for_event,
                 "job_id": job.job_id,
                 "kind": job.kind,
@@ -149,6 +150,7 @@ def recover_orphaned_running_jobs(
             event_type="job.fail_orphaned",
             level="warning",
             payload={
+                "type": "stale_job",
                 "worker_id": worker_id,
                 "job_id": job.job_id,
                 "kind": job.kind,
@@ -220,6 +222,7 @@ def _recover_disconnected_worker_jobs(db: Session, worker: Worker, now: datetime
             event_type="job.fail_worker_offline",
             level="warning",
             payload={
+                "type": "worker_offline",
                 "worker_id": worker.worker_id,
                 "job_id": job.job_id,
                 "kind": job.kind,
@@ -259,7 +262,9 @@ def recover_disconnected_workers_for_space(db: Session, space_id: str | None) ->
             event_type="worker.offline_heartbeat_expired",
             level="warning",
             payload={
+                "type": "worker_offline",
                 "worker_id": worker.worker_id,
+                "job_id": None,
                 "reason": "heartbeat_expired",
                 "heartbeat_offline_seconds": settings.heartbeat_offline_seconds,
             },
