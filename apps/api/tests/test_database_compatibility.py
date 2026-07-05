@@ -11,6 +11,44 @@ def _sqlite_index_names(engine, table_name: str) -> set[str]:
         return {row[1] for row in conn.execute(text(f"PRAGMA index_list('{table_name}')")).all()}
 
 
+def _sqlite_column_names(engine, table_name: str) -> set[str]:
+    with engine.connect() as conn:
+        return {row[1] for row in conn.execute(text(f"PRAGMA table_info('{table_name}')")).all()}
+
+
+def test_ensure_compatible_columns_adds_timeline_updated_at_to_legacy_sqlite(tmp_path: Path) -> None:
+    from app.core.database import _ensure_compatible_columns
+
+    db_path = tmp_path / "legacy-agenthub.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path.as_posix()}", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE agent_sessions (session_id VARCHAR(180), created_at DATETIME)"))
+        conn.execute(
+            text(
+                "CREATE TABLE agent_timeline ("
+                "id VARCHAR(64), session_id VARCHAR(180), seq INTEGER, item_type VARCHAR(64), "
+                "role VARCHAR(32), text TEXT, payload_json TEXT, created_at DATETIME, space_id VARCHAR(64)"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agent_timeline "
+                "(id, session_id, seq, item_type, role, text, payload_json, created_at, space_id) "
+                "VALUES ('tli_1', 'sess_1', 1, 'assistant_message', 'assistant', 'ready', '{}', "
+                "'2026-07-05 12:34:56', 'spc_1')"
+            )
+        )
+
+    _ensure_compatible_columns(engine)
+
+    assert "updated_at" in _sqlite_column_names(engine, "agent_timeline")
+    with engine.connect() as conn:
+        updated_at = conn.execute(text("SELECT updated_at FROM agent_timeline WHERE id = 'tli_1'")).scalar_one()
+
+    assert str(updated_at) == "2026-07-05 12:34:56"
+
+
 def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_path: Path) -> None:
     from app.core.database import _ensure_compatible_indexes
 
