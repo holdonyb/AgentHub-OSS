@@ -33,6 +33,12 @@ Run FI-4 only:
 .\.venv\Scripts\python.exe -m pytest apps/api/tests/fault_injection -m fi_4 -q
 ```
 
+Run FI-5 only:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest apps/api/tests/fault_injection -m fi_5 -q
+```
+
 FI-1 currently covers the control-plane recovery contract for a worker that dies
 or restarts after claiming a job: the active job must be recovered into a
 terminal state, the target session must unblock, late zombie completion must be
@@ -53,6 +59,11 @@ FI-4 currently covers concurrent control-plane dispatch: ten sessions are
 created and queued concurrently, the worker claims each unique job exactly once,
 all jobs reach a terminal succeeded state, all sessions return to ready, and the
 run fails if SQLite lock or duplicate-job behavior appears.
+
+FI-5 currently covers notification-channel failure: a configured completion
+notification webhook returns 500 on every attempt, AgentHub retries the bounded
+number of attempts, records a structured `notification.delivery_failed` event,
+and still returns the job/session to the correct final state.
 
 Scenario runs write machine-readable evidence to
 `apps/api/tests/fault_injection/reports/` by default. Override with
