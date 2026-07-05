@@ -1178,6 +1178,64 @@ def test_codex_default_turn_falls_back_to_cli_resume_for_invalid_thread_id(
     assert calls[0]["args"][-2:] == ["autopilot-cockpit-2026-06-13", "继续执行"]
 
 
+def test_codex_default_turn_falls_back_to_cli_resume_for_missing_rollout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'no rollout found for thread id 019d44a7-836c-7343-aec0-8157ec130512'}"
+        )
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(
+            {
+                "args": args,
+                "cwd": cwd,
+                "timeout_seconds": timeout_seconds,
+                "output_file": output_file,
+                "env": env,
+            }
+        )
+        return "resume missing-rollout fallback"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-missing-rollout-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "019d44a7-836c-7343-aec0-8157ec130512",
+            "workspace_root": "E:/work",
+            "payload": {
+                "prompt": "继续执行",
+                "raw_prompt": "继续执行",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "timeout_seconds": 66,
+            },
+        },
+        client=object(),
+        worker_id="vm-openaitest",
+    )
+
+    assert result == "resume missing-rollout fallback"
+    assert calls[0]["cwd"] == "E:/work"
+    assert calls[0]["timeout_seconds"] == 66
+    assert calls[0]["args"][-2:] == ["019d44a7-836c-7343-aec0-8157ec130512", "继续执行"]
+
+
 def test_codex_native_plan_falls_back_to_cli_plan_prompt_when_app_server_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
 
