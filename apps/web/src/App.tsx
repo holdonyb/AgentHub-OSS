@@ -1123,13 +1123,14 @@ function timelineFallback(session: AgentSession): AgentTimelineItem[] {
 }
 
 function sessionTimeline(session: AgentSession, loadedTimeline: AgentTimelineItem[] | undefined) {
+  const metadataMessages = latestMessages(session);
   const fallback = timelineFallback(session);
   if (!loadedTimeline || usefulTimelineItems(loadedTimeline).length === 0) {
     return fallback.length > 0 ? fallback : loadedTimeline ?? [];
   }
   if (
     timelineReflectsSessionLastMessage(session, loadedTimeline) ||
-    !sessionSummaryOutrunsTimeline(session, loadedTimeline) ||
+    (metadataMessages.length === 0 && !sessionSummaryOutrunsTimeline(session, loadedTimeline)) ||
     fallback.length === 0
   ) {
     return loadedTimeline;

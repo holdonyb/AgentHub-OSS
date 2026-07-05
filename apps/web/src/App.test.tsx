@@ -5587,6 +5587,101 @@ describe('AgentHub console', () => {
     expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
   });
 
+  it('shows session metadata fallback when newer tool activity makes the stale timeline look current', async () => {
+    const staleTimeline = {
+      items: [
+        {
+          session_id: 'sess-1',
+          seq: 1,
+          item_type: 'user_message',
+          role: 'user',
+          text: '先看看',
+          created_at: '2026-04-26T10:00:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 2,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '处理中',
+          created_at: '2026-04-26T10:01:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 3,
+          item_type: 'tool_call',
+          role: 'system',
+          text: '后台执行中',
+          created_at: '2026-04-26T10:06:00Z',
+        },
+      ],
+      next_after_seq: 3,
+      next_after_cursor: '2026-04-26T10:06:00Z|3',
+    };
+    const syncedSession = {
+      ...sessionPayload.items[0],
+      status: 'needs_reply',
+      last_message: '最终回复已经到了',
+      last_activity_at: '2026-04-26T10:04:00Z',
+      runtime_metadata: {
+        messages: [
+          {
+            session_id: 'sess-1',
+            seq: 99,
+            role: 'assistant',
+            kind: 'assistant_message',
+            text: '最终回复已经到了',
+            created_at: '2026-04-26T10:04:00Z',
+          },
+        ],
+      },
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(staleTimeline);
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:04:00Z|sess-1',
+          items: [syncedSession],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: syncedSession,
+          items: [],
+          next_after_seq: 3,
+          next_after_cursor: '2026-04-26T10:06:00Z|3',
+          has_more: false,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('处理中')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
+  });
+
   it('falls back to a full timeline refresh when summary changes but delta only contains non-message activity', async () => {
     let timelineFetches = 0;
     const staleTimeline = {
