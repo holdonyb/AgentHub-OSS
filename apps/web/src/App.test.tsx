@@ -980,7 +980,17 @@ describe('AgentHub console', () => {
       if (url.endsWith('/api/auth/me')) {
         return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
       }
-      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/sessions')) {
+        return jsonResponse({
+          items: [
+            {
+              ...sessionPayload.items[0],
+              last_message: timelinePayload.items[1].text,
+              activity_summary: timelinePayload.items[1].text,
+            },
+          ],
+        });
+      }
       if (url.endsWith('/api/workers')) return jsonResponse(workersPayload);
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -2621,7 +2631,17 @@ describe('AgentHub console', () => {
       if (url.endsWith('/api/auth/me')) {
         return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
       }
-      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/sessions')) {
+        return jsonResponse({
+          items: [
+            {
+              ...sessionPayload.items[0],
+              last_message: longText,
+              activity_summary: longText,
+            },
+          ],
+        });
+      }
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -2648,20 +2668,32 @@ describe('AgentHub console', () => {
 
     render(<App />);
 
-    expect(await screen.findByText(/移动端复制全文/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '复制全文' }));
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(await within(transcript).findByText(/移动端复制全文/)).toBeInTheDocument();
+    fireEvent.click(within(transcript).getByRole('button', { name: '复制全文' }));
     await waitFor(() => expect(nativeCopyText).toHaveBeenCalledWith(longText));
     expect(await screen.findByText('已复制')).toBeInTheDocument();
     delete (window as unknown as { AgentHubAndroid?: unknown }).AgentHubAndroid;
   });
 
   it('shows html preview only for assistant messages in full reader', async () => {
+    const htmlText = '<div style="color:red"><h1>Report</h1><p>Hello</p></div>';
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/auth/me')) {
         return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
       }
-      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/sessions')) {
+        return jsonResponse({
+          items: [
+            {
+              ...sessionPayload.items[0],
+              last_message: htmlText,
+              activity_summary: htmlText,
+            },
+          ],
+        });
+      }
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -2676,7 +2708,7 @@ describe('AgentHub console', () => {
               seq: 1,
               item_type: 'assistant_message',
               role: 'assistant',
-              text: '<div style="color:red"><h1>Report</h1><p>Hello</p></div>',
+              text: htmlText,
               created_at: '2026-04-26T10:00:00Z',
             },
           ],
@@ -2690,8 +2722,9 @@ describe('AgentHub console', () => {
 
     const sessionTitles = await screen.findAllByText('修复移动控制台');
     fireEvent.click(sessionTitles[0]);
-    await screen.findByText(/Report/);
-    fireEvent.click(screen.getByRole('button', { name: '全文阅读' }));
+    const transcript = await screen.findByLabelText('Transcript');
+    await within(transcript).findByText(/Report/);
+    fireEvent.click(within(transcript).getByRole('button', { name: '全文阅读' }));
     const dialog = await screen.findByRole('dialog', { name: '全文阅读' });
     expect(within(dialog).getByRole('tab', { name: 'HTML' })).toBeInTheDocument();
     expect(within(dialog).getByRole('tab', { name: '运行' })).toBeInTheDocument();
@@ -5449,6 +5482,82 @@ describe('AgentHub console', () => {
       if (url.includes('/api/sync/inbox')) {
         return jsonResponse({
           cursor: '2026-04-26T10:04:00Z|sess-1',
+          items: [syncedSession],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: syncedSession,
+          items: [],
+          next_after_seq: 2,
+          next_after_cursor: '2026-04-26T10:01:00Z|2',
+          has_more: false,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('处理中')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
+  });
+
+  it('shows session metadata fallback when the summary changes at the same timestamp as the stale timeline', async () => {
+    const staleTimeline = {
+      items: [
+        {
+          session_id: 'sess-1',
+          seq: 1,
+          item_type: 'user_message',
+          role: 'user',
+          text: '先看看',
+          created_at: '2026-04-26T10:00:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 2,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '处理中',
+          created_at: '2026-04-26T10:01:00Z',
+        },
+      ],
+      next_after_seq: 2,
+      next_after_cursor: '2026-04-26T10:01:00Z|2',
+    };
+    const syncedSession = {
+      ...sessionPayload.items[0],
+      status: 'needs_reply',
+      last_message: '最终回复已经到了',
+      last_activity_at: '2026-04-26T10:01:00Z',
+      runtime_metadata: {},
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(staleTimeline);
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:01:00Z|sess-1',
           items: [syncedSession],
           removed_session_ids: [],
         });
