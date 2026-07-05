@@ -740,7 +740,7 @@ def start_session(
             "project_name": _job_project_name(workspace_root, payload.project_name),
             "namespace": payload.namespace or "default",
             "start_mode": "new",
-            "timeout_seconds": get_settings().default_session_job_timeout_seconds,
+            "timeout_seconds": payload.timeout_seconds or get_settings().default_session_job_timeout_seconds,
         },
     )
     write_event(

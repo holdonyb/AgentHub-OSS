@@ -382,6 +382,7 @@ class SessionStartIn(BaseModel):
     prompt: str = Field(min_length=1)
     title: str | None = Field(default=None, max_length=160)
     controls: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int | None = Field(default=None, ge=60)
 
 
 class SessionForkIn(BaseModel):

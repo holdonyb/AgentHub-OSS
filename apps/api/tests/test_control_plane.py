@@ -3064,6 +3064,22 @@ def test_session_start_creates_worker_owned_job_with_controls_and_audit(client: 
     assert job["payload"]["title"] == "AgentHub UI session"
     assert job["payload"]["controls"]["permission_mode"] == "auto"
     assert job["payload"]["controls"]["interaction_bridge"] == "tmux"
+    assert job["payload"]["timeout_seconds"] == 3600
+
+    timed_response = client.post(
+        "/api/sessions/start",
+        headers=auth_headers(owner_login),
+        json={
+            "worker_id": worker["worker"]["worker_id"],
+            "backend": "claude",
+            "workspace_root": "E:/work/AgentHub",
+            "namespace": "default",
+            "prompt": "短超时 smoke",
+            "timeout_seconds": 180,
+        },
+    )
+    assert timed_response.status_code == 200, timed_response.text
+    assert timed_response.json()["job"]["payload"]["timeout_seconds"] == 180
 
     with client.app.state.SessionLocal() as db:
         event_types = [row.event_type for row in db.query(Event).order_by(Event.created_at.asc()).all()]
