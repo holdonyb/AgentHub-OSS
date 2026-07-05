@@ -86,6 +86,7 @@ export interface AgentTimelineItem {
   status: 'started' | 'running' | 'completed' | 'failed' | null;
   payload: Record<string, unknown>;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface AgentPermission {
