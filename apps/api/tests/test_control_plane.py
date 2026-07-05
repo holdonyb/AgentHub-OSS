@@ -1071,6 +1071,53 @@ def test_stale_worker_discovery_does_not_rewind_recent_user_input(client: TestCl
         assert refreshed.status == "queued"
 
 
+def test_unchanged_worker_discovery_does_not_advance_session_updated_at(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    session_payload = {
+        "session_id": "sess-unchanged-discovery",
+        "backend": "claude",
+        "worker_id": worker["worker"]["worker_id"],
+        "workspace_root": "E:/work/AgentHub",
+        "project_name": "AgentHub",
+        "namespace": "default",
+        "mode": "direct_reply",
+        "runtime_session_ref": "claude/sess-unchanged-discovery",
+        "status": "needs_reply",
+        "title": "Unchanged discovery",
+        "activity_summary": "等你回复：旧消息",
+        "last_message": "旧消息",
+        "last_activity_at": "2026-04-25T10:00:00Z",
+        "metadata": {},
+    }
+
+    created = client.post("/api/sessions", json=session_payload, headers=headers)
+    assert created.status_code == 200, created.text
+    frozen_updated_at = datetime(2026, 4, 25, 10, 1, 0)
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-unchanged-discovery").one()
+        session.updated_at = frozen_updated_at
+        db.commit()
+
+    first_sync = client.get("/api/sync/inbox", headers=headers)
+    assert first_sync.status_code == 200, first_sync.text
+    cursor = first_sync.json()["cursor"]
+
+    rediscovered = client.post("/api/sessions", json=session_payload, headers=headers)
+    assert rediscovered.status_code == 200, rediscovered.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-unchanged-discovery").one()
+        assert session.updated_at == frozen_updated_at
+
+    unchanged_delta = client.get("/api/sync/inbox", params={"cursor": cursor}, headers=headers)
+    assert unchanged_delta.status_code == 200, unchanged_delta.text
+    assert unchanged_delta.json()["items"] == []
+    assert unchanged_delta.json()["removed_session_ids"] == []
+
+
 def test_stale_timeline_replace_does_not_swallow_repeated_recent_user_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

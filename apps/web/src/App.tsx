@@ -337,6 +337,11 @@ interface PermissionSyncPayload {
   items: AgentPermission[];
 }
 
+interface SyncStatusPayload {
+  selected_session_id?: string | null;
+  selected_timeline_digest: string;
+}
+
 interface ReplyAttachment {
   filename: string;
   content_type: string;
@@ -2821,6 +2826,7 @@ function App() {
   const permissionCursorRef = useRef('');
   const sessionAfterSeqRef = useRef<Record<string, number>>({});
   const sessionAfterCursorRef = useRef<Record<string, string>>({});
+  const selectedTimelineDigestRef = useRef<Record<string, string>>({});
   const transcriptRef = useRef<HTMLElement | null>(null);
   const transcriptSessionRef = useRef<string | null>(null);
   const sessionSwipeStartRef = useRef<{ sessionId: string; x: number; y: number } | null>(null);
@@ -3343,7 +3349,7 @@ function App() {
 
   async function loadTimelineForSession(sessionId: string, options: { force?: boolean } = {}) {
     if (!options.force && timelineBySessionRef.current[sessionId]) return;
-    if (timelineLoadingRef.current.has(sessionId)) return;
+    if (!options.force && timelineLoadingRef.current.has(sessionId)) return;
     timelineLoadingRef.current.add(sessionId);
     try {
       const payload = await apiGet<TimelinePayload>(`/api/sessions/${sessionId}/timeline`);
@@ -3563,6 +3569,29 @@ function App() {
       next_after_cursor: cursor,
       has_more: payload.has_more,
     };
+  }
+
+  async function loadSyncStatus(sessionId: string | null) {
+    const params = new URLSearchParams();
+    if (sessionArchiveView === 'archived') params.set('archived', 'true');
+    if (sessionId) params.set('selected_session_id', sessionId);
+    const path = params.toString() ? `/api/sync/status?${params.toString()}` : '/api/sync/status';
+    return apiGet<SyncStatusPayload>(path);
+  }
+
+  async function refreshSelectedTimelineIfDigestChanged(sessionId: string, options: { allowFullReload?: boolean } = {}) {
+    const statusPayload = await loadSyncStatus(sessionId);
+    const nextDigest = statusPayload.selected_timeline_digest || '';
+    if (!nextDigest) return;
+    const previousDigest = selectedTimelineDigestRef.current[sessionId];
+    const hasLoadedTimeline = Boolean(timelineBySessionRef.current[sessionId]);
+    if (
+      options.allowFullReload &&
+      ((previousDigest && previousDigest !== nextDigest) || (!previousDigest && hasLoadedTimeline))
+    ) {
+      await loadTimelineForSession(sessionId, { force: true });
+    }
+    selectedTimelineDigestRef.current[sessionId] = nextDigest;
   }
 
   async function loadEvents() {
@@ -3917,6 +3946,7 @@ function App() {
           if (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) {
             await loadTimelineForSession(selectedSessionId, { force: true });
           }
+          await refreshSelectedTimelineIfDigestChanged(selectedSessionId, { allowFullReload: sessionDelta.items.length === 0 });
         }
         setLastSyncedAt(new Date().toISOString());
       } catch {

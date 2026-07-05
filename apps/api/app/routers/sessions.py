@@ -164,6 +164,33 @@ def _readable_title(payload: SessionCreateIn) -> str:
     return f"{project} · {backend}"
 
 
+def _session_visibility_fingerprint(session: AgentSession) -> tuple[object, ...]:
+    return (
+        session.space_id,
+        session.backend,
+        session.worker_id,
+        session.workspace_root,
+        session.project_name,
+        session.namespace,
+        session.mode,
+        session.runtime_session_ref,
+        session.status,
+        session.title,
+        session.display_title,
+        session.custom_title,
+        session.heuristic_title,
+        session.llm_title,
+        session.activity_summary,
+        session.last_message,
+        session.last_activity_at,
+        session.last_role,
+        session.controls_json,
+        session.runtime_metadata_json,
+        session.metadata_json,
+        session.archived_at,
+    )
+
+
 def _session_ordering():
     attention_rank = case(
         (AgentSession.status == "needs_reply", 0),
@@ -446,11 +473,13 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     if payload.status not in SESSION_STATES:
         raise HTTPException(status_code=400, detail={"message": "Invalid session status", "code": "SESSION_STATUS_INVALID"})
     session = db.query(AgentSession).filter(AgentSession.space_id == space_id, AgentSession.session_id == payload.session_id).one_or_none()
+    is_new_session = session is None
     if session is None:
         session = AgentSession(space_id=space_id, session_id=payload.session_id)
         db.add(session)
     elif session.space_id is None:
         session.space_id = space_id
+    previous_visibility = None if is_new_session else _session_visibility_fingerprint(session)
     previous_activity_at = session.last_activity_at
     existing_controls = _normalize_controls(loads_json(session.controls_json, {}), backend=payload.backend)
     runtime_metadata = dict(payload.runtime_metadata)
@@ -485,10 +514,11 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     session.controls_json = dumps_json(_normalize_controls(existing_controls or payload.controls, backend=payload.backend))
     session.runtime_metadata_json = dumps_json(runtime_metadata)
     session.metadata_json = dumps_json(payload.metadata)
-    session.updated_at = utcnow()
     if isinstance(timeline_items, list) and timeline_items:
         upsert_timeline_items(db, session.session_id, timeline_items, replace=True, space_id=session.space_id)
         sync_session_from_timeline(db, session)
+    elif is_new_session or previous_visibility != _session_visibility_fingerprint(session):
+        session.updated_at = utcnow()
     return session
 
 
