@@ -3418,31 +3418,59 @@ function App() {
   }
 
   async function loadSessionDelta(sessionId: string) {
-    const afterSeq = sessionAfterSeqRef.current[sessionId] ?? 0;
-    const cursor = sessionAfterCursorRef.current[sessionId] ?? '';
-    const params = new URLSearchParams();
-    if (cursor) params.set('cursor', cursor);
-    if (afterSeq > 0) params.set('after_seq', String(afterSeq));
-    const payload = await apiGet<SessionSyncPayload>(`/api/sync/session/${sessionId}?${params.toString()}`);
+    let afterSeq = sessionAfterSeqRef.current[sessionId] ?? 0;
+    let cursor = sessionAfterCursorRef.current[sessionId] ?? '';
+    let payload: SessionSyncPayload | null = null;
+    let items: AgentTimelineItem[] = [];
+    let jobs: Job[] = [];
+    const maxPages = 5;
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const params = new URLSearchParams();
+      if (cursor) params.set('cursor', cursor);
+      if (afterSeq > 0) params.set('after_seq', String(afterSeq));
+      const pagePayload = await apiGet<SessionSyncPayload>(`/api/sync/session/${sessionId}?${params.toString()}`);
+      payload = pagePayload;
+      items = [...items, ...pagePayload.items];
+      jobs = pagePayload.jobs;
+      const nextCursor = pagePayload.next_after_cursor ?? cursor;
+      const nextAfterSeq = pagePayload.next_after_seq;
+      const canContinueWithCursor = Boolean(cursor) && Boolean(nextCursor) && nextCursor !== cursor;
+      const canContinueWithSeq = !cursor && nextAfterSeq > afterSeq;
+      cursor = nextCursor;
+      afterSeq = nextAfterSeq;
+      if (!pagePayload.has_more || (!canContinueWithCursor && !canContinueWithSeq)) break;
+    }
+
+    if (!payload) {
+      throw new Error('Session sync returned no payload');
+    }
     const keepPinnedToBottom =
       selectedIdRef.current === sessionId && (transcriptPinnedToBottomRef.current || transcriptNearBottom());
     setSessions((current) => mergeSessionList(current, [payload.session], []));
-    setJobs((current) => replaceSessionJobs(current, sessionId, payload.jobs));
-    if (payload.items.length > 0) {
+    setJobs((current) => replaceSessionJobs(current, sessionId, jobs));
+    if (items.length > 0) {
       if (keepPinnedToBottom) {
         shouldScrollTranscriptToBottomRef.current = true;
       }
       setTimelineBySession((current) => ({
         ...current,
-        [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
+        [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], items),
       }));
       if (keepPinnedToBottom) {
         window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
       }
     }
-    sessionAfterSeqRef.current[sessionId] = payload.next_after_seq;
-    sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? sessionAfterCursorRef.current[sessionId] ?? '';
-    return payload;
+    sessionAfterSeqRef.current[sessionId] = afterSeq;
+    sessionAfterCursorRef.current[sessionId] = cursor || sessionAfterCursorRef.current[sessionId] || '';
+    return {
+      ...payload,
+      items,
+      jobs,
+      next_after_seq: afterSeq,
+      next_after_cursor: cursor,
+      has_more: payload.has_more,
+    };
   }
 
   async function loadEvents() {
