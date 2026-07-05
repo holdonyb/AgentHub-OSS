@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.json import dumps_json
+from app.core.notifications import notify_for_audit_event
 from app.models import Event
 
 
@@ -31,5 +32,16 @@ def write_event(
         payload_json=dumps_json(payload or {}),
     )
     db.add(event)
+    notify_for_audit_event(
+        db,
+        space_id=space_id,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        source_type=source_type,
+        source_id=source_id,
+        event_type=event_type,
+        level=level,
+        payload=payload,
+    )
     return event
 

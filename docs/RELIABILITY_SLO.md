@@ -52,6 +52,25 @@ Allowed `reason` values:
 
 - `heartbeat_expired`
 
+### Notification Delivery Events
+
+When `AGENTHUB_NOTIFICATION_WEBHOOK_URL` is configured, `job.complete` and
+`permission.request` events must attempt a bounded webhook delivery. Notification
+delivery failure must never fail or roll back the source job/permission flow.
+
+`notification.delivery_failed` must include:
+
+- `notification_type`
+- `attempts`
+- `target_host`
+- `reason`
+- `retry_exhausted`
+
+Allowed `notification_type` values for the current WS-A slice:
+
+- `job.complete`
+- `permission.request`
+
 ## Measurement Rules
 
 The future A5 script (`slo_report.py`) must emit JSON with the field names in
