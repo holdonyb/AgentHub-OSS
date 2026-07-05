@@ -1329,6 +1329,100 @@ def test_session_sync_after_seq_includes_summary_row_when_replace_reorders_seq(c
     assert by_seq[15]["text"] == summary_text
 
 
+def test_session_sync_after_seq_prioritizes_summary_when_history_touch_exceeds_page_limit(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-history-touch-limit",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-history-touch-limit",
+            "status": "ready",
+            "title": "Delta history touch limit",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_created_at = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    initial_items = [
+        {
+            "seq": seq,
+            "item_type": "user_message",
+            "role": "user",
+            "text": f"initial historical prompt {seq}",
+            "created_at": old_created_at,
+        }
+        for seq in range(1, 301)
+    ]
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-history-touch-limit/timeline",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "items": initial_items},
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-history-touch-limit", params={"limit": 500}, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["next_after_seq"] == 300
+
+    summary_text = "final assistant answer hidden behind touched historical rows"
+    replay_items = [
+        {
+            "seq": seq,
+            "item_type": "assistant_message" if seq == 250 else "user_message",
+            "role": "assistant" if seq == 250 else "user",
+            "text": summary_text if seq == 250 else f"replayed historical prompt {seq}",
+            "created_at": old_created_at,
+        }
+        for seq in range(1, 401)
+    ]
+    replay = client.post(
+        "/api/internal/sessions/sess-delta-history-touch-limit/timeline",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "items": replay_items},
+    )
+    assert replay.status_code == 200, replay.text
+
+    with client.app.state.SessionLocal() as db:
+        summary_row = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-delta-history-touch-limit")
+            .filter(AgentTimeline.seq == 250)
+            .one()
+        )
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-delta-history-touch-limit").one()
+        session.last_message = summary_text
+        session.last_role = "assistant"
+        session.last_activity_at = summary_row.updated_at - timedelta(seconds=1)
+        session.updated_at = summary_row.updated_at
+        db.commit()
+
+    response = client.get(
+        "/api/sync/session/sess-delta-history-touch-limit",
+        params={"after_seq": 300, "limit": 200},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    by_seq = {item["seq"]: item for item in payload["items"]}
+    assert by_seq[250]["text"] == summary_text
+    assert by_seq[400]["text"] == "replayed historical prompt 400"
+    assert payload["next_after_seq"] > 300
+
+
 def test_session_sync_after_seq_materializes_missing_summary_row_before_history_backfill(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
