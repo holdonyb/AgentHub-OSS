@@ -2204,7 +2204,7 @@ function latestTimelineItemTime(items: AgentTimelineItem[]) {
 
 function sessionSummaryOutrunsTimeline(session: AgentSession, items: AgentTimelineItem[]) {
   const sessionTime = new Date(session.last_activity_at ?? '').getTime();
-  return Number.isFinite(sessionTime) && sessionTime > latestTimelineItemTime(items);
+  return Number.isFinite(sessionTime) && sessionTime >= latestTimelineItemTime(items);
 }
 
 function optimisticMessageKey(item: AgentTimelineItem) {
