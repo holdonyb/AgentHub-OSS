@@ -2123,6 +2123,22 @@ function mergeTimelineItems(existing: AgentTimelineItem[], incoming: AgentTimeli
   return sortTimelineItemsByCreatedAt(Array.from(bySeq.values()));
 }
 
+function normalizedTimelineSearchText(value: string | null | undefined) {
+  return compactText(value ?? '', 8_000).replace(/\s+/g, ' ').trim();
+}
+
+function timelineReflectsSessionLastMessage(session: AgentSession | null | undefined, items: AgentTimelineItem[]) {
+  const lastMessage = normalizedTimelineSearchText(session?.last_message);
+  if (!lastMessage) return true;
+  return items.some((item) => {
+    const text = normalizedTimelineSearchText(item.text);
+    if (!text) return false;
+    if (text === lastMessage) return true;
+    if (lastMessage.length >= 40 && text.includes(lastMessage)) return true;
+    return text.length >= 40 && lastMessage.includes(text);
+  });
+}
+
 function optimisticMessageKey(item: AgentTimelineItem) {
   const clientId = item.payload && typeof item.payload.client_id === 'string' ? item.payload.client_id : '';
   return clientId || `${item.session_id}:${compactText(item.text, 400)}:${item.created_at}`;
@@ -2723,6 +2739,7 @@ function App() {
   const [createdInvite, setCreatedInvite] = useState<InviteCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<AgentSession[]>([]);
+  const timelineBySessionRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
@@ -2826,6 +2843,10 @@ function App() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  useEffect(() => {
+    timelineBySessionRef.current = timelineBySession;
+  }, [timelineBySession]);
 
   const selectedVisibleSessionIds = useMemo(
     () => filteredSessions.map((session) => session.session_id).filter((sessionId) => selectedSessionIds.has(sessionId)),
@@ -3258,16 +3279,20 @@ function App() {
   }
 
   async function loadTimelineForSession(sessionId: string, options: { force?: boolean } = {}) {
-    if (!options.force && timelineBySession[sessionId]) return;
+    if (!options.force && timelineBySessionRef.current[sessionId]) return;
     if (timelineLoadingRef.current.has(sessionId)) return;
     timelineLoadingRef.current.add(sessionId);
     try {
       const payload = await apiGet<TimelinePayload>(`/api/sessions/${sessionId}/timeline`);
-      const merged = mergeServerTimeline(sessionId, timelineBySession[sessionId] ?? [], payload.items);
+      const merged = mergeServerTimeline(sessionId, timelineBySessionRef.current[sessionId] ?? [], payload.items);
       setTimelineBySession((current) => ({
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [sessionId]: merged,
+      };
       setTimelineHasOlder((current) => (sessionId in current ? current : { ...current, [sessionId]: Boolean(payload.has_more) }));
       sessionAfterSeqRef.current[sessionId] = payload.next_after_seq ?? Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
       sessionAfterCursorRef.current[sessionId] = payload.next_after_cursor ?? '';
@@ -3457,6 +3482,10 @@ function App() {
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [sessionId]: mergeServerTimeline(sessionId, timelineBySessionRef.current[sessionId] ?? [], items),
+      };
       if (keepPinnedToBottom) {
         window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
       }
@@ -3538,6 +3567,14 @@ function App() {
         ...current,
         [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),
       }));
+      timelineBySessionRef.current = {
+        ...timelineBySessionRef.current,
+        [nextSelectedId]: mergeServerTimeline(
+          nextSelectedId,
+          timelineBySessionRef.current[nextSelectedId] ?? [],
+          timelinePayload.items,
+        ),
+      };
       setTimelineHasOlder((current) => (
         nextSelectedId in current ? current : { ...current, [nextSelectedId]: Boolean(timelinePayload.has_more) }
       ));
@@ -3799,17 +3836,22 @@ function App() {
         const inboxDelta = await loadInboxDelta(sessionArchiveView);
         await loadPermissionDelta();
         if (selectedSessionId) {
+          const timelineBeforeDelta = timelineBySessionRef.current[selectedSessionId] ?? [];
           const sessionDelta = await loadSessionDelta(selectedSessionId);
           const selectedInboxSession =
             inboxDelta?.items.find((session) => session.session_id === selectedSessionId) ?? null;
+          const selectedSyncedSession = selectedInboxSession ?? sessionDelta.session;
           const summaryChanged =
-            Boolean(selectedInboxSession) &&
+            Boolean(selectedSyncedSession && selectedBeforeSync) &&
             (
-              selectedInboxSession?.last_activity_at !== selectedBeforeSync?.last_activity_at ||
-              selectedInboxSession?.last_message !== selectedBeforeSync?.last_message ||
-              selectedInboxSession?.status !== selectedBeforeSync?.status
+              selectedSyncedSession.last_activity_at !== selectedBeforeSync?.last_activity_at ||
+              selectedSyncedSession.last_message !== selectedBeforeSync?.last_message ||
+              selectedSyncedSession.status !== selectedBeforeSync?.status
             );
-          if (summaryChanged && sessionDelta.items.length === 0) {
+          const mergedDeltaTimeline = mergeTimelineItems(timelineBeforeDelta, sessionDelta.items);
+          const timelineStillMissingSummary =
+            summaryChanged && !timelineReflectsSessionLastMessage(selectedSyncedSession, mergedDeltaTimeline);
+          if (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) {
             await loadTimelineForSession(selectedSessionId, { force: true });
           }
         }
