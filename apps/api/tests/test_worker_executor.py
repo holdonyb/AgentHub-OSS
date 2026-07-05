@@ -48,6 +48,31 @@ def fake_popen_factory(
     return FakeProcess
 
 
+def discovered_session(
+    *,
+    session_id: str,
+    backend: str,
+    workspace_root: str,
+    project_name: str,
+    runtime_session_ref: str,
+    user_text: str,
+    assistant_text: str = "",
+) -> dict[str, object]:
+    messages: list[dict[str, str]] = [{"role": "user", "text": user_text}]
+    if assistant_text:
+        messages.append({"role": "assistant", "text": assistant_text})
+    return {
+        "session_id": session_id,
+        "backend": backend,
+        "worker_id": "",
+        "workspace_root": workspace_root,
+        "project_name": project_name,
+        "runtime_session_ref": runtime_session_ref,
+        "last_activity_at": "2026-01-02T00:00:00",
+        "runtime_metadata": {"messages": messages},
+    }
+
+
 def test_session_input_builds_backend_specific_commands() -> None:
     codex = build_backend_command(
         {
@@ -2569,17 +2594,16 @@ def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.Mo
         calls.append(args)
         executor._DISCOVERY_FIXTURE = [
             {"session_id": "old", "backend": "codex", "workspace_root": "E:/work/AgentHub", "last_activity_at": "2026-01-01T00:00:00"},
-            {
-                "session_id": "new-session",
-                "backend": "codex",
-                "worker_id": "",
-                "workspace_root": "E:/work/AgentHub",
-                "project_name": "AgentHub",
-                "runtime_session_ref": "codex/new-session.jsonl",
-                "last_activity_at": "2026-01-02T00:00:00",
-                "runtime_metadata": {},
-                },
-            ]
+            discovered_session(
+                session_id="new-session",
+                backend="codex",
+                workspace_root="E:/work/AgentHub",
+                project_name="AgentHub",
+                runtime_session_ref="codex/new-session.jsonl",
+                user_text="新建会话",
+                assistant_text="created",
+            ),
+        ]
         if output_file:
             Path(output_file).write_text("created", encoding="utf-8")
         return "created"
@@ -2606,25 +2630,66 @@ def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.Mo
     assert calls[0][:3] == ["codex", "-C", "E:/work/AgentHub"]
 
 
+def test_session_start_rejects_created_session_without_assistant_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    published: list[list[dict[str, object]]] = []
+
+    class FakeClient:
+        def publish_sessions(self, sessions: list[dict[str, object]]) -> None:
+            published.append(sessions)
+
+    created = discovered_session(
+        session_id="new-user-only-session",
+        backend="codex",
+        workspace_root="E:/work/AgentHub",
+        project_name="AgentHub",
+        runtime_session_ref="codex/new-user-only-session.jsonl",
+        user_text="AgentHub smoke",
+    )
+
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/bin/{name}.cmd")
+    monkeypatch.setattr(executor, "resolve_codex_executable", lambda: "C:/bin/codex.cmd")
+    monkeypatch.setattr(executor, "_discover_local_sessions", lambda roots: [created])
+    monkeypatch.setattr(executor, "_select_created_session", lambda before, after, backend, workspace_root: created)
+    monkeypatch.setattr(executor, "_poll_session_result_text", lambda session_id, roots, timeout_seconds: (created, ""))
+    monkeypatch.setattr(executor, "_run_backend_command", lambda *args, **kwargs: "created_session_id=new-user-only-session")
+
+    with pytest.raises(RuntimeError, match="did not produce assistant output"):
+        execute_job(
+            {
+                "job_id": "job-start-user-only",
+                "kind": "session_start",
+                "backend": "codex",
+                "worker_id": "win-main",
+                "workspace_root": "E:/work/AgentHub",
+                "payload": {"prompt": "AgentHub smoke", "project_name": "AgentHub", "namespace": "default", "title": "Smoke"},
+            },
+            client=FakeClient(),
+            worker_id="win-main",
+        )
+
+    assert published == []
+
+
+def test_backend_auth_error_detects_unsupported_region_refresh_failure() -> None:
+    assert executor._looks_like_backend_auth_error(
+        "Failed to refresh token: 403 Forbidden: unsupported_country_region_territory"
+    )
+
+
 def test_claude_session_start_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     published: list[list[dict[str, object]]] = []
     started: list[dict[str, object]] = []
     prompts: list[str] = []
-    fixture = [
-        [],
-        [
-            {
-                "session_id": "claude-new-session",
-                "backend": "claude",
-                "worker_id": "",
-                "workspace_root": "/srv/work",
-                "project_name": "srv",
-                "runtime_session_ref": "/root/.claude/projects/srv--work/claude-new-session.jsonl",
-                "last_activity_at": "2026-01-02T00:00:00",
-                "runtime_metadata": {},
-            }
-        ],
-    ]
+    claude_created = discovered_session(
+        session_id="claude-new-session",
+        backend="claude",
+        workspace_root="/srv/work",
+        project_name="srv",
+        runtime_session_ref="/root/.claude/projects/srv--work/claude-new-session.jsonl",
+        user_text="新建 Claude 会话",
+        assistant_text="Claude 会话已创建",
+    )
+    fixture = [[], [claude_created], [claude_created], [claude_created]]
 
     class FakeClient:
         def publish_sessions(self, sessions: list[dict[str, object]]) -> None:
@@ -2682,21 +2747,16 @@ def test_claude_session_start_can_use_tmux_interactive_bridge(monkeypatch: pytes
 
 
 def test_claude_session_fork_can_use_tmux_interactive_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    fixture = [
-        [],
-        [
-            {
-                "session_id": "claude-fork-session",
-                "backend": "claude",
-                "worker_id": "",
-                "workspace_root": "/srv/work",
-                "project_name": "srv",
-                "runtime_session_ref": "/root/.claude/projects/srv--work/claude-fork-session.jsonl",
-                "last_activity_at": "2026-01-02T00:00:00",
-                "runtime_metadata": {},
-            }
-        ],
-    ]
+    fork_created = discovered_session(
+        session_id="claude-fork-session",
+        backend="claude",
+        workspace_root="/srv/work",
+        project_name="srv",
+        runtime_session_ref="/root/.claude/projects/srv--work/claude-fork-session.jsonl",
+        user_text="继续推进修复",
+        assistant_text="fork 会话已创建",
+    )
+    fixture = [[], [fork_created], [fork_created], [fork_created]]
     prompts: list[str] = []
 
     monkeypatch.setenv("AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE", "tmux")
