@@ -1071,7 +1071,22 @@ function latestMessages(session: AgentSession) {
 }
 
 function timelineFallback(session: AgentSession): AgentTimelineItem[] {
-  return latestMessages(session).map((message, index) => ({
+  const messages = latestMessages(session);
+  const fallbackMessages = messages.length > 0
+    ? messages
+    : session.last_message
+      ? [
+          {
+            session_id: session.session_id,
+            seq: 1,
+            role: session.last_role ?? 'assistant',
+            kind: session.last_role === 'user' ? 'user_message' : 'assistant_message',
+            text: session.last_message,
+            created_at: session.last_activity_at ?? '',
+          },
+        ]
+      : [];
+  return fallbackMessages.map((message, index) => ({
     session_id: session.session_id,
     seq: index + 1,
     item_type: String(message.kind ?? 'assistant_message') as AgentTimelineItem['item_type'],
@@ -1086,9 +1101,31 @@ function timelineFallback(session: AgentSession): AgentTimelineItem[] {
 }
 
 function sessionTimeline(session: AgentSession, loadedTimeline: AgentTimelineItem[] | undefined) {
-  if (loadedTimeline && usefulTimelineItems(loadedTimeline).length > 0) return loadedTimeline;
   const fallback = timelineFallback(session);
-  return fallback.length > 0 ? fallback : loadedTimeline ?? [];
+  if (!loadedTimeline || usefulTimelineItems(loadedTimeline).length === 0) {
+    return fallback.length > 0 ? fallback : loadedTimeline ?? [];
+  }
+  if (
+    timelineReflectsSessionLastMessage(session, loadedTimeline) ||
+    !sessionSummaryOutrunsTimeline(session, loadedTimeline) ||
+    fallback.length === 0
+  ) {
+    return loadedTimeline;
+  }
+  const existingTexts = new Set(
+    loadedTimeline.map((item) => normalizedTimelineSearchText(item.text)).filter(Boolean),
+  );
+  const maxSeq = Math.max(0, ...loadedTimeline.map((item) => timelineSeq(item)).filter(Number.isFinite));
+  const missingFallback = fallback
+    .filter((item) => {
+      const text = normalizedTimelineSearchText(item.text);
+      return Boolean(text) && !existingTexts.has(text);
+    })
+    .map((item, index) => ({
+      ...item,
+      seq: maxSeq + index + 1,
+    }));
+  return missingFallback.length > 0 ? sortTimelineItemsByCreatedAt([...loadedTimeline, ...missingFallback]) : loadedTimeline;
 }
 
 function modeOptions(provider: ProviderSnapshot | undefined, kind: string, fallback: string[]) {
@@ -2137,6 +2174,15 @@ function timelineReflectsSessionLastMessage(session: AgentSession | null | undef
     if (lastMessage.length >= 40 && text.includes(lastMessage)) return true;
     return text.length >= 40 && lastMessage.includes(text);
   });
+}
+
+function latestTimelineItemTime(items: AgentTimelineItem[]) {
+  return Math.max(0, ...items.map((item) => new Date(item.created_at ?? '').getTime()).filter(Number.isFinite));
+}
+
+function sessionSummaryOutrunsTimeline(session: AgentSession, items: AgentTimelineItem[]) {
+  const sessionTime = new Date(session.last_activity_at ?? '').getTime();
+  return Number.isFinite(sessionTime) && sessionTime > latestTimelineItemTime(items);
 }
 
 function optimisticMessageKey(item: AgentTimelineItem) {

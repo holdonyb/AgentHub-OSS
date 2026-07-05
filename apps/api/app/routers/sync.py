@@ -172,7 +172,9 @@ def _timeline_rows(db: DbSession, space_id: str | None, session_id: str | None) 
             AgentTimeline.item_type,
             AgentTimeline.role,
             AgentTimeline.status,
+            AgentTimeline.text,
             AgentTimeline.created_at,
+            AgentTimeline.updated_at,
         )
         .filter(AgentTimeline.space_id == space_id, AgentTimeline.session_id == session_id)
         .order_by(AgentTimeline.seq.asc())
