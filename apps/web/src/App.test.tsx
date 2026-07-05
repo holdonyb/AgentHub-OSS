@@ -5937,6 +5937,88 @@ describe('AgentHub console', () => {
     expect(timelineFetches).toBeGreaterThan(1);
   });
 
+  it('refreshes the selected timeline when its sync digest changes even if delta has non-final items', async () => {
+    let timelineFetches = 0;
+    const refreshedTimeline = {
+      next_after_seq: 4,
+      next_after_cursor: '2026-04-26T10:04:00Z|4',
+      items: [
+        ...timelinePayload.items,
+        {
+          session_id: 'sess-1',
+          seq: 3,
+          item_type: 'tool_call',
+          role: 'system',
+          text: '工具结果：处理中',
+          created_at: '2026-04-26T10:03:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 4,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: 'digest 补回来的最终回复',
+          created_at: '2026-04-26T10:04:00Z',
+        },
+      ],
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        return jsonResponse(timelineFetches > 1 ? refreshedTimeline : timelinePayload);
+      }
+      if (url.includes('/api/sync/status')) {
+        return jsonResponse({
+          ...syncStatusPayload,
+          selected_timeline_digest: 'timeline-sess-1-v2',
+        });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 3,
+              item_type: 'tool_call',
+              role: 'system',
+              text: '工具结果：处理中',
+              created_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+          next_after_seq: 3,
+          next_after_cursor: '2026-04-26T10:03:00Z|3',
+          has_more: false,
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('<script>alert("xss")</script>')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('digest 补回来的最终回复')).toBeInTheDocument();
+    expect(timelineFetches).toBeGreaterThan(1);
+  });
+
   it('refreshes an already loaded selected timeline on the first digest check', async () => {
     let timelineFetches = 0;
     const refreshedTimeline = {

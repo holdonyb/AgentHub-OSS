@@ -873,6 +873,12 @@ def sync_session_from_timeline(db: Any, session: AgentSession) -> None:
     )
     if not rows:
         return
+    previous_visible = (
+        session.activity_summary,
+        session.last_message,
+        session.last_activity_at,
+        session.last_role,
+    )
     messages = [message for row in rows if (message := _message_from_timeline(row))]
     metadata = loads_json(session.runtime_metadata_json, {})
     metadata.pop("timeline", None)
@@ -896,7 +902,14 @@ def sync_session_from_timeline(db: Any, session: AgentSession) -> None:
         session.last_activity_at = last_activity.created_at
     if timeline_is_current and not session.activity_summary and session.last_message:
         session.activity_summary = f"最近上下文：{_compact(session.last_message)}"
-    session.updated_at = utcnow()
+    next_visible = (
+        session.activity_summary,
+        session.last_message,
+        session.last_activity_at,
+        session.last_role,
+    )
+    if next_visible != previous_visible:
+        session.updated_at = utcnow()
 
 
 def _job_queue_reason(job: Job, payload: dict[str, Any]) -> tuple[str | None, str | None]:

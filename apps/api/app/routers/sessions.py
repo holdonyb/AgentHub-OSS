@@ -185,8 +185,6 @@ def _session_visibility_fingerprint(session: AgentSession) -> tuple[object, ...]
         session.last_activity_at,
         session.last_role,
         session.controls_json,
-        session.runtime_metadata_json,
-        session.metadata_json,
         session.archived_at,
     )
 
@@ -508,7 +506,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
         session.last_message = payload.last_message
         session.last_activity_at = incoming_activity_at
-        session.last_role = payload.last_role
+        session.last_role = payload.last_role or session.last_role
     elif not session.activity_summary:
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
     session.controls_json = dumps_json(_normalize_controls(existing_controls or payload.controls, backend=payload.backend))

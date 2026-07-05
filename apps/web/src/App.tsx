@@ -3946,7 +3946,12 @@ function App() {
           if (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) {
             await loadTimelineForSession(selectedSessionId, { force: true });
           }
-          await refreshSelectedTimelineIfDigestChanged(selectedSessionId, { allowFullReload: sessionDelta.items.length === 0 });
+          const deltaHasConversationItem = sessionDelta.items.some((item) =>
+            ['user_message', 'assistant_message', 'reasoning'].includes(item.item_type),
+          );
+          await refreshSelectedTimelineIfDigestChanged(selectedSessionId, {
+            allowFullReload: sessionDelta.items.length === 0 || !deltaHasConversationItem,
+          });
         }
         setLastSyncedAt(new Date().toISOString());
       } catch {
