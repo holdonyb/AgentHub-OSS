@@ -444,6 +444,15 @@ def _append_summary_timeline_rows_for_cursor(
         summary_rows = [materialized] if materialized is not None else []
     if not summary_rows:
         return rows
+    updated_after, seq_after = _decode_timeline_cursor(cursor)
+    summary_rows = [
+        row
+        for row in summary_rows
+        if _cursor_datetime(row.updated_at) > updated_after
+        or (_cursor_datetime(row.updated_at) == updated_after and row.seq > seq_after)
+    ]
+    if not summary_rows:
+        return rows
     return _merge_summary_rows_first(rows, summary_rows)
 
 

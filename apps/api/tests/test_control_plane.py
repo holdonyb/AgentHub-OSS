@@ -2152,6 +2152,100 @@ def test_unchanged_timeline_discovery_does_not_advance_session_updated_at(client
     assert unchanged_delta.json()["removed_session_ids"] == []
 
 
+def test_unchanged_timeline_replace_does_not_advance_timeline_sync_cursor(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+    worker_id = worker["worker"]["worker_id"]
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-unchanged-timeline-cursor",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-unchanged-timeline-cursor.jsonl",
+            "status": "ready",
+            "title": "Unchanged timeline cursor",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    timeline_payload = {
+        "worker_id": worker_id,
+        "replace": True,
+        "items": [
+            {
+                "seq": 1,
+                "item_type": "user_message",
+                "role": "user",
+                "text": "看一下同步",
+                "created_at": "2026-04-25T10:00:00Z",
+            },
+            {
+                "seq": 2,
+                "item_type": "assistant_message",
+                "role": "assistant",
+                "text": "同步已经完成",
+                "created_at": "2026-04-25T10:01:00Z",
+            },
+        ],
+    }
+    first_publish = client.post(
+        "/api/internal/sessions/sess-unchanged-timeline-cursor/timeline",
+        headers=worker_headers,
+        json=timeline_payload,
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first_sync = client.get("/api/sessions/sess-unchanged-timeline-cursor/timeline", headers=headers)
+    assert first_sync.status_code == 200, first_sync.text
+    cursor = first_sync.json()["next_after_cursor"]
+    assert cursor
+
+    with client.app.state.SessionLocal() as db:
+        before_updated_at = {
+            row.seq: row.updated_at
+            for row in db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-unchanged-timeline-cursor")
+            .order_by(AgentTimeline.seq.asc())
+            .all()
+        }
+
+    second_publish = client.post(
+        "/api/internal/sessions/sess-unchanged-timeline-cursor/timeline",
+        headers=worker_headers,
+        json=timeline_payload,
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    with client.app.state.SessionLocal() as db:
+        after_updated_at = {
+            row.seq: row.updated_at
+            for row in db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-unchanged-timeline-cursor")
+            .order_by(AgentTimeline.seq.asc())
+            .all()
+        }
+    assert after_updated_at == before_updated_at
+
+    unchanged_delta = client.get(
+        "/api/sync/session/sess-unchanged-timeline-cursor",
+        params={"cursor": cursor},
+        headers=headers,
+    )
+    assert unchanged_delta.status_code == 200, unchanged_delta.text
+    assert unchanged_delta.json()["items"] == []
+
+
 def test_stale_timeline_replace_does_not_swallow_repeated_recent_user_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
