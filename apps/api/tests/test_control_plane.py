@@ -1118,6 +1118,74 @@ def test_unchanged_worker_discovery_does_not_advance_session_updated_at(client: 
     assert unchanged_delta.json()["removed_session_ids"] == []
 
 
+def test_unchanged_timeline_discovery_does_not_advance_session_updated_at(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+    worker_id = worker["worker"]["worker_id"]
+    session_payload = {
+        "session_id": "sess-unchanged-timeline-discovery",
+        "backend": "claude",
+        "worker_id": worker_id,
+        "workspace_root": "E:/work/AgentHub",
+        "project_name": "AgentHub",
+        "namespace": "default",
+        "mode": "direct_reply",
+        "runtime_session_ref": "claude/sess-unchanged-timeline-discovery.jsonl",
+        "status": "needs_reply",
+        "title": "Unchanged timeline discovery",
+        "activity_summary": "等你回复：旧消息",
+        "last_message": "旧消息",
+        "last_activity_at": "2026-04-25T10:00:00Z",
+        "runtime_metadata": {
+            "timeline": [
+                {
+                    "seq": 1,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "旧消息",
+                    "created_at": "2026-04-25T10:00:00Z",
+                }
+            ]
+        },
+        "metadata": {},
+    }
+
+    discovered = client.post(
+        "/api/internal/sessions/discovered",
+        json={"worker_id": worker_id, "sessions": [session_payload]},
+        headers=worker_headers,
+    )
+    assert discovered.status_code == 200, discovered.text
+    frozen_updated_at = datetime(2026, 4, 25, 10, 1, 0)
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-unchanged-timeline-discovery").one()
+        session.updated_at = frozen_updated_at
+        db.commit()
+
+    first_sync = client.get("/api/sync/inbox", headers=headers)
+    assert first_sync.status_code == 200, first_sync.text
+    cursor = first_sync.json()["cursor"]
+
+    rediscovered = client.post(
+        "/api/internal/sessions/discovered",
+        json={"worker_id": worker_id, "sessions": [session_payload]},
+        headers=worker_headers,
+    )
+    assert rediscovered.status_code == 200, rediscovered.text
+
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-unchanged-timeline-discovery").one()
+        assert session.updated_at == frozen_updated_at
+
+    unchanged_delta = client.get("/api/sync/inbox", params={"cursor": cursor}, headers=headers)
+    assert unchanged_delta.status_code == 200, unchanged_delta.text
+    assert unchanged_delta.json()["items"] == []
+    assert unchanged_delta.json()["removed_session_ids"] == []
+
+
 def test_stale_timeline_replace_does_not_swallow_repeated_recent_user_input(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
