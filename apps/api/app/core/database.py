@@ -59,7 +59,10 @@ def _ensure_compatible_columns(engine: Engine) -> None:
             "heartbeat_interval_seconds": "INTEGER NOT NULL DEFAULT 30",
         },
         "agent_sessions": {"space_id": "VARCHAR(64)"},
-        "agent_timeline": {"space_id": "VARCHAR(64)"},
+        "agent_timeline": {
+            "space_id": "VARCHAR(64)",
+            "updated_at": "DATETIME",
+        },
         "agent_permissions": {"space_id": "VARCHAR(64)"},
         "provider_snapshots": {"space_id": "VARCHAR(64)"},
         "jobs": {"space_id": "VARCHAR(64)"},
@@ -91,9 +94,18 @@ def _ensure_compatible_columns(engine: Engine) -> None:
                 for name, ddl in columns.items():
                     if name not in existing_columns:
                         conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {ddl}"))
+                        existing_columns.add(name)
             for name, ddl in session_columns.items():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE agent_sessions ADD COLUMN {name} {ddl}"))
+            if "agent_timeline" in table_names:
+                conn.execute(
+                    text(
+                        "UPDATE agent_timeline "
+                        "SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) "
+                        "WHERE updated_at IS NULL"
+                    )
+                )
     Base.metadata.create_all(bind=engine)
 
 
