@@ -22,6 +22,7 @@ Recovery and failure events must be queryable without parsing human text.
 
 `job.fail_stale`, `job.fail_orphaned`, and `job.fail_worker_offline` must include:
 
+- `type`
 - `worker_id`
 - `job_id`
 - `kind`
@@ -36,6 +37,11 @@ Allowed `reason` values for the current WS-A slice:
 - `worker_restart_without_active_job`
 - `worker_heartbeat_expired`
 
+Allowed `type` values:
+
+- `stale_job`
+- `worker_offline`
+
 Allowed `recovery_action` values:
 
 - `failed_unblock_queued_input`
@@ -44,7 +50,9 @@ Allowed `recovery_action` values:
 
 `worker.offline_heartbeat_expired` must include:
 
+- `type`
 - `worker_id`
+- `job_id`
 - `reason`
 - `heartbeat_offline_seconds`
 
@@ -52,11 +60,37 @@ Allowed `reason` values:
 
 - `heartbeat_expired`
 
+### Dispatch Failure Events
+
+`job.dispatch_failed` records user-visible dispatch rejection before returning
+409. It must include:
+
+- `type`
+- `worker_id`
+- `job_id`
+- `reason`
+- `code`
+- `action`
+- `backend`
+- `session_id`
+- `workspace_root`
+
+Allowed `type` values:
+
+- `dispatch_failed`
+
+Allowed `reason` values for the current WS-A slice:
+
+- `worker_unavailable`
+- `worker_offline`
+- `worker_backend_unavailable`
+
 ### Notification Delivery Events
 
-When `AGENTHUB_NOTIFICATION_WEBHOOK_URL` is configured, `job.complete` and
-`permission.request` events must attempt a bounded webhook delivery. Notification
-delivery failure must never fail or roll back the source job/permission flow.
+When `AGENTHUB_NOTIFICATION_WEBHOOK_URL` is configured, user-visible
+completion, approval, dispatch-failure, worker-offline, and stale-job events
+must attempt a bounded webhook delivery. Notification delivery failure must
+never fail or roll back the source job/permission/recovery flow.
 
 `notification.delivery_failed` must include:
 
@@ -69,7 +103,21 @@ delivery failure must never fail or roll back the source job/permission flow.
 Allowed `notification_type` values for the current WS-A slice:
 
 - `job.complete`
+- `job.dispatch_failed`
+- `job.fail_orphaned`
+- `job.fail_stale`
+- `job.fail_worker_offline`
 - `permission.request`
+- `worker.offline_heartbeat_expired`
+
+## Operator Query Surface
+
+Operators can filter recent events without parsing human text:
+
+```text
+GET /api/events?payload_type=stale_job&worker_id=<worker-id>&reason=claimed_job_timeout
+GET /api/events?event_type=job.dispatch_failed&payload_type=dispatch_failed
+```
 
 ## Measurement Rules
 

@@ -204,33 +204,124 @@ def _session_ordering():
     )
 
 
-def _require_worker_backend_available(db: DbSession, space_id: str | None, worker_id: str, backend: str) -> Worker:
+def _raise_dispatch_failure(
+    db: DbSession,
+    *,
+    space_id: str | None,
+    worker_id: str,
+    backend: str,
+    reason: str,
+    message: str,
+    code: str,
+    actor: Actor | None = None,
+    action: str = "worker_job_dispatch",
+    session_id: str | None = None,
+    workspace_root: str | None = None,
+) -> None:
+    write_event(
+        db,
+        space_id=space_id,
+        actor_type=actor.actor_type if actor else "system",
+        actor_id=actor.actor_id if actor else "dispatch-guard",
+        source_type="worker",
+        source_id=worker_id,
+        event_type="job.dispatch_failed",
+        level="warning",
+        payload={
+            "type": "dispatch_failed",
+            "worker_id": worker_id,
+            "job_id": None,
+            "reason": reason,
+            "code": code,
+            "action": action,
+            "backend": backend,
+            "session_id": session_id,
+            "workspace_root": workspace_root,
+        },
+    )
+    db.commit()
+    raise HTTPException(status_code=409, detail={"message": message, "code": code})
+
+
+def _require_worker_backend_available(
+    db: DbSession,
+    space_id: str | None,
+    worker_id: str,
+    backend: str,
+    *,
+    actor: Actor | None = None,
+    action: str = "worker_job_dispatch",
+    session_id: str | None = None,
+    workspace_root: str | None = None,
+) -> Worker:
     worker = db.query(Worker).filter(Worker.space_id == space_id, Worker.worker_id == worker_id).one_or_none()
     if worker is None:
-        raise HTTPException(
-            status_code=409,
-            detail={"message": "Worker is not registered", "code": "WORKER_UNAVAILABLE"},
+        _raise_dispatch_failure(
+            db,
+            space_id=space_id,
+            worker_id=worker_id,
+            backend=backend,
+            reason="worker_unavailable",
+            message="Worker is not registered",
+            code="WORKER_UNAVAILABLE",
+            actor=actor,
+            action=action,
+            session_id=session_id,
+            workspace_root=workspace_root,
         )
     if worker.status == "offline":
-        raise HTTPException(status_code=409, detail={"message": "Worker is offline", "code": "WORKER_OFFLINE"})
+        _raise_dispatch_failure(
+            db,
+            space_id=space_id,
+            worker_id=worker_id,
+            backend=backend,
+            reason="worker_offline",
+            message="Worker is offline",
+            code="WORKER_OFFLINE",
+            actor=actor,
+            action=action,
+            session_id=session_id,
+            workspace_root=workspace_root,
+        )
     reachable_backends = {
         str(backend).strip().lower()
         for backend in loads_json(worker.reachable_backends_json, [])
         if str(backend).strip()
     }
     if backend.strip().lower() not in reachable_backends:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": f"Worker {worker_id} cannot run {backend}",
-                "code": "WORKER_BACKEND_UNAVAILABLE",
-            },
+        _raise_dispatch_failure(
+            db,
+            space_id=space_id,
+            worker_id=worker_id,
+            backend=backend,
+            reason="worker_backend_unavailable",
+            message=f"Worker {worker_id} cannot run {backend}",
+            code="WORKER_BACKEND_UNAVAILABLE",
+            actor=actor,
+            action=action,
+            session_id=session_id,
+            workspace_root=workspace_root,
         )
     return worker
 
 
-def _require_worker_backend(db: DbSession, session: AgentSession) -> None:
-    _require_worker_backend_available(db, session.space_id, session.worker_id, session.backend)
+def _require_worker_backend(
+    db: DbSession,
+    session: AgentSession,
+    *,
+    actor: Actor | None = None,
+    action: str = "worker_job_dispatch",
+) -> None:
+    _require_worker_backend_available(
+        db,
+        session.space_id,
+        session.worker_id,
+        session.backend,
+        actor=actor,
+        action=action,
+        session_id=session.session_id,
+        workspace_root=session.workspace_root,
+    )
 
 
 def _require_codex_native_fast(db: DbSession, session: AgentSession) -> None:
@@ -624,7 +715,15 @@ def start_session(
 ):
     backend = payload.backend.strip().lower()
     workspace_root = payload.workspace_root.strip()
-    _require_worker_backend_available(db, actor.space_id, payload.worker_id, backend)
+    _require_worker_backend_available(
+        db,
+        actor.space_id,
+        payload.worker_id,
+        backend,
+        actor=actor,
+        action="session_start",
+        workspace_root=workspace_root,
+    )
     controls = _normalize_controls(payload.controls, backend=backend)
     job = _create_worker_job(
         db=db,
@@ -681,7 +780,16 @@ def fork_session(
     backend = (payload.backend or session.backend).strip().lower()
     workspace_root = (payload.workspace_root or session.workspace_root).strip()
     namespace = (payload.namespace or session.namespace or "default").strip() or "default"
-    _require_worker_backend_available(db, actor.space_id, worker_id, backend)
+    _require_worker_backend_available(
+        db,
+        actor.space_id,
+        worker_id,
+        backend,
+        actor=actor,
+        action="session_fork",
+        session_id=session.session_id,
+        workspace_root=workspace_root,
+    )
     controls = (
         _normalize_controls(payload.controls, backend=backend)
         if payload.controls is not None
@@ -736,7 +844,7 @@ def btw_session(
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
     _reject_unsupported_virtual_session(session, action="btw")
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="session_btw")
     controls = (
         _normalize_controls(payload.controls, backend=session.backend)
         if payload.controls is not None
@@ -787,7 +895,7 @@ def list_session_files(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_list")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -823,7 +931,7 @@ def read_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_read")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -859,7 +967,7 @@ def write_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_write")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -899,7 +1007,7 @@ def upload_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_upload")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -941,7 +1049,7 @@ def create_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_create")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -977,7 +1085,7 @@ def mkdir_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_mkdir")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -1013,7 +1121,7 @@ def rename_session_file(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="file_rename")
     job = _create_worker_job(
         db=db,
         actor=actor,
@@ -1139,7 +1247,7 @@ def send_session_input(
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
     _reject_unsupported_virtual_session(session, action="session_input")
-    _require_worker_backend(db, session)
+    _require_worker_backend(db, session, actor=actor, action="session_input")
     session_was_running = _session_runtime_busy(session)
     reply_mode = payload.reply_mode
     backend_name = session.backend.strip().lower()
