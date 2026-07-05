@@ -20,10 +20,20 @@ describe('mobile WebView layout guardrails', () => {
     expect(index).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg" />');
     expect(index).toContain('<meta name="theme-color" content="#0d66d0" />');
     expect(favicon).toContain('<title>AgentHub</title>');
-    expect(favicon).toContain('#6CC8FF');
-    expect(favicon).toContain('#58B6FF');
-    expect(favicon).toContain('rotate(45 512 512)');
+    expect(favicon).toContain('#79D1FF');
+    expect(favicon).toContain('#3EA5FF');
+    expect(favicon).toContain('rotate(-45 512 512)');
     expect(favicon).not.toContain('agenthub-icon-mask');
+  });
+
+  it('uses per-instance ids for inline brand mark gradients', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+
+    expect(app).toContain('useId');
+    expect(app).toContain('id={gradientId}');
+    expect(app).toContain('fill={`url(#${gradientId})`}');
+    expect(app).not.toContain('id="agenthubBrandMarkGradient"');
+    expect(app).not.toContain('fill="url(#agenthubBrandMarkGradient)"');
   });
 
   it('keeps the fulltext reader above all mobile chrome', () => {

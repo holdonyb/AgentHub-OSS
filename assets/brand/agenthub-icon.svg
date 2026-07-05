@@ -1,8 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
   <title>AgentHub</title>
+  <defs><linearGradient id="ahIconGradient" gradientUnits="userSpaceOnUse" x1="125" y1="512" x2="899" y2="512"><stop offset="0" stop-color="#79D1FF"/><stop offset="1" stop-color="#3EA5FF"/></linearGradient></defs>
   <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="#DCE8F6" stroke-width="8"/>
-  <g transform="rotate(45 512 512)">
-    <path fill="#6CC8FF" d="M274 344h116v164h248v116H390v164H274V624H26V508h248z"/>
-    <path fill="#58B6FF" d="M750 236h116v164h132v116H866v164H750V516H502V400h248z"/>
+  <g transform="translate(168 168) scale(0.671875)">
+    <g transform="rotate(-45 512 512)" fill="url(#ahIconGradient)">
+    <rect x="348" y="234" width="112" height="556"/>
+    <rect x="125" y="456" width="335" height="112"/>
+    <rect x="564" y="234" width="112" height="556"/>
+    <rect x="564" y="456" width="335" height="112"/>
+    </g>
   </g>
 </svg>

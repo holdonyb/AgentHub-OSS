@@ -41,7 +41,7 @@ import {
   UserCircle,
   Users,
 } from 'lucide-react';
-import { ChangeEvent, ClipboardEvent, FocusEvent, FormEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ClipboardEvent, FocusEvent, FormEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -248,6 +248,8 @@ interface VoiceTurnResponse {
 }
 
 function AgentHubBrandMark({ size = 22, className = '' }: { size?: number; className?: string }) {
+  const gradientId = `agenthub-brand-mark-${useId().replace(/:/g, '')}`;
+
   return (
     <svg
       aria-hidden="true"
@@ -258,9 +260,24 @@ function AgentHubBrandMark({ size = 22, className = '' }: { size?: number; class
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <g transform="rotate(45 12 12)">
-        <path d="M7.7 8.4h2.6v3.7h5.6v2.6h-5.6v3.7H7.7v-3.7H2.1v-2.6h5.6z" fill="#6CC8FF" />
-        <path d="M16.2 5.8h2.6v3.7h3v2.6h-3v3.7h-2.6v-3.7h-5.6V9.5h5.6z" fill="#58B6FF" />
+      <defs>
+        <linearGradient
+          id={gradientId}
+          gradientUnits="userSpaceOnUse"
+          x1="2.93"
+          y1="12"
+          x2="21.07"
+          y2="12"
+        >
+          <stop offset="0" stopColor="#79D1FF" />
+          <stop offset="1" stopColor="#3EA5FF" />
+        </linearGradient>
+      </defs>
+      <g transform="rotate(-45 12 12)" fill={`url(#${gradientId})`}>
+        <path d="M8.16 5.48h2.63v13.03H8.16z" />
+        <path d="M2.93 10.69h7.85v2.63H2.93z" />
+        <path d="M13.22 5.48h2.63v13.03h-2.63z" />
+        <path d="M13.22 10.69h7.85v2.63h-7.85z" />
       </g>
     </svg>
   );
