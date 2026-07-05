@@ -976,6 +976,105 @@ def test_session_sync_cursor_returns_same_seq_timeline_updates(client: TestClien
     assert second_payload["items"][0]["text"] == "final"
 
 
+def test_session_sync_cursor_prioritizes_live_rows_when_history_touch_exceeds_page_limit(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-cursor-history-touch-limit",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-cursor-history-touch-limit",
+            "status": "ready",
+            "title": "Delta cursor history touch",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_created_at = (datetime.utcnow() - timedelta(days=10)).isoformat()
+    initial_items = [
+        {
+            "seq": seq,
+            "item_type": "user_message",
+            "role": "user",
+            "text": f"initial historical prompt {seq}",
+            "created_at": old_created_at,
+        }
+        for seq in range(1, 301)
+    ]
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-cursor-history-touch-limit/timeline",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "items": initial_items},
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get(
+        "/api/sync/session/sess-delta-cursor-history-touch-limit",
+        params={"limit": 500},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert first_payload["next_after_seq"] == 300
+    assert first_payload["next_after_cursor"]
+
+    summary_text = "new assistant reply should not hide behind touched history"
+    live_created_at = datetime.utcnow().isoformat()
+    replay_items = [
+        {
+            "seq": seq,
+            "item_type": "assistant_message" if seq == 250 else "user_message",
+            "role": "assistant" if seq == 250 else "user",
+            "text": summary_text if seq == 250 else f"replayed historical prompt {seq}",
+            "created_at": live_created_at if seq == 250 else old_created_at,
+        }
+        for seq in range(1, 501)
+    ]
+    replay = client.post(
+        "/api/internal/sessions/sess-delta-cursor-history-touch-limit/timeline",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "items": replay_items},
+    )
+    assert replay.status_code == 200, replay.text
+
+    with client.app.state.SessionLocal() as db:
+        summary_row = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-delta-cursor-history-touch-limit")
+            .filter(AgentTimeline.seq == 250)
+            .one()
+        )
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-delta-cursor-history-touch-limit").one()
+        session.last_message = summary_text
+        session.last_role = "assistant"
+        session.last_activity_at = summary_row.created_at
+        session.updated_at = summary_row.updated_at
+        db.commit()
+
+    second = client.get(
+        "/api/sync/session/sess-delta-cursor-history-touch-limit",
+        params={"cursor": first_payload["next_after_cursor"], "limit": 200},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    by_seq = {item["seq"]: item for item in second_payload["items"]}
+    assert by_seq[250]["text"] == summary_text
+
+
 def test_session_sync_after_seq_returns_recent_same_seq_updates_for_legacy_clients(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

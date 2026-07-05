@@ -261,6 +261,50 @@ def _timeline_delta_query(
     return query.order_by(AgentTimeline.seq.asc())
 
 
+def _timeline_cursor_filter(updated_after: datetime, seq_after: int):
+    return or_(
+        AgentTimeline.updated_at > updated_after,
+        and_(AgentTimeline.updated_at == updated_after, AgentTimeline.seq > seq_after),
+    )
+
+
+def _cursor_timeline_rows(
+    db: DbSession,
+    space_id: str | None,
+    session: AgentSession,
+    *,
+    cursor: str,
+    limit: int,
+) -> list[AgentTimeline]:
+    updated_after, seq_after = _decode_timeline_cursor(cursor)
+    base_filters = (
+        AgentTimeline.space_id == space_id,
+        AgentTimeline.session_id == session.session_id,
+        _timeline_cursor_filter(updated_after, seq_after),
+    )
+    live_rows = (
+        db.query(AgentTimeline)
+        .filter(*base_filters)
+        .filter(AgentTimeline.created_at >= updated_after)
+        .order_by(AgentTimeline.created_at.asc(), AgentTimeline.seq.asc())
+        .limit(limit + 1)
+        .all()
+    )
+    if len(live_rows) > limit:
+        return live_rows
+
+    backfill_limit = max(1, limit + 1 - len(live_rows))
+    backfill_rows = (
+        db.query(AgentTimeline)
+        .filter(*base_filters)
+        .filter(AgentTimeline.created_at < updated_after)
+        .order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
+        .limit(backfill_limit)
+        .all()
+    )
+    return _dedupe_timeline_rows([*live_rows, *backfill_rows])
+
+
 def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_updated_since: datetime | None) -> bool:
     if after_seq <= 0:
         return True
@@ -365,6 +409,29 @@ def _append_summary_timeline_rows_for_legacy_after_seq(
     cursor: str | None,
 ) -> list[AgentTimeline]:
     if after_seq <= 0 or cursor or _timeline_reflects_session_last_message(session, rows):
+        return rows
+    if session.last_role == "user":
+        return rows
+    last_message = (session.last_message or "").strip()
+    if not last_message:
+        return rows
+    summary_rows = _latest_summary_timeline_rows(db, session, last_message)
+    if not summary_rows:
+        materialized = _materialize_summary_timeline_row(db, session, last_message)
+        summary_rows = [materialized] if materialized is not None else []
+    if not summary_rows:
+        return rows
+    return _merge_summary_rows_first(rows, summary_rows)
+
+
+def _append_summary_timeline_rows_for_cursor(
+    db: DbSession,
+    session: AgentSession,
+    rows: list[AgentTimeline],
+    *,
+    cursor: str,
+) -> list[AgentTimeline]:
+    if not cursor or _timeline_reflects_session_last_message(session, rows):
         return rows
     if session.last_role == "user":
         return rows
@@ -560,7 +627,20 @@ def get_session_sync(
     if ensure_session_summary_timeline_row(db, session) is not None:
         db.commit()
     legacy_updated_since = session.last_activity_at or session.updated_at
-    if after_seq > 0 and not cursor:
+    if cursor:
+        timeline_rows = _append_summary_timeline_rows_for_cursor(
+            db,
+            session,
+            _cursor_timeline_rows(
+                db,
+                actor.space_id,
+                session,
+                cursor=cursor,
+                limit=limit,
+            ),
+            cursor=cursor,
+        )
+    elif after_seq > 0:
         timeline_rows = _legacy_after_seq_timeline_rows(
             db,
             actor.space_id,
