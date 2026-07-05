@@ -250,7 +250,10 @@ def _timeline_delta_query(
             legacy_filters.append(
                 and_(
                     AgentTimeline.seq < after_seq,
-                    AgentTimeline.created_at >= legacy_updated_since,
+                    or_(
+                        AgentTimeline.created_at >= legacy_updated_since,
+                        AgentTimeline.updated_at >= legacy_updated_since,
+                    ),
                 )
             )
         query = query.filter(or_(*legacy_filters))
@@ -272,7 +275,10 @@ def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_
     changed_after = _cursor_datetime(legacy_updated_since)
     row_created_at = _cursor_datetime(row.created_at)
     row_updated_at = _cursor_datetime(row.updated_at)
-    return row_created_at > changed_after or (row_created_at >= changed_after and row_updated_at > row_created_at)
+    return (
+        row_created_at > changed_after
+        or (row_updated_at > row_created_at and row_updated_at >= changed_after)
+    )
 
 
 def _timeline_reflects_session_last_message(session: AgentSession, rows: list[AgentTimeline]) -> bool:

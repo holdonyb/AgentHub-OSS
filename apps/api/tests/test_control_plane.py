@@ -1131,6 +1131,108 @@ def test_session_sync_after_seq_returns_newer_lower_seq_rows_for_legacy_clients(
     assert by_seq[15]["text"] == "preserved local input"
 
 
+def test_session_sync_after_seq_returns_updated_lower_seq_rows_for_legacy_clients(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-lower-seq-updated-compat",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-lower-seq-updated-compat",
+            "status": "ready",
+            "title": "Delta lower seq updated compat",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_created_at = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-lower-seq-updated-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 10,
+                    "item_type": "user_message",
+                    "role": "user",
+                    "text": "old prompt",
+                    "created_at": old_created_at,
+                },
+                {
+                    "seq": 20,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "old visible reply",
+                    "created_at": old_created_at,
+                },
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-lower-seq-updated-compat", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["next_after_seq"] == 20
+
+    second_publish = client.post(
+        "/api/internal/sessions/sess-delta-lower-seq-updated-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 15,
+                    "item_type": "tool_call",
+                    "role": "system",
+                    "tool_name": "Agent",
+                    "text": "late tool result with an old created_at",
+                    "created_at": old_created_at,
+                },
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    with client.app.state.SessionLocal() as db:
+        row = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-delta-lower-seq-updated-compat")
+            .filter(AgentTimeline.seq == 15)
+            .one()
+        )
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-delta-lower-seq-updated-compat").one()
+        session.last_message = "old visible reply"
+        session.last_role = "assistant"
+        session.last_activity_at = row.updated_at - timedelta(seconds=1)
+        session.updated_at = row.updated_at
+        db.commit()
+
+    second = client.get(
+        "/api/sync/session/sess-delta-lower-seq-updated-compat",
+        params={"after_seq": 20},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    by_seq = {item["seq"]: item for item in second_payload["items"]}
+    assert 15 in by_seq
+    assert by_seq[15]["text"] == "late tool result with an old created_at"
+
+
 def test_session_sync_after_seq_includes_summary_row_when_replace_reorders_seq(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
