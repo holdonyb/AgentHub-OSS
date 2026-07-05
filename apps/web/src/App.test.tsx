@@ -3969,7 +3969,7 @@ describe('AgentHub console', () => {
     expect(screen.getByRole('button', { name: 'Workers' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Device & Updates' })).toBeInTheDocument();
-    expect(localStorage.getItem('agenthub.locale')).toBe('en-US');
+    await waitFor(() => expect(localStorage.getItem('agenthub.locale')).toBe('en-US'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
     expect(await screen.findByText('Inbox')).toBeInTheDocument();
@@ -3998,7 +3998,7 @@ describe('AgentHub console', () => {
     expect(within(await screen.findByLabelText('我的')).getAllByRole('combobox', { name: '界面語言' })[0]).toHaveValue(
       'zh-TW',
     );
-    expect(localStorage.getItem('agenthub.locale')).toBe('zh-TW');
+    await waitFor(() => expect(localStorage.getItem('agenthub.locale')).toBe('zh-TW'));
   });
 
   it('lets admins save worker runtime defaults from the mobile settings pane', async () => {
