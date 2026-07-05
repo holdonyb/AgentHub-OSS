@@ -827,6 +827,7 @@ def upsert_timeline_items(
         seq = int(seq_value) if isinstance(seq_value, int) or (isinstance(seq_value, str) and seq_value.isdigit()) else next_seq
         next_seq = max(next_seq, seq + 1)
         item = existing.get(seq)
+        is_new_item = item is None
         if item is None:
             item = AgentTimeline(space_id=space_id, session_id=session_id, seq=seq)
             db.add(item)
@@ -840,7 +841,8 @@ def upsert_timeline_items(
         item.tool_name = payload.get("tool_name") if isinstance(payload.get("tool_name"), str) else None
         item.status = payload.get("status") if isinstance(payload.get("status"), str) else None
         item.payload_json = dumps_json(payload.get("payload") if isinstance(payload.get("payload"), dict) else {})
-        item.created_at = _parse_created_at(payload.get("created_at"))
+        if is_new_item or payload.get("created_at") is not None:
+            item.created_at = _parse_created_at(payload.get("created_at"))
         item.updated_at = now
         saved.append(item)
     db.flush()

@@ -224,6 +224,7 @@ def _timeline_delta_query(
     *,
     cursor: str | None,
     after_seq: int,
+    legacy_updated_since: datetime | None = None,
 ):
     query = db.query(AgentTimeline).filter(AgentTimeline.space_id == space_id, AgentTimeline.session_id == session_id)
     if cursor:
@@ -236,8 +237,32 @@ def _timeline_delta_query(
         )
         return query.order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
     if after_seq > 0:
-        query = query.filter(AgentTimeline.seq > after_seq)
+        legacy_filters = [AgentTimeline.seq >= after_seq]
+        if legacy_updated_since is not None:
+            legacy_filters.append(
+                and_(
+                    AgentTimeline.seq < after_seq,
+                    AgentTimeline.created_at >= legacy_updated_since,
+                )
+            )
+        query = query.filter(or_(*legacy_filters))
+        return query.order_by(AgentTimeline.updated_at.asc(), AgentTimeline.seq.asc())
     return query.order_by(AgentTimeline.seq.asc())
+
+
+def _include_legacy_after_seq_row(row: AgentTimeline, *, after_seq: int, legacy_updated_since: datetime | None) -> bool:
+    if after_seq <= 0:
+        return True
+    if row.seq > after_seq:
+        return True
+    if row.seq == after_seq:
+        return _cursor_datetime(row.updated_at) > _cursor_datetime(row.created_at)
+    if legacy_updated_since is None:
+        return False
+    changed_after = _cursor_datetime(legacy_updated_since)
+    row_created_at = _cursor_datetime(row.created_at)
+    row_updated_at = _cursor_datetime(row.updated_at)
+    return row_created_at > changed_after or (row_created_at >= changed_after and row_updated_at > row_created_at)
 
 
 def _session_delta_query(db: DbSession, space_id: str | None, cursor: str | None):
@@ -357,13 +382,25 @@ def get_session_sync(
     )
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    legacy_updated_since = session.last_activity_at or session.updated_at
     timeline_rows = _timeline_delta_query(
         db,
         actor.space_id,
         session_id,
         cursor=cursor,
         after_seq=after_seq,
+        legacy_updated_since=legacy_updated_since,
     ).limit(limit + 1).all()
+    if after_seq > 0 and not cursor:
+        timeline_rows = [
+            row
+            for row in timeline_rows
+            if _include_legacy_after_seq_row(
+                row,
+                after_seq=after_seq,
+                legacy_updated_since=legacy_updated_since,
+            )
+        ]
     has_more = len(timeline_rows) > limit
     page_rows = timeline_rows[:limit]
     job_rows = (
@@ -375,7 +412,7 @@ def get_session_sync(
     )
     next_after_seq = after_seq
     if page_rows:
-        next_after_seq = max(after_seq, page_rows[-1].seq)
+        next_after_seq = max([after_seq, *(row.seq for row in page_rows)])
     next_after_cursor = cursor
     if page_rows:
         next_after_cursor = _encode_timeline_cursor(page_rows[-1].updated_at, page_rows[-1].seq)

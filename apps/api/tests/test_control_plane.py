@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -630,6 +630,161 @@ def test_session_sync_cursor_returns_same_seq_timeline_updates(client: TestClien
     second_payload = second.json()
     assert [item["seq"] for item in second_payload["items"]] == [2]
     assert second_payload["items"][0]["text"] == "final"
+
+
+def test_session_sync_after_seq_returns_recent_same_seq_updates_for_legacy_clients(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-after-seq-compat",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-after-seq-compat",
+            "status": "ready",
+            "title": "Delta after-seq compat",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-after-seq-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {"seq": 1, "item_type": "user_message", "role": "user", "text": "hello"},
+                {"seq": 2, "item_type": "assistant_message", "role": "assistant", "text": "draft"},
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-after-seq-compat", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["next_after_seq"] == 2
+
+    second_publish = client.post(
+        "/api/internal/sessions/sess-delta-after-seq-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {"seq": 2, "item_type": "assistant_message", "role": "assistant", "text": "final"},
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    second = client.get(
+        "/api/sync/session/sess-delta-after-seq-compat",
+        params={"after_seq": 2},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert [item["seq"] for item in second_payload["items"]] == [2]
+    assert second_payload["items"][0]["text"] == "final"
+
+
+def test_session_sync_after_seq_returns_newer_lower_seq_rows_for_legacy_clients(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-lower-seq-compat",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-lower-seq-compat",
+            "status": "ready",
+            "title": "Delta lower seq compat",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    initial_created_at = (datetime.utcnow() - timedelta(seconds=30)).isoformat()
+    first_publish = client.post(
+        "/api/internal/sessions/sess-delta-lower-seq-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 10,
+                    "item_type": "user_message",
+                    "role": "user",
+                    "text": "hello",
+                    "created_at": initial_created_at,
+                },
+                {
+                    "seq": 20,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "world",
+                    "created_at": initial_created_at,
+                },
+            ],
+        },
+    )
+    assert first_publish.status_code == 200, first_publish.text
+
+    first = client.get("/api/sync/session/sess-delta-lower-seq-compat", headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["next_after_seq"] == 20
+
+    later_created_at = datetime.utcnow().isoformat()
+    second_publish = client.post(
+        "/api/internal/sessions/sess-delta-lower-seq-compat/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 15,
+                    "item_type": "user_message",
+                    "role": "user",
+                    "text": "preserved local input",
+                    "created_at": later_created_at,
+                },
+            ],
+        },
+    )
+    assert second_publish.status_code == 200, second_publish.text
+
+    second = client.get(
+        "/api/sync/session/sess-delta-lower-seq-compat",
+        params={"after_seq": 20},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    by_seq = {item["seq"]: item for item in second_payload["items"]}
+    assert 15 in by_seq
+    assert by_seq[15]["text"] == "preserved local input"
 
 
 def test_permission_sync_returns_incremental_pending_and_resolved_updates(client: TestClient) -> None:
