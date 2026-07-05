@@ -33,6 +33,14 @@ Implemented tests cover:
 - Codex/Claude JSONL fixture parsing
 - Windows path normalization with Chinese names and spaces
 
+Reliability SLOs and E1 fault-injection scenarios are documented in
+[`RELIABILITY_SLO.md`](RELIABILITY_SLO.md). Run the current fault-injection suite
+with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest apps/api/tests/fault_injection -m all_scenarios -q
+```
+
 ## Web Coverage
 
 Implemented tests cover:

@@ -86,7 +86,14 @@ def _recover_job_rows(db: Session, jobs: list[Job], *, worker_id_for_event: str)
             source_id=job.job_id,
             event_type="job.fail_stale",
             level="warning",
-            payload={"worker_id": job.worker_id or worker_id_for_event, "kind": job.kind, "stale_after_seconds": stale_after},
+            payload={
+                "worker_id": job.worker_id or worker_id_for_event,
+                "job_id": job.job_id,
+                "kind": job.kind,
+                "reason": "claimed_job_timeout",
+                "recovery_action": "failed_unblock_queued_input",
+                "stale_after_seconds": stale_after,
+            },
         )
     return recovered
 
@@ -143,7 +150,10 @@ def recover_orphaned_running_jobs(
             level="warning",
             payload={
                 "worker_id": worker_id,
+                "job_id": job.job_id,
                 "kind": job.kind,
+                "reason": "worker_restart_without_active_job",
+                "recovery_action": "failed_unblock_queued_input",
                 "grace_seconds": settings.orphaned_claimed_job_grace_seconds,
                 "active_job_count": len(active_ids),
             },
@@ -211,7 +221,10 @@ def _recover_disconnected_worker_jobs(db: Session, worker: Worker, now: datetime
             level="warning",
             payload={
                 "worker_id": worker.worker_id,
+                "job_id": job.job_id,
                 "kind": job.kind,
+                "reason": "worker_heartbeat_expired",
+                "recovery_action": "failed_unblock_queued_input",
                 "heartbeat_offline_seconds": settings.heartbeat_offline_seconds,
             },
         )
@@ -245,7 +258,11 @@ def recover_disconnected_workers_for_space(db: Session, space_id: str | None) ->
             source_id=worker.worker_id,
             event_type="worker.offline_heartbeat_expired",
             level="warning",
-            payload={"heartbeat_offline_seconds": settings.heartbeat_offline_seconds},
+            payload={
+                "worker_id": worker.worker_id,
+                "reason": "heartbeat_expired",
+                "heartbeat_offline_seconds": settings.heartbeat_offline_seconds,
+            },
         )
     return changed
 
