@@ -22,6 +22,7 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
         "docs/CONFIGURATION_REFERENCE.md",
         "docs/LOCAL_SERVER_MODE.md",
         "docs/OPEN_SOURCE_LAUNCH.md",
+        "docs/RELIABILITY_SLO.md",
         "docs/SELF_HOST_QUICKSTART.md",
         "docs/TAILSCALE_PRIVATE_MODE.md",
         "docs/SELF_HOST_TROUBLESHOOTING.md",
@@ -83,6 +84,17 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "macOS desktop" in readme
     assert "欢迎社区贡献" in readme
     assert "English README" in readme
+
+    testing_doc = (REPO_ROOT / "docs" / "TESTING.md").read_text(encoding="utf-8")
+    slo_doc = (REPO_ROOT / "docs" / "RELIABILITY_SLO.md").read_text(encoding="utf-8")
+    assert "RELIABILITY_SLO.md" in testing_doc
+    for output_field in [
+        "message_delivery_success_rate_7d",
+        "notification_latency_p95_seconds",
+        "worker_recovery_success_rate",
+        "weekly_codex_exec_fallback_count",
+    ]:
+        assert output_field in slo_doc
 
     assert "[简体中文](README.md) | [English](README.en.md)" in readme_en
     assert "Personal Agent Control Plane" in readme_en

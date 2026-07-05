@@ -11,6 +11,7 @@ coverage/
 .vite/
 .playwright-cli/
 artifacts/
+apps/api/tests/fault_injection/reports/
 .runtime/
 data/
 *.jks
