@@ -343,7 +343,22 @@ def _merge_summary_rows_first(rows: list[AgentTimeline], summary_rows: list[Agen
     return merged
 
 
-def _append_summary_timeline_rows_for_legacy_after_seq(
+def _summary_updated_after_cursor(session: AgentSession, cursor: str | None) -> bool:
+    if not cursor:
+        return True
+    cursor_updated_at, _ = _decode_timeline_cursor(cursor)
+    summary_updated_at = session.updated_at or session.last_activity_at
+    return _cursor_datetime(summary_updated_at) > cursor_updated_at
+
+
+def _summary_rows_after_cursor(rows: list[AgentTimeline], cursor: str | None) -> list[AgentTimeline]:
+    if not cursor:
+        return rows
+    cursor_updated_at, _ = _decode_timeline_cursor(cursor)
+    return [row for row in rows if _cursor_datetime(row.updated_at) > cursor_updated_at]
+
+
+def _append_summary_timeline_rows_for_missing_summary(
     db: DbSession,
     session: AgentSession,
     rows: list[AgentTimeline],
@@ -351,15 +366,17 @@ def _append_summary_timeline_rows_for_legacy_after_seq(
     after_seq: int,
     cursor: str | None,
 ) -> list[AgentTimeline]:
-    if after_seq <= 0 or cursor or _timeline_reflects_session_last_message(session, rows):
+    if (after_seq <= 0 and not cursor) or _timeline_reflects_session_last_message(session, rows):
         return rows
     if session.last_role == "user":
         return rows
     last_message = (session.last_message or "").strip()
     if not last_message:
         return rows
-    summary_rows = _latest_summary_timeline_rows(db, session, last_message)
+    summary_rows = _summary_rows_after_cursor(_latest_summary_timeline_rows(db, session, last_message), cursor)
     if not summary_rows:
+        if not _summary_updated_after_cursor(session, cursor):
+            return rows
         materialized = _materialize_summary_timeline_row(db, session, last_message)
         summary_rows = [materialized] if materialized is not None else []
     if not summary_rows:
@@ -503,13 +520,13 @@ def get_session_sync(
                 legacy_updated_since=legacy_updated_since,
             )
         ]
-        timeline_rows = _append_summary_timeline_rows_for_legacy_after_seq(
-            db,
-            session,
-            timeline_rows,
-            after_seq=after_seq,
-            cursor=cursor,
-        )
+    timeline_rows = _append_summary_timeline_rows_for_missing_summary(
+        db,
+        session,
+        timeline_rows,
+        after_seq=after_seq,
+        cursor=cursor,
+    )
     has_more = len(timeline_rows) > limit
     page_rows = timeline_rows[:limit]
     job_rows = (
@@ -524,7 +541,8 @@ def get_session_sync(
         next_after_seq = max([after_seq, *(row.seq for row in page_rows)])
     next_after_cursor = cursor
     if page_rows:
-        next_after_cursor = _encode_timeline_cursor(page_rows[-1].updated_at, page_rows[-1].seq)
+        cursor_tail = max(page_rows, key=lambda row: (_cursor_datetime(row.updated_at), row.seq))
+        next_after_cursor = _encode_timeline_cursor(cursor_tail.updated_at, cursor_tail.seq)
     return SessionSyncOut(
         session=session_out(session),
         items=[timeline_item_out(item) for item in page_rows],
