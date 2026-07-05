@@ -5465,6 +5465,102 @@ describe('AgentHub console', () => {
     expect(sessionDeltaUrls.some((url) => decodeURIComponent(url).includes('cursor=2026-04-26T10:00:00Z|2'))).toBe(true);
   });
 
+  it('continues paginated session delta sync so replace publishes do not hide the latest message', async () => {
+    const sessionDeltaUrls: string[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/inbox')) {
+        return jsonResponse({
+          cursor: '2026-04-26T10:04:00Z|sess-1',
+          items: [
+            {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '第二页才有的最终消息',
+              last_activity_at: '2026-04-26T10:04:00Z',
+            },
+          ],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        sessionDeltaUrls.push(url);
+        const decoded = decodeURIComponent(url);
+        if (decoded.includes('cursor=2026-04-26T10:03:00Z|200')) {
+          return jsonResponse({
+            ...sessionSyncPayload,
+            session: {
+              ...sessionPayload.items[0],
+              status: 'needs_reply',
+              last_message: '第二页才有的最终消息',
+              last_activity_at: '2026-04-26T10:04:00Z',
+            },
+            items: [
+              {
+                session_id: 'sess-1',
+                seq: 301,
+                item_type: 'assistant_message',
+                role: 'assistant',
+                text: '第二页才有的最终消息',
+                created_at: '2026-04-26T10:04:00Z',
+              },
+            ],
+            next_after_seq: 301,
+            next_after_cursor: '2026-04-26T10:04:00Z|301',
+            has_more: false,
+          });
+        }
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: {
+            ...sessionPayload.items[0],
+            status: 'needs_reply',
+            last_message: '第二页才有的最终消息',
+            last_activity_at: '2026-04-26T10:04:00Z',
+          },
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 200,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: '第一页只有旧的中间消息',
+              created_at: '2026-04-26T10:03:00Z',
+            },
+          ],
+          next_after_seq: 200,
+          next_after_cursor: '2026-04-26T10:03:00Z|200',
+          has_more: true,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('<script>alert("xss")</script>')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('第二页才有的最终消息')).toBeInTheDocument();
+    expect(sessionDeltaUrls).toHaveLength(2);
+    expect(sessionDeltaUrls.some((url) => decodeURIComponent(url).includes('cursor=2026-04-26T10:03:00Z|200'))).toBe(true);
+  });
+
   it('flushes recorder data before stop so Android WebView does not lose the final audio chunk', async () => {
     let resolveVoice: (() => void) | undefined;
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
