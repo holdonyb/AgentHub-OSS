@@ -27,6 +27,12 @@ Run FI-3 only:
 .\.venv\Scripts\python.exe -m pytest apps/api/tests/fault_injection -m fi_3 -q
 ```
 
+Run FI-4 only:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest apps/api/tests/fault_injection -m fi_4 -q
+```
+
 FI-1 currently covers the control-plane recovery contract for a worker that dies
 or restarts after claiming a job: the active job must be recovered into a
 terminal state, the target session must unblock, late zombie completion must be
@@ -42,6 +48,11 @@ while a worker job is in flight: the restarted API must still show the running
 job, accept the legitimate worker completion, reject duplicate completion, write
 exactly one completion event, and expose the final succeeded job / ready session
 state to clients.
+
+FI-4 currently covers concurrent control-plane dispatch: ten sessions are
+created and queued concurrently, the worker claims each unique job exactly once,
+all jobs reach a terminal succeeded state, all sessions return to ready, and the
+run fails if SQLite lock or duplicate-job behavior appears.
 
 Scenario runs write machine-readable evidence to
 `apps/api/tests/fault_injection/reports/` by default. Override with
