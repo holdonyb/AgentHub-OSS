@@ -10,6 +10,7 @@ from app.models import AgentSession, AgentTimeline
 from app.routers.internal import _assert_worker_binding
 from app.schemas import TimelinePublishIn
 from app.services import (
+    ensure_session_summary_timeline_row,
     ensure_codex_plan_exit_permission_from_timeline,
     ensure_missing_codex_plan_exit_permission_from_session_timeline,
     expire_pending_permissions_superseded_by_timeline,
@@ -43,7 +44,8 @@ def get_session_timeline(
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
     plan_exit_permission, expired_permissions = ensure_missing_codex_plan_exit_permission_from_session_timeline(db, session)
-    if plan_exit_permission is not None or expired_permissions:
+    summary_row = ensure_session_summary_timeline_row(db, session)
+    if plan_exit_permission is not None or expired_permissions or summary_row is not None:
         db.commit()
     query = db.query(AgentTimeline).filter(AgentTimeline.space_id == actor.space_id, AgentTimeline.session_id == session_id)
     cursor_created_at = _normalize_cursor_datetime(before_created_at)

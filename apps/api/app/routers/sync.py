@@ -13,7 +13,14 @@ from app.core.deps import Actor, DbSession, require_min_role
 from app.core.json import dumps_json
 from app.models import AgentPermission, AgentSession, AgentTimeline, Job, ProviderSnapshot, Schedule, Worker
 from app.schemas import InboxSyncOut, PermissionSyncOut, SessionSyncOut, SyncStatusOut
-from app.services import job_out, permission_out, session_out, session_summary_out, timeline_item_out
+from app.services import (
+    ensure_session_summary_timeline_row,
+    job_out,
+    permission_out,
+    session_out,
+    session_summary_out,
+    timeline_item_out,
+)
 
 router = APIRouter()
 EPOCH_UTC = datetime.fromtimestamp(0, tz=timezone.utc)
@@ -484,6 +491,8 @@ def get_session_sync(
     )
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    if ensure_session_summary_timeline_row(db, session) is not None:
+        db.commit()
     legacy_updated_since = session.last_activity_at or session.updated_at
     timeline_rows = _timeline_delta_query(
         db,

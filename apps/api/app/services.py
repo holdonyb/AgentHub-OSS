@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 
 from app.core.audit import write_event
 from app.core.config import get_settings
@@ -847,6 +848,67 @@ def upsert_timeline_items(
         saved.append(item)
     db.flush()
     return saved
+
+
+def _summary_timeline_item_type_for_role(role: str) -> str:
+    if role == "system":
+        return "error"
+    return "assistant_message"
+
+
+def _latest_summary_timeline_row(db: Any, session: AgentSession, last_message: str) -> AgentTimeline | None:
+    return (
+        db.query(AgentTimeline)
+        .filter(
+            AgentTimeline.space_id == session.space_id,
+            AgentTimeline.session_id == session.session_id,
+            AgentTimeline.item_type != "user_message",
+            AgentTimeline.text == last_message,
+        )
+        .order_by(AgentTimeline.updated_at.desc(), AgentTimeline.created_at.desc(), AgentTimeline.seq.desc())
+        .first()
+    )
+
+
+def session_needs_summary_timeline_row(db: Any, session: AgentSession) -> bool:
+    last_message = (session.last_message or "").strip()
+    if not last_message or session.last_role == "user":
+        return False
+    return _latest_summary_timeline_row(db, session, last_message) is None
+
+
+def ensure_session_summary_timeline_row(db: Any, session: AgentSession) -> AgentTimeline | None:
+    last_message = (session.last_message or "").strip()
+    if not session_needs_summary_timeline_row(db, session):
+        return None
+    max_seq_row = (
+        db.query(AgentTimeline.seq)
+        .filter(AgentTimeline.session_id == session.session_id)
+        .order_by(AgentTimeline.seq.desc())
+        .first()
+    )
+    next_seq = int(max_seq_row[0]) + 1 if max_seq_row else 1
+    role = session.last_role or "assistant"
+    created_at = session.last_activity_at or session.updated_at or utcnow()
+    row = AgentTimeline(
+        space_id=session.space_id,
+        session_id=session.session_id,
+        seq=next_seq,
+        item_type=_summary_timeline_item_type_for_role(role),
+        role=role,
+        text=last_message,
+        status="completed",
+        payload_json=dumps_json({"source": "session_summary_reconciliation"}),
+        created_at=created_at,
+        updated_at=utcnow(),
+    )
+    db.add(row)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        return None
+    return row
 
 
 def _message_from_timeline(item: AgentTimeline) -> dict[str, Any] | None:

@@ -9,7 +9,8 @@ from sqlalchemy.dialects import sqlite
 
 from conftest import auth_headers, bootstrap_owner, create_worker, login
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, ProviderSnapshot, SpaceMembership, Worker
+from app.maintenance import backfill_session_summary_timeline_rows
+from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, ProviderSnapshot, Space, SpaceMembership, Worker
 from app.routers.sessions import _session_ordering
 
 
@@ -190,6 +191,349 @@ def test_sync_status_digest_changes_when_same_timeline_seq_is_updated(client: Te
     second = client.get("/api/sync/status?selected_session_id=sess-sync-status-same-seq", headers=headers)
     assert second.status_code == 200, second.text
     assert second.json()["selected_timeline_digest"] != first.json()["selected_timeline_digest"]
+
+
+def test_cursor_session_sync_materializes_missing_summary_message(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-cursor-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-cursor-summary-reconcile",
+            "status": "running",
+            "title": "Cursor summary reconcile",
+            "last_message": "处理中",
+            "last_activity_at": "2026-04-26T10:03:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_timeline = client.post(
+        "/api/internal/sessions/sess-cursor-summary-reconcile/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 1,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "处理中",
+                    "created_at": "2026-04-26T10:03:00Z",
+                },
+                {
+                    "seq": 2,
+                    "item_type": "tool_call",
+                    "role": "system",
+                    "text": "[tool_use] Bash",
+                    "created_at": "2026-04-26T10:06:00Z",
+                },
+            ],
+        },
+    )
+    assert old_timeline.status_code == 200, old_timeline.text
+    old_cursor = client.get("/api/sessions/sess-cursor-summary-reconcile/timeline", headers=headers).json()["next_after_cursor"]
+    assert old_cursor
+
+    updated_summary = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-cursor-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-cursor-summary-reconcile",
+            "status": "needs_reply",
+            "title": "Cursor summary reconcile",
+            "last_message": "已经收口，可以继续下一步",
+            "last_activity_at": "2026-04-26T10:07:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert updated_summary.status_code == 200, updated_summary.text
+
+    synced = client.get(
+        "/api/sync/session/sess-cursor-summary-reconcile",
+        params={"cursor": old_cursor},
+        headers=headers,
+    )
+    assert synced.status_code == 200, synced.text
+    assert [item["text"] for item in synced.json()["items"]] == ["已经收口，可以继续下一步"]
+    assert synced.json()["items"][0]["payload"]["source"] == "session_summary_reconciliation"
+
+
+def test_opening_timeline_materializes_missing_summary_message(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-open-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-open-summary-reconcile",
+            "status": "ready",
+            "title": "Open summary reconcile",
+            "last_message": "旧消息",
+            "last_activity_at": "2026-04-26T10:01:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_timeline = client.post(
+        "/api/internal/sessions/sess-open-summary-reconcile/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 1,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "旧消息",
+                    "created_at": "2026-04-26T10:01:00Z",
+                },
+                {
+                    "seq": 2,
+                    "item_type": "tool_call",
+                    "role": "system",
+                    "text": "[tool_use] Bash",
+                    "created_at": "2026-04-26T10:06:00Z",
+                },
+            ],
+        },
+    )
+    assert old_timeline.status_code == 200, old_timeline.text
+
+    updated_summary = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-open-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-open-summary-reconcile",
+            "status": "needs_reply",
+            "title": "Open summary reconcile",
+            "last_message": "最终消息已到",
+            "last_activity_at": "2026-04-26T10:07:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert updated_summary.status_code == 200, updated_summary.text
+
+    timeline = client.get("/api/sessions/sess-open-summary-reconcile/timeline", headers=headers)
+    assert timeline.status_code == 200, timeline.text
+    assert "最终消息已到" in [item["text"] for item in timeline.json()["items"]]
+
+
+def test_summary_timeline_backfill_repairs_legacy_sessions(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-maintenance-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-maintenance-summary-reconcile",
+            "status": "ready",
+            "title": "Maintenance summary reconcile",
+            "last_message": "旧消息",
+            "last_activity_at": "2026-04-26T10:01:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    old_timeline = client.post(
+        "/api/internal/sessions/sess-maintenance-summary-reconcile/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 1,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "旧消息",
+                    "created_at": "2026-04-26T10:01:00Z",
+                }
+            ],
+        },
+    )
+    assert old_timeline.status_code == 200, old_timeline.text
+    updated = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-maintenance-summary-reconcile",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-maintenance-summary-reconcile",
+            "status": "needs_reply",
+            "title": "Maintenance summary reconcile",
+            "last_message": "最终消息已到",
+            "last_activity_at": "2026-04-26T10:07:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+
+    with client.app.state.SessionLocal() as db:
+        dry_run = backfill_session_summary_timeline_rows(db, dry_run=True)
+        assert dry_run.as_dict()["by_backend"] == {"claude": 1}
+        assert dry_run.candidates == 1
+        assert dry_run.created == 0
+        assert (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-maintenance-summary-reconcile", AgentTimeline.text == "最终消息已到")
+            .count()
+            == 0
+        )
+
+        applied = backfill_session_summary_timeline_rows(db, dry_run=False)
+        db.commit()
+        assert applied.candidates == 1
+        assert applied.created == 1
+
+        repeated = backfill_session_summary_timeline_rows(db, dry_run=False)
+        assert repeated.candidates == 0
+        assert repeated.created == 0
+        assert (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-maintenance-summary-reconcile", AgentTimeline.text == "最终消息已到")
+            .count()
+            == 1
+        )
+
+
+def test_summary_timeline_backfill_handles_shared_runtime_ids_across_spaces(client: TestClient) -> None:
+    bootstrap_owner(client)
+
+    with client.app.state.SessionLocal() as db:
+        db.add_all(
+            [
+                Space(space_id="space-a", name="Space A", slug="space-a"),
+                Space(space_id="space-b", name="Space B", slug="space-b"),
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                AgentSession(
+                    space_id="space-a",
+                    session_id="shared-runtime-id",
+                    backend="codex",
+                    worker_id="worker-a",
+                    workspace_root="E:/work/a",
+                    project_name="a",
+                    runtime_session_ref="shared-runtime-id",
+                    status="needs_reply",
+                    title="A",
+                    display_title="A",
+                    last_message="space a final",
+                    last_role="assistant",
+                    last_activity_at=datetime(2026, 4, 26, 10, 7),
+                ),
+                AgentSession(
+                    space_id="space-b",
+                    session_id="shared-runtime-id",
+                    backend="codex",
+                    worker_id="worker-b",
+                    workspace_root="E:/work/b",
+                    project_name="b",
+                    runtime_session_ref="shared-runtime-id",
+                    status="needs_reply",
+                    title="B",
+                    display_title="B",
+                    last_message="space b final",
+                    last_role="assistant",
+                    last_activity_at=datetime(2026, 4, 26, 10, 8),
+                ),
+                AgentTimeline(
+                    space_id="space-a",
+                    session_id="shared-runtime-id",
+                    seq=1,
+                    item_type="assistant_message",
+                    role="assistant",
+                    text="space a old",
+                    status="completed",
+                    created_at=datetime(2026, 4, 26, 10, 1),
+                    updated_at=datetime(2026, 4, 26, 10, 1),
+                ),
+            ]
+        )
+        db.commit()
+
+        result = backfill_session_summary_timeline_rows(db, dry_run=False)
+        db.commit()
+
+        assert result.candidates == 2
+        assert result.created == 2
+        rows = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "shared-runtime-id")
+            .order_by(AgentTimeline.seq.asc())
+            .all()
+        )
+        assert [(row.space_id, row.seq, row.text) for row in rows] == [
+            ("space-a", 1, "space a old"),
+            ("space-b", 2, "space b final"),
+            ("space-a", 3, "space a final"),
+        ]
 
 
 def test_operator_can_enqueue_session_fast_refresh_and_toggle_jobs(client: TestClient) -> None:
