@@ -25,9 +25,17 @@ if (!hasSingleInstanceLock) {
 function createIcon(): Electron.NativeImage {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
-      <g transform="rotate(45 16 16)">
-        <path d="M10.2 11.2h3.4v4.8h7.2v3.4h-7.2v4.8h-3.4v-4.8H3v-3.4h7.2z" fill="#6CC8FF"/>
-        <path d="M21 7.8h3.4v4.8H28v3.4h-3.6v4.8H21V16h-7.2v-3.4H21z" fill="#58B6FF"/>
+      <defs>
+        <linearGradient id="agenthubTrayGradient" gradientUnits="userSpaceOnUse" x1="3.91" y1="16" x2="28.09" y2="16">
+          <stop offset="0" stop-color="#79D1FF"/>
+          <stop offset="1" stop-color="#3EA5FF"/>
+        </linearGradient>
+      </defs>
+      <g transform="rotate(-45 16 16)" fill="url(#agenthubTrayGradient)">
+        <path d="M10.88 7.31h3.5v17.38h-3.5z"/>
+        <path d="M3.91 14.25h10.47v3.5H3.91z"/>
+        <path d="M17.63 7.31h3.5v17.38h-3.5z"/>
+        <path d="M17.63 14.25h10.47v3.5h-10.47z"/>
       </g>
     </svg>
   `;

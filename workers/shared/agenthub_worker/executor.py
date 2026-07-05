@@ -1178,6 +1178,7 @@ def _is_codex_native_resume_fallback_error(message: str) -> bool:
         for marker in (
             "invalid thread id",
             "thread not found",
+            "no rollout found",
             "invalid character: expected an optional prefix of `urn:uuid:`",
         )
     )
