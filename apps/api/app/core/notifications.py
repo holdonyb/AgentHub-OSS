@@ -12,7 +12,15 @@ from app.core.json import dumps_json
 from app.models import Event
 
 
-NOTIFIABLE_EVENT_TYPES = {"job.complete", "permission.request"}
+NOTIFIABLE_EVENT_TYPES = {
+    "job.complete",
+    "permission.request",
+    "job.dispatch_failed",
+    "job.fail_orphaned",
+    "job.fail_stale",
+    "job.fail_worker_offline",
+    "worker.offline_heartbeat_expired",
+}
 
 
 def _target_host(url: str) -> str:

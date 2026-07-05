@@ -3038,7 +3038,13 @@ function App() {
   const latestVisibleTimelineKey = useMemo(() => {
     const latest = visibleTimeline[visibleTimeline.length - 1];
     if (!latest) return 'empty';
-    return `${latest.seq}:${latest.item_type}:${latest.created_at}:${latest.text}`;
+    const revision = visibleTimeline
+      .map((item) => {
+        const updatedAt = (item as AgentTimelineItem & { updated_at?: string }).updated_at ?? '';
+        return `${item.seq}:${item.item_type}:${item.created_at}:${updatedAt}:${item.text.length}:${compactText(item.text, 80)}`;
+      })
+      .join('|');
+    return `${latest.seq}:${latest.item_type}:${latest.created_at}:${latest.text}:${revision}`;
   }, [visibleTimeline]);
   const selectedPermissionStateKey = useMemo(
     () =>
@@ -3542,7 +3548,7 @@ function App() {
       payload = pagePayload;
       items = [...items, ...pagePayload.items];
       jobs = pagePayload.jobs;
-      const nextCursor = pagePayload.next_after_cursor ?? cursor;
+      const nextCursor = pagePayload.next_after_cursor || timelineCursorForItems(pagePayload.items) || cursor;
       const nextAfterSeq = pagePayload.next_after_seq;
       const canContinueWithCursor = Boolean(cursor) && Boolean(nextCursor) && nextCursor !== cursor;
       const canContinueWithSeq = !cursor && nextAfterSeq > afterSeq;
@@ -3600,8 +3606,12 @@ function App() {
     if (!nextDigest) return;
     const previousDigest = selectedTimelineDigestRef.current[sessionId];
     const hasLoadedTimeline = Boolean(timelineBySessionRef.current[sessionId]);
+    const hasTimelineCursor = Boolean(
+      sessionAfterCursorRef.current[sessionId] ||
+      timelineCursorForItems(timelineBySessionRef.current[sessionId] ?? []),
+    );
     if (
-      options.allowFullReload &&
+      (options.allowFullReload || !hasTimelineCursor) &&
       ((previousDigest && previousDigest !== nextDigest) || (!previousDigest && hasLoadedTimeline))
     ) {
       await loadTimelineForSession(sessionId, { force: true });

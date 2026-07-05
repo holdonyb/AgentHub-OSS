@@ -75,6 +75,7 @@ def test_fi_1_worker_restart_marks_orphaned_active_job_and_unblocks_session(clie
         assert "orphaned" in str(job.error_text)
         assert session.status == "ready"
         assert payload == {
+            "type": "stale_job",
             "worker_id": worker_id,
             "job_id": job_id,
             "kind": "session_input",
