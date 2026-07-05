@@ -73,9 +73,16 @@ Allowed `notification_type` values for the current WS-A slice:
 
 ## Measurement Rules
 
-The future A5 script (`slo_report.py`) must emit JSON with the field names in
-the Metrics table and a short Chinese paragraph suitable for daily reports.
-Daily reports must quote the script output directly.
+The A5 script (`periodic_jobs/autopilot/src/slo_report.py`) reads the
+read-only API endpoint:
 
-Until A5 lands, tests in `apps/api/tests/fault_injection/` are the executable
-source of truth for the recovery event fields.
+```text
+GET /api/events/slo-source?days=7&limit=10000
+```
+
+and emits JSON with the field names in the Metrics table plus a short Chinese
+paragraph suitable for daily reports. Daily reports must quote the script
+output directly.
+
+Tests in `apps/api/tests/fault_injection/` remain the executable source of
+truth for the recovery event fields.
