@@ -883,6 +883,82 @@ def test_session_sync_after_seq_includes_summary_row_when_replace_reorders_seq(c
     assert by_seq[15]["text"] == summary_text
 
 
+def test_session_sync_after_seq_materializes_missing_summary_row_before_history_backfill(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-delta-summary-missing",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-delta-summary-missing",
+            "status": "ready",
+            "title": "Delta missing summary",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    old_created_at = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    historical_items = [
+        {
+            "seq": seq,
+            "item_type": "user_message",
+            "role": "user",
+            "text": f"historical prompt {seq}",
+            "created_at": old_created_at,
+        }
+        for seq in range(1, 31)
+    ]
+    publish = client.post(
+        "/api/internal/sessions/sess-delta-summary-missing/timeline",
+        headers=worker_headers,
+        json={"worker_id": worker_id, "items": historical_items},
+    )
+    assert publish.status_code == 200, publish.text
+
+    summary_text = "current assistant answer only present on the session summary"
+    with client.app.state.SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.session_id == "sess-delta-summary-missing").one()
+        session.last_message = summary_text
+        session.last_role = "assistant"
+        session.last_activity_at = datetime.utcnow()
+        session.updated_at = datetime.utcnow()
+        db.commit()
+
+    response = client.get(
+        "/api/sync/session/sess-delta-summary-missing",
+        params={"after_seq": 20, "limit": 5},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert any(item["text"] == summary_text and item["role"] == "assistant" for item in payload["items"])
+    assert payload["next_after_seq"] > 30
+
+    with client.app.state.SessionLocal() as db:
+        materialized = (
+            db.query(AgentTimeline)
+            .filter(AgentTimeline.session_id == "sess-delta-summary-missing")
+            .filter(AgentTimeline.text == summary_text)
+            .one_or_none()
+        )
+        assert materialized is not None
+        assert materialized.seq > 30
+        assert materialized.item_type == "assistant_message"
+
+
 def test_permission_sync_returns_incremental_pending_and_resolved_updates(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
