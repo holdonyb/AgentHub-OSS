@@ -18,9 +18,21 @@ const voiceStreaming = vi.hoisted(() => ({
   startStreamingVoice: vi.fn(),
 }));
 
+const messageRenderPreview = vi.hoisted(() => ({
+  renderMarkdownPreview: vi.fn((text: string) => text),
+}));
+
 vi.mock('@capacitor/app', () => ({ App: capacitorApp }));
 vi.mock('./nativeNotifications', () => nativeNotifications);
 vi.mock('./voiceStreaming', () => voiceStreaming);
+vi.mock('./messageRenderPreview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./messageRenderPreview')>();
+  messageRenderPreview.renderMarkdownPreview.mockImplementation(actual.renderMarkdownPreview);
+  return {
+    ...actual,
+    renderMarkdownPreview: messageRenderPreview.renderMarkdownPreview,
+  };
+});
 
 const sessionPayload = {
   items: [
@@ -2679,6 +2691,53 @@ describe('AgentHub console', () => {
     fireEvent.click(within(document.querySelector('.timeline-tabs') as HTMLElement).getByRole('button', { name: /工具/ }));
     expect(screen.getByText('内容已截断')).toBeInTheDocument();
     expect(screen.queryByText('[AgentHub truncated this item]')).toBeNull();
+  });
+
+  it('defers markdown preview rendering for collapsed long transcript messages until full reader opens', async () => {
+    const longMarkdown = [
+      '# 性能基线',
+      '',
+      ...Array.from({ length: 80 }, (_, index) => `- 第 ${index + 1} 条长消息用于验证 WebView 不预渲染隐藏 Markdown`),
+    ].join('\n');
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        return jsonResponse({
+          items: [
+            {
+              session_id: 'sess-1',
+              seq: 1,
+              item_type: 'assistant_message',
+              role: 'assistant',
+              text: longMarkdown,
+              created_at: '2026-04-26T10:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const performanceMessage = (await screen.findByText(/性能基线/)).closest('.message-line') as HTMLElement;
+    expect(performanceMessage).toBeTruthy();
+    expect(messageRenderPreview.renderMarkdownPreview).not.toHaveBeenCalled();
+
+    fireEvent.click(within(performanceMessage).getByRole('button', { name: '全文阅读' }));
+    await screen.findByRole('dialog', { name: '全文阅读' });
+    expect(messageRenderPreview.renderMarkdownPreview).toHaveBeenCalledTimes(1);
   });
 
   it('uses the Android native clipboard bridge when browser clipboard is unavailable', async () => {
