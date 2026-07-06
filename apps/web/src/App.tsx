@@ -3120,6 +3120,20 @@ function App() {
 
   function handleTranscriptScroll() {
     updateScrollToBottomState();
+    const transcript = transcriptRef.current;
+    const userIsReadingTranscript = Boolean(transcript && transcript.scrollTop > 12);
+    if (
+      userIsReadingTranscript &&
+      composerFocused &&
+      !composerExpanded &&
+      !composerHasDraft &&
+      !isRecording &&
+      !isTranscribing &&
+      !isPreparingAttachment
+    ) {
+      setComposerFocused(false);
+      replyTextareaRef.current?.blur();
+    }
   }
 
   function handleComposerBlur(event: FocusEvent<HTMLFormElement>) {
