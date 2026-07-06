@@ -1159,6 +1159,50 @@ describe('AgentHub console', () => {
     expect(within(mobileMenu).getByRole('menuitem', { name: /归档/ })).toBeInTheDocument();
   });
 
+  it('collapses the empty mobile composer when the user starts browsing the transcript', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+
+    const replyForm = document.querySelector('.reply-box');
+    const replyInput = screen.getByLabelText('回复当前会话');
+    fireEvent.focus(replyInput);
+    await waitFor(() => expect(replyForm).not.toHaveClass('is-compact'));
+
+    const transcript = screen.getByLabelText('Transcript') as HTMLElement;
+    Object.defineProperties(transcript, {
+      scrollHeight: { configurable: true, value: 1200 },
+      clientHeight: { configurable: true, value: 320 },
+      scrollTop: { configurable: true, value: 260 },
+    });
+    fireEvent.scroll(transcript);
+
+    await waitFor(() => expect(replyForm).toHaveClass('is-compact'));
+  });
+
+  it('keeps the mobile composer open while browsing when a draft exists', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+
+    const replyForm = document.querySelector('.reply-box');
+    const replyInput = screen.getByLabelText('回复当前会话');
+    fireEvent.focus(replyInput);
+    fireEvent.change(replyInput, { target: { value: '先别收起这个草稿' } });
+    await waitFor(() => expect(replyForm).not.toHaveClass('is-compact'));
+
+    const transcript = screen.getByLabelText('Transcript') as HTMLElement;
+    Object.defineProperties(transcript, {
+      scrollHeight: { configurable: true, value: 1200 },
+      clientHeight: { configurable: true, value: 320 },
+      scrollTop: { configurable: true, value: 260 },
+    });
+    fireEvent.scroll(transcript);
+
+    expect(replyInput).toHaveValue('先别收起这个草稿');
+    expect(replyForm).not.toHaveClass('is-compact');
+  });
+
   it('shows provider interaction support boundaries in the provider panel', async () => {
     render(<App />);
 
