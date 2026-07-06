@@ -3372,10 +3372,15 @@ function App() {
   async function loadTimelineForSession(sessionId: string, options: { force?: boolean } = {}) {
     if (!options.force && timelineBySessionRef.current[sessionId]) return;
     if (!options.force && timelineLoadingRef.current.has(sessionId)) return;
+    const keepPinnedToBottom =
+      selectedIdRef.current === sessionId && (transcriptPinnedToBottomRef.current || transcriptNearBottom());
     timelineLoadingRef.current.add(sessionId);
     try {
       const payload = await apiGet<TimelinePayload>(`/api/sessions/${sessionId}/timeline`);
       const merged = mergeServerTimeline(sessionId, timelineBySessionRef.current[sessionId] ?? [], payload.items);
+      if (keepPinnedToBottom) {
+        shouldScrollTranscriptToBottomRef.current = true;
+      }
       setTimelineBySession((current) => ({
         ...current,
         [sessionId]: mergeServerTimeline(sessionId, current[sessionId] ?? [], payload.items),
@@ -3388,6 +3393,9 @@ function App() {
       sessionAfterSeqRef.current[sessionId] = payload.next_after_seq ?? Math.max(0, ...merged.map((item) => Number(item.seq) || 0));
       sessionAfterCursorRef.current[sessionId] =
         payload.next_after_cursor || timelineCursorForItems(payload.items) || timelineCursorForItems(merged);
+      if (keepPinnedToBottom) {
+        window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
+      }
     } finally {
       timelineLoadingRef.current.delete(sessionId);
     }
@@ -3667,6 +3675,10 @@ function App() {
       ? sessionPayload.items.some((session) => session.session_id === activeSelectedId)
       : false;
     const nextSelectedId = activeSelectedExists ? activeSelectedId : sessionPayload.items[0]?.session_id ?? null;
+    const keepPinnedToBottom =
+      Boolean(nextSelectedId) &&
+      nextSelectedId === selectedIdRef.current &&
+      (transcriptPinnedToBottomRef.current || transcriptNearBottom());
     const timelinePayload = nextSelectedId
       ? await apiGet<TimelinePayload>(`/api/sessions/${nextSelectedId}/timeline`)
       : { items: [] };
@@ -3696,6 +3708,9 @@ function App() {
       sessionAfterSeqRef.current[nextSelectedId] =
         timelinePayload.next_after_seq ?? Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
       sessionAfterCursorRef.current[nextSelectedId] = timelinePayload.next_after_cursor || timelineCursorForItems(timelinePayload.items);
+      if (keepPinnedToBottom) {
+        shouldScrollTranscriptToBottomRef.current = true;
+      }
       setTimelineBySession((current) => ({
         ...current,
         [nextSelectedId]: mergeServerTimeline(nextSelectedId, current[nextSelectedId] ?? [], timelinePayload.items),
@@ -3711,6 +3726,9 @@ function App() {
       setTimelineHasOlder((current) => (
         nextSelectedId in current ? current : { ...current, [nextSelectedId]: Boolean(timelinePayload.has_more) }
       ));
+      if (keepPinnedToBottom) {
+        window.setTimeout(() => scrollTranscriptToBottom('auto'), 0);
+      }
     }
     if (nextCsrf) setCsrfToken(nextCsrf);
   }
