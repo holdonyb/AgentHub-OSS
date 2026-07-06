@@ -5,7 +5,7 @@ import base64
 import hashlib
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -38,6 +38,8 @@ ALLOWED_JOB_KINDS = {
     "file_mkdir",
     "file_rename",
 }
+TIMELINE_ACTIVITY_SKEW_TOLERANCE = timedelta(hours=14)
+EMPTY_ACTIVITY_SUMMARIES = {"", "当前空闲"}
 
 SESSION_STATES = {"ready", "queued", "running", "needs_reply", "failed", "terminated"}
 JOB_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
@@ -896,13 +898,34 @@ def sync_session_from_timeline(db: Any, session: AgentSession) -> None:
         messages[-1] if messages else None,
     )
     current_activity = session.last_activity_at
-    timeline_is_current = current_activity is None or last_activity.created_at >= current_activity
+    latest_timeline_update = max((row.updated_at for row in rows if row.updated_at is not None), default=None)
+    visible_summary_is_empty = (
+        not str(session.last_message or "").strip()
+        or session.last_role == "system"
+        or str(session.activity_summary or "").strip() in EMPTY_ACTIVITY_SUMMARIES
+    )
+    timeline_updated_after_session = latest_timeline_update is not None and (
+        session.updated_at is None or latest_timeline_update >= session.updated_at
+    )
+    timeline_within_skew_window = (
+        current_activity is not None
+        and last_activity.created_at >= current_activity - TIMELINE_ACTIVITY_SKEW_TOLERANCE
+    )
+    timeline_is_current = (
+        current_activity is None
+        or last_activity.created_at >= current_activity
+        or (visible_summary_is_empty and timeline_updated_after_session and timeline_within_skew_window)
+    )
     if timeline_is_current and last_conversation:
         session.last_message = str(last_conversation["text"])
         session.last_role = str(last_conversation["role"])
     if timeline_is_current:
         session.last_activity_at = last_activity.created_at
-    if timeline_is_current and not session.activity_summary and session.last_message:
+    if (
+        timeline_is_current
+        and str(session.activity_summary or "").strip() in EMPTY_ACTIVITY_SUMMARIES
+        and session.last_message
+    ):
         session.activity_summary = f"最近上下文：{_compact(session.last_message)}"
     next_visible = (
         session.activity_summary,
