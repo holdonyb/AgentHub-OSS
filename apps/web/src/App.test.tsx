@@ -906,7 +906,7 @@ describe('AgentHub console', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
-    expect(screen.getByText('继续执行')).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Transcript')).getByText('继续执行')).toBeInTheDocument();
   });
 
   it('does not keep the first screen loading while audit events are slow', async () => {
@@ -1769,6 +1769,71 @@ describe('AgentHub console', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '同步状态验证' })).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: '修复移动控制台' })).not.toBeInTheDocument();
     expect(await screen.findByText(/后台刷新完成/)).toBeInTheDocument();
+  });
+
+  it('keeps the transcript pinned when manual refresh loads a newer selected timeline', async () => {
+    let timelineFetches = 0;
+    let scrollHeight = 600;
+    const refreshedTimeline = {
+      next_after_seq: 3,
+      next_after_cursor: '2026-04-26T10:04:00Z|3',
+      items: [
+        ...timelinePayload.items,
+        {
+          session_id: 'sess-1',
+          seq: 3,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '手动刷新补到的新回复',
+          created_at: '2026-04-26T10:04:00Z',
+        },
+      ],
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) {
+        return jsonResponse({
+          items: [
+            {
+              ...sessionPayload.items[0],
+              last_message: timelineFetches > 1 ? '手动刷新补到的新回复' : sessionPayload.items[0].last_message,
+              last_activity_at: timelineFetches > 1 ? '2026-04-26T10:04:00Z' : sessionPayload.items[0].last_activity_at,
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        if (timelineFetches > 1) scrollHeight = 900;
+        return jsonResponse(timelineFetches > 1 ? refreshedTimeline : timelinePayload);
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 300 });
+    Object.defineProperty(transcript, 'scrollTop', { configurable: true, writable: true, value: 300 });
+    fireEvent.scroll(transcript);
+
+    fireEvent.click(screen.getByRole('button', { name: /刷新/ }));
+
+    expect(await within(transcript).findByText('手动刷新补到的新回复')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Transcript').scrollTop).toBe(900));
   });
 
   it('keeps a queued optimistic reply visible across refresh until the worker timeline catches up', async () => {
@@ -6240,6 +6305,81 @@ describe('AgentHub console', () => {
 
     expect(await within(transcript).findByText('digest 发现的新回复')).toBeInTheDocument();
     expect(statusFetches).toBeGreaterThanOrEqual(2);
+    expect(timelineFetches).toBeGreaterThan(1);
+  });
+
+  it('keeps the transcript pinned when digest refresh loads the latest reply', async () => {
+    let timelineFetches = 0;
+    let statusFetches = 0;
+    let scrollHeight = 600;
+    const refreshedTimeline = {
+      next_after_seq: 3,
+      next_after_cursor: '2026-04-26T10:04:00Z|3',
+      items: [
+        ...timelinePayload.items,
+        {
+          session_id: 'sess-1',
+          seq: 3,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: 'digest 强刷补到的底部回复',
+          created_at: '2026-04-26T10:04:00Z',
+        },
+      ],
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        if (timelineFetches > 1) scrollHeight = 900;
+        return jsonResponse(timelineFetches > 1 ? refreshedTimeline : timelinePayload);
+      }
+      if (url.includes('/api/sync/status')) {
+        statusFetches += 1;
+        return jsonResponse({
+          ...syncStatusPayload,
+          selected_timeline_digest: statusFetches > 1 ? 'timeline-sess-1-v2' : 'timeline-sess-1-v1',
+        });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        return jsonResponse({
+          ...sessionSyncPayload,
+          items: [],
+          next_after_seq: 2,
+          next_after_cursor: '2026-04-26T10:00:00Z|2',
+          has_more: false,
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, value: 300 });
+    Object.defineProperty(transcript, 'scrollTop', { configurable: true, writable: true, value: 300 });
+    fireEvent.scroll(transcript);
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(statusFetches).toBe(1));
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('digest 强刷补到的底部回复')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Transcript').scrollTop).toBe(900));
     expect(timelineFetches).toBeGreaterThan(1);
   });
 
