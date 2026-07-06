@@ -45,11 +45,19 @@ export interface StreamingVoiceController {
   stop: () => void;
 }
 
+type LabAsrClient = ReturnType<typeof LabASR> & {
+  startRecord: (
+    options?: Record<string, unknown>,
+    onRecord?: (recordResult: Blob) => void | Promise<void>,
+  ) => Promise<void>;
+};
+
 export interface StartStreamingVoiceOptions {
   auth: VoiceStreamAuthPayload;
   mediaConstraints?: MediaStreamConstraints;
   onStart?: () => void;
   onPartialText?: (text: string, fullData: unknown) => void;
+  onAudioChunk?: (chunk: Blob) => void;
   onRecovering?: (attempt: number) => void;
   onClose?: () => void;
   onError?: () => void;
@@ -103,7 +111,7 @@ function mergeVoiceConstraints(requested: MediaStreamConstraints | undefined): M
 
 export async function startStreamingVoice(options: StartStreamingVoiceOptions): Promise<StreamingVoiceController> {
   let mediaStream: MediaStream | null = null;
-  let client: ReturnType<typeof LabASR> | null = null;
+  let client: LabAsrClient | null = null;
   let finished = false;
   let stopping = false;
   let reconnectAttempts = 0;
@@ -184,7 +192,7 @@ export async function startStreamingVoice(options: StartStreamingVoiceOptions): 
       onStart: () => options.onStart?.(),
       onClose: () => finishClose(),
       onError: () => finishError(),
-    });
+    }) as LabAsrClient;
 
     client.connect({
       url: buildStreamingUrl(options.auth.url, options.auth.auth),
@@ -199,7 +207,9 @@ export async function startStreamingVoice(options: StartStreamingVoiceOptions): 
 
     mediaDevices.getUserMedia = patchedGetUserMedia;
     try {
-      await client.startRecord();
+      await client.startRecord({}, async (recordResult: Blob) => {
+        if (recordResult.size > 0) options.onAudioChunk?.(recordResult);
+      });
     } catch (error) {
       stopTracks();
       throw error;

@@ -2906,6 +2906,8 @@ function App() {
   const streamingVoiceManualEditRef = useRef(false);
   const streamingVoiceBaseReplyRef = useRef('');
   const streamingVoiceAppliedTextRef = useRef('');
+  const streamingVoiceAudioChunksRef = useRef<Blob[]>([]);
+  const streamingVoiceStartedAtRef = useRef<number | null>(null);
   const streamingVoiceStopWaitersRef = useRef<Array<() => void>>([]);
   const [scheduleDraft, setScheduleDraft] = useState({
     name: 'Health check',
@@ -4904,6 +4906,11 @@ function App() {
     streamingVoiceManualEditRef.current = false;
   }
 
+  function resetStreamingVoiceAudioState() {
+    streamingVoiceAudioChunksRef.current = [];
+    streamingVoiceStartedAtRef.current = null;
+  }
+
   function resolveStreamingVoiceStopWaiters() {
     const waiters = streamingVoiceStopWaitersRef.current.splice(0);
     waiters.forEach((resolve) => resolve());
@@ -4952,7 +4959,7 @@ function App() {
     const controller = streamingVoiceControllerRef.current;
     streamingVoiceShouldCommitRef.current = options?.commit ?? true;
     if (!controller) {
-      finalizeStreamingVoice();
+      await finalizeStreamingVoice();
       return;
     }
     if (options?.notice) setNotice(options.notice);
@@ -5033,11 +5040,53 @@ function App() {
     }
   }
 
+  async function transcribeStreamingFallbackAudio() {
+    const chunks = streamingVoiceAudioChunksRef.current;
+    if (chunks.length === 0) return false;
+    const contentType = chunks.find((chunk) => chunk.type)?.type || 'audio/webm';
+    const audioBlob = new Blob(chunks, { type: contentType });
+    const startedAt = streamingVoiceStartedAtRef.current;
+    const durationMs = startedAt === null ? null : Math.max(0, Math.round(Date.now() - startedAt));
+    if (audioBlob.size > MAX_VOICE_AUDIO_BYTES) {
+      setNotice('录音太长：当前语音超过 12MB，请切到标准模式分段录音。');
+      return true;
+    }
+    setIsTranscribing(true);
+    try {
+      setNotice('流式识别没有拿到文字，正在用标准识别补救');
+      const payload = await apiPost<{ text: string }>(
+        '/api/voice/transcribe',
+        {
+          filename: contentType.includes('mp4') ? 'voice.m4a' : 'voice.webm',
+          content_type: audioBlob.type || 'audio/webm',
+          data_base64: arrayBufferToBase64(await audioBlob.arrayBuffer()),
+          duration_ms: durationMs,
+          chunk_count: chunks.length,
+          language: settings.preferences.voice_language || 'zh-CN',
+        },
+        csrfToken,
+      );
+      const text = payload.text.trim();
+      if (!text) {
+        setNotice('没有识别到文字');
+        return true;
+      }
+      appendVoiceTranscript(text);
+      setNotice('语音已转文字');
+      return true;
+    } catch (error) {
+      setNotice(voiceTranscribeFailureNotice(error));
+      return true;
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
   async function fetchVoiceStreamAuth() {
     return apiPost<VoiceStreamAuthResponse>('/api/voice/stream-auth', {}, csrfToken);
   }
 
-  function finalizeStreamingVoice() {
+  async function finalizeStreamingVoice() {
     if (streamingVoiceStopHandledRef.current) return;
     streamingVoiceStopHandledRef.current = true;
     setIsRecording(false);
@@ -5046,12 +5095,21 @@ function App() {
     const shouldCommit = streamingVoiceShouldCommitRef.current;
     streamingVoiceShouldCommitRef.current = false;
     resetStreamingVoiceComposerState();
-    resolveStreamingVoiceStopWaiters();
-    if (!shouldCommit) return;
+    if (!shouldCommit) {
+      resetStreamingVoiceAudioState();
+      resolveStreamingVoiceStopWaiters();
+      return;
+    }
     if (!text) {
+      const fallbackAttempted = await transcribeStreamingFallbackAudio();
+      resetStreamingVoiceAudioState();
+      resolveStreamingVoiceStopWaiters();
+      if (fallbackAttempted) return;
       setNotice('没有识别到文字');
       return;
     }
+    resetStreamingVoiceAudioState();
+    resolveStreamingVoiceStopWaiters();
     setNotice('流式语音已转文字');
   }
 
@@ -5111,6 +5169,7 @@ function App() {
     }
     setIsTranscribing(true);
     resetStreamingVoiceComposerState();
+    resetStreamingVoiceAudioState();
     streamingVoiceBaseReplyRef.current = reply.trim() ? `${reply.trimEnd()}\n` : '';
     streamingVoiceShouldCommitRef.current = false;
     streamingVoiceStopHandledRef.current = false;
@@ -5120,8 +5179,12 @@ function App() {
         auth,
         mediaConstraints: voiceMediaConstraints(),
         onStart: () => {
+          if (streamingVoiceStartedAtRef.current === null) streamingVoiceStartedAtRef.current = Date.now();
           setIsRecording(true);
           setNotice('正在流式识别语音');
+        },
+        onAudioChunk: (chunk) => {
+          if (chunk.size > 0) streamingVoiceAudioChunksRef.current.push(chunk);
         },
         onPartialText: (text) => {
           const normalized = String(text || '').trim();
@@ -5132,13 +5195,14 @@ function App() {
           setNotice(`流式语音连接中断，正在第 ${attempt} 次重连…`);
         },
         onClose: () => {
-          finalizeStreamingVoice();
+          void finalizeStreamingVoice();
         },
         onError: () => {
           setIsRecording(false);
           streamingVoiceControllerRef.current = null;
           streamingVoiceShouldCommitRef.current = false;
           resetStreamingVoiceComposerState();
+          resetStreamingVoiceAudioState();
           resolveStreamingVoiceStopWaiters();
           setNotice('流式语音连接中断，请重试；如仍失败可切到标准模式。');
         },
@@ -5148,6 +5212,7 @@ function App() {
     } catch (error) {
       streamingVoiceControllerRef.current = null;
       resetStreamingVoiceComposerState();
+      resetStreamingVoiceAudioState();
       resolveStreamingVoiceStopWaiters();
       const message = errorMessage(error);
       if (message.includes('not configured')) {
