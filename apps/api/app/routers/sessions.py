@@ -33,6 +33,7 @@ from app.schemas import (
     SessionStartIn,
 )
 from app.services import (
+    EMPTY_ACTIVITY_SUMMARIES,
     SESSION_STATES,
     expire_superseded_pending_permissions,
     job_out,
@@ -104,6 +105,19 @@ def _naive_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _is_idle_discovery_payload(payload: SessionCreateIn) -> bool:
+    activity_summary = str(payload.activity_summary or "").strip()
+    last_message = str(payload.last_message or "").strip()
+    last_role = str(payload.last_role or "").strip()
+    return not last_message and activity_summary in EMPTY_ACTIVITY_SUMMARIES and last_role in {"", "system"}
+
+
+def _has_visible_session_activity(session: AgentSession) -> bool:
+    last_message = str(session.last_message or "").strip()
+    last_role = str(session.last_role or "").strip()
+    return bool(last_message) and last_role not in {"", "system"}
 
 
 def _workspace_label(workspace_root: str) -> str:
@@ -502,7 +516,13 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     should_accept_activity = previous_activity_at is None or (
         incoming_activity_at is not None and incoming_activity_at >= previous_activity_at
     )
-    if should_accept_activity:
+    should_preserve_visible_activity = (
+        not is_new_session
+        and should_accept_activity
+        and _is_idle_discovery_payload(payload)
+        and _has_visible_session_activity(session)
+    )
+    if should_accept_activity and not should_preserve_visible_activity:
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
         session.last_message = payload.last_message
         session.last_activity_at = incoming_activity_at
