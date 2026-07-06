@@ -2175,10 +2175,31 @@ function timelineBeforeCursor(item: AgentTimelineItem) {
   return '';
 }
 
-function mergeTimelineItems(existing: AgentTimelineItem[], incoming: AgentTimelineItem[]) {
+function timelineItemUpdatedAtMs(item: AgentTimelineItem) {
+  const updatedAt = (item as AgentTimelineItem & { updated_at?: string }).updated_at;
+  return parseApiDate(updatedAt ?? item.created_at)?.getTime() ?? 0;
+}
+
+function shouldReplaceTimelineItem(existing: AgentTimelineItem, incoming: AgentTimelineItem) {
+  const existingUpdatedAt = timelineItemUpdatedAtMs(existing);
+  const incomingUpdatedAt = timelineItemUpdatedAtMs(incoming);
+  if (incomingUpdatedAt > existingUpdatedAt) return true;
+  if (incomingUpdatedAt < existingUpdatedAt) return false;
+  const existingText = normalizedTimelineSearchText(existing.text);
+  const incomingText = normalizedTimelineSearchText(incoming.text);
+  if (!existingText && incomingText) return true;
+  if (existingText && !incomingText) return false;
+  return true;
+}
+
+export function mergeTimelineItems(existing: AgentTimelineItem[], incoming: AgentTimelineItem[]) {
   const bySeq = new Map<number, AgentTimelineItem>();
   [...existing, ...incoming].forEach((item) => {
-    bySeq.set(timelineSeq(item), item);
+    const seq = timelineSeq(item);
+    const current = bySeq.get(seq);
+    if (!current || shouldReplaceTimelineItem(current, item)) {
+      bySeq.set(seq, item);
+    }
   });
   return sortTimelineItemsByCreatedAt(Array.from(bySeq.values()));
 }
@@ -3557,7 +3578,11 @@ function App() {
     }
     const keepPinnedToBottom =
       selectedIdRef.current === sessionId && (transcriptPinnedToBottomRef.current || transcriptNearBottom());
-    setSessions((current) => mergeSessionList(current, [payload.session], []));
+    setSessions((current) => {
+      const next = mergeSessionList(current, [payload.session], []);
+      sessionsRef.current = next;
+      return next;
+    });
     setJobs((current) => replaceSessionJobs(current, sessionId, jobs));
     if (items.length > 0) {
       if (keepPinnedToBottom) {
@@ -3954,12 +3979,20 @@ function App() {
             (
               selectedSyncedSession.last_activity_at !== selectedBeforeSync?.last_activity_at ||
               selectedSyncedSession.last_message !== selectedBeforeSync?.last_message ||
+              selectedSyncedSession.activity_summary !== selectedBeforeSync?.activity_summary ||
               selectedSyncedSession.status !== selectedBeforeSync?.status
             );
           const mergedDeltaTimeline = mergeTimelineItems(timelineBeforeDelta, sessionDelta.items);
           const timelineStillMissingSummary =
             summaryChanged && !timelineReflectsSessionLastMessage(selectedSyncedSession, mergedDeltaTimeline);
-          if (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) {
+          const timelineStillBehindSession =
+            Boolean(selectedSyncedSession) &&
+            sessionSummaryOutrunsTimeline(selectedSyncedSession, mergedDeltaTimeline) &&
+            !timelineReflectsSessionLastMessage(selectedSyncedSession, mergedDeltaTimeline);
+          if (
+            (summaryChanged && (sessionDelta.items.length === 0 || timelineStillMissingSummary)) ||
+            timelineStillBehindSession
+          ) {
             await loadTimelineForSession(selectedSessionId, { force: true });
           }
           const deltaHasConversationItem = sessionDelta.items.some((item) =>

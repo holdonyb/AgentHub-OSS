@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import App, { parseApiDate } from './App';
+import App, { mergeTimelineItems, parseApiDate } from './App';
 
 const capacitorApp = vi.hoisted(() => ({
   addListener: vi.fn(),
@@ -5792,6 +5792,113 @@ describe('AgentHub console', () => {
     expect(timelineFetches).toBeGreaterThan(1);
   });
 
+  it('refreshes the selected timeline when only the list activity summary changes', async () => {
+    let timelineFetches = 0;
+    let inboxFetches = 0;
+    let sessionDeltaFetches = 0;
+    const staleTimeline = {
+      items: [
+        {
+          session_id: 'sess-1',
+          seq: 1,
+          item_type: 'user_message',
+          role: 'user',
+          text: '继续看看',
+          created_at: '2026-04-26T10:00:00Z',
+          updated_at: '2026-04-26T10:00:00Z',
+        },
+        {
+          session_id: 'sess-1',
+          seq: 2,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '处理中',
+          created_at: '2026-04-26T10:01:00Z',
+          updated_at: '2026-04-26T10:01:00Z',
+        },
+      ],
+      next_after_seq: 2,
+      next_after_cursor: '2026-04-26T10:01:00Z|2',
+    };
+    const refreshedTimeline = {
+      items: [
+        ...staleTimeline.items,
+        {
+          session_id: 'sess-1',
+          seq: 3,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: '最终回复已经到了',
+          created_at: '2026-04-26T10:01:00Z',
+          updated_at: '2026-04-26T10:01:30Z',
+        },
+      ],
+      next_after_seq: 3,
+      next_after_cursor: '2026-04-26T10:01:30Z|3',
+    };
+    const syncedSession = {
+      ...sessionPayload.items[0],
+      status: sessionPayload.items[0].status,
+      last_message: '处理中',
+      activity_summary: '等你回复：最终回复已经到了',
+      last_activity_at: sessionPayload.items[0].last_activity_at,
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) {
+        timelineFetches += 1;
+        return jsonResponse(timelineFetches > 2 ? refreshedTimeline : staleTimeline);
+      }
+      if (url.includes('/api/sync/inbox')) {
+        inboxFetches += 1;
+        return jsonResponse({
+          cursor: '2026-04-26T10:01:00Z|sess-1',
+          items: inboxFetches > 1 ? [syncedSession] : [],
+          removed_session_ids: [],
+        });
+      }
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) {
+        sessionDeltaFetches += 1;
+        return jsonResponse({
+          ...sessionSyncPayload,
+          session: sessionDeltaFetches > 1 ? syncedSession : sessionPayload.items[0],
+          items: [],
+          next_after_seq: 2,
+          next_after_cursor: '2026-04-26T10:01:00Z|2',
+          has_more: false,
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    const transcript = await screen.findByLabelText('Transcript');
+    expect(within(transcript).getByText('处理中')).toBeInTheDocument();
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(timelineFetches).toBe(2));
+    expect(within(transcript).queryByText('最终回复已经到了')).toBeNull();
+
+    fireEvent.focus(window);
+
+    expect(await within(transcript).findByText('最终回复已经到了')).toBeInTheDocument();
+    expect(timelineFetches).toBeGreaterThan(2);
+  });
+
   it('uses timeline cursors so same-seq thread updates arrive without leaving the session', async () => {
     let timelineFetches = 0;
     const sessionDeltaUrls: string[] = [];
@@ -6926,5 +7033,29 @@ describe('AgentHub console', () => {
     expect(parseApiDate('2026-04-27T16:58:30.534179')?.toISOString()).toBe('2026-04-27T16:58:30.534Z');
     expect(parseApiDate('2026-04-27T16:58:30.534Z')?.toISOString()).toBe('2026-04-27T16:58:30.534Z');
     expect(parseApiDate('2026-04-28T00:58:30+08:00')?.toISOString()).toBe('2026-04-27T16:58:30.000Z');
+  });
+
+  it('keeps newer same-seq timeline items when a stale response arrives later', () => {
+    const stale = {
+      session_id: 'sess-1',
+      seq: 2,
+      item_type: 'assistant_message' as const,
+      role: 'assistant' as const,
+      text: '处理中',
+      tool_call_id: null,
+      tool_name: null,
+      status: null,
+      payload: {},
+      created_at: '2026-04-26T10:01:00Z',
+      updated_at: '2026-04-26T10:01:00Z',
+    };
+    const newer = {
+      ...stale,
+      text: '最终回复已经到了',
+      updated_at: '2026-04-26T10:04:00Z',
+    };
+
+    expect(mergeTimelineItems([newer], [stale]).find((item) => item.seq === 2)?.text).toBe('最终回复已经到了');
+    expect(mergeTimelineItems([stale], [newer]).find((item) => item.seq === 2)?.text).toBe('最终回复已经到了');
   });
 });
