@@ -153,6 +153,47 @@ describe('voiceStreaming', () => {
     vi.advanceTimersByTime(1500);
   });
 
+  it('forwards raw SDK record chunks so callers can fall back after weak streaming recognition', async () => {
+    const stopTrack = vi.fn();
+    const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue(stream),
+      },
+    });
+    sdkState.setCloseOnStop();
+    const onAudioChunk = vi.fn();
+
+    const controller = await startStreamingVoice({
+      auth: {
+        url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+        auth: {
+          api_resource_id: 'volc.bigasr.sauc.duration',
+          api_app_key: 'app-key',
+          api_access_key: 'Jwt; token-123',
+        },
+        config: {
+          user: { uid: 'user-1' },
+          audio: { format: 'pcm', rate: 16000, bits: 16, channel: 1 },
+          request: { model_name: 'bigmodel' },
+        },
+        expires_in_seconds: 300,
+      },
+      onAudioChunk,
+    });
+
+    const recordChunk = sdkState.getStartRecord().mock.calls[0]?.[1];
+    expect(typeof recordChunk).toBe('function');
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/webm' });
+    await recordChunk(blob);
+
+    expect(onAudioChunk).toHaveBeenCalledWith(blob);
+
+    controller.stop();
+    vi.advanceTimersByTime(1500);
+  });
+
   it('does not double-finish when the SDK closes normally', async () => {
     const stopTrack = vi.fn();
     const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;

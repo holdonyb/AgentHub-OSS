@@ -5182,6 +5182,74 @@ describe('AgentHub console', () => {
     );
   });
 
+  it('falls back to standard transcription when streaming closes without text but captured audio exists', async () => {
+    let stopStreaming: (() => void) | undefined;
+    let transcribeBody: unknown = null;
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/voice/stream-auth')) {
+        return jsonResponse({
+          url: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+          auth: {
+            api_resource_id: 'volc.bigasr.sauc.duration',
+            api_app_key: 'app-key',
+            api_access_key: 'Jwt; token-123',
+          },
+          config: {
+            user: { uid: 'owner@example.com' },
+            audio: { format: 'pcm', rate: 16000, bits: 16, channel: 1 },
+            request: { model_name: 'bigmodel', show_utterances: true },
+          },
+          expires_in_seconds: 300,
+        });
+      }
+      if (url.endsWith('/api/voice/transcribe')) {
+        transcribeBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return jsonResponse({ text: '小声也识别到了' });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+    voiceStreaming.startStreamingVoice.mockImplementation(async ({ onStart, onAudioChunk, onClose }) => {
+      onStart?.();
+      onAudioChunk?.(new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }));
+      stopStreaming = () => onClose?.();
+      return { stop: () => stopStreaming?.() };
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '流式' }));
+    fireEvent.click(screen.getByRole('button', { name: '语音' }));
+
+    await waitFor(() => expect(voiceStreaming.startStreamingVoice).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+
+    await waitFor(() => expect(screen.getByLabelText('回复当前会话')).toHaveValue('小声也识别到了'));
+    expect(transcribeBody).not.toBeNull();
+    const body = transcribeBody as Record<string, unknown>;
+    expect(body).toMatchObject({
+      filename: 'voice.webm',
+      content_type: 'audio/webm',
+      chunk_count: 1,
+      language: 'zh-CN',
+    });
+    expect(String(body.data_base64 ?? '')).not.toHaveLength(0);
+    expect(screen.getByText('语音已转文字')).toBeInTheDocument();
+  });
+
   it('keeps manual edits during streaming voice and appends only the new suffix', async () => {
     let stopStreaming: (() => void) | undefined;
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
