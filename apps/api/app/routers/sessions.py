@@ -120,7 +120,12 @@ def _has_visible_session_activity(session: AgentSession) -> bool:
     return bool(last_message) and last_role not in {"", "system"}
 
 
-def _payload_would_degrade_visible_activity(session: AgentSession, payload: SessionCreateIn) -> bool:
+def _payload_would_degrade_visible_activity(
+    session: AgentSession,
+    payload: SessionCreateIn,
+    incoming_activity_at: datetime | None,
+    previous_activity_at: datetime | None,
+) -> bool:
     if not _has_visible_session_activity(session):
         return False
     if _is_idle_discovery_payload(payload):
@@ -129,6 +134,16 @@ def _payload_would_degrade_visible_activity(session: AgentSession, payload: Sess
     incoming_message = str(payload.last_message or "").strip()
     incoming_role = str(payload.last_role or "").strip()
     if incoming_role in {"", "system"}:
+        return True
+    if (
+        incoming_activity_at is not None
+        and previous_activity_at is not None
+        and incoming_activity_at <= previous_activity_at
+        and existing_message
+        and incoming_message
+        and incoming_message != existing_message
+        and len(incoming_message) <= len(existing_message)
+    ):
         return True
     return bool(
         existing_message
@@ -537,7 +552,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     should_preserve_visible_activity = (
         not is_new_session
         and should_accept_activity
-        and _payload_would_degrade_visible_activity(session, payload)
+        and _payload_would_degrade_visible_activity(session, payload, incoming_activity_at, previous_activity_at)
     )
     if should_accept_activity and not should_preserve_visible_activity:
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"
