@@ -192,6 +192,120 @@ def test_sync_status_digest_changes_when_same_timeline_seq_is_updated(client: Te
     assert second.json()["selected_timeline_digest"] != first.json()["selected_timeline_digest"]
 
 
+def test_timeline_sync_updates_visible_summary_when_session_activity_time_is_skewed(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-skewed-timeline",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-skewed-timeline",
+            "status": "needs_reply",
+            "title": "Skewed timeline",
+            "activity_summary": "当前空闲",
+            "last_message": "",
+            "last_activity_at": "2026-04-26T18:00:00Z",
+            "last_role": "system",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    published = client.post(
+        "/api/internal/sessions/sess-skewed-timeline/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 3,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "最终回复已经写入 timeline，但 created_at 早于会话活动时间",
+                    "created_at": "2026-04-26T10:05:00Z",
+                }
+            ],
+        },
+    )
+    assert published.status_code == 200, published.text
+
+    detail = client.get("/api/sessions/sess-skewed-timeline", headers=headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()["session"]
+    assert payload["last_message"] == "最终回复已经写入 timeline，但 created_at 早于会话活动时间"
+    assert payload["last_role"] == "assistant"
+    assert payload["activity_summary"].startswith("最近上下文：最终回复已经写入 timeline")
+
+
+def test_timeline_sync_keeps_explicit_newer_session_input_when_old_history_replays(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-replayed-history",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "codex/sess-replayed-history",
+            "status": "running",
+            "title": "Replayed history",
+            "activity_summary": "新消息已排队，等待 worker 执行",
+            "last_message": "这是用户刚刚发出的新消息",
+            "last_activity_at": "2026-04-26T18:00:00Z",
+            "last_role": "user",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    replayed = client.post(
+        "/api/internal/sessions/sess-replayed-history/timeline",
+        headers=worker_headers,
+        json={
+            "worker_id": worker_id,
+            "items": [
+                {
+                    "seq": 8,
+                    "item_type": "assistant_message",
+                    "role": "assistant",
+                    "text": "这是很久以前的历史回复，不应该覆盖新的用户输入",
+                    "created_at": "2026-04-25T10:05:00Z",
+                }
+            ],
+        },
+    )
+    assert replayed.status_code == 200, replayed.text
+
+    detail = client.get("/api/sessions/sess-replayed-history", headers=headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()["session"]
+    assert payload["last_message"] == "这是用户刚刚发出的新消息"
+    assert payload["last_role"] == "user"
+    assert payload["activity_summary"] == "新消息已排队，等待 worker 执行"
+
+
 def test_operator_can_enqueue_session_fast_refresh_and_toggle_jobs(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
