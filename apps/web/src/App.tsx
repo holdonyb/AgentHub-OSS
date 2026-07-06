@@ -2375,10 +2375,13 @@ function TimelineText({
   const shouldCollapse = value.length > 640 || value.split('\n').length > 8;
   const displayText = shouldCollapse && !expanded ? compactText(value, 640) : value;
   const hasText = Boolean(value.trim());
-  const detectedKind = allowRenderPreview ? detectMessageRenderKind(value) : 'plain';
-  const [viewerMode, setViewerMode] = useState<'plain' | 'markdown' | 'html' | 'runtime'>(preferredPreviewMode(detectedKind));
-  const canRenderMarkdown = allowRenderPreview && detectedKind !== 'plain';
-  const canRenderHtml = allowRenderPreview && detectedKind === 'html';
+  const detectedKind = useMemo(
+    () => (viewerOpen && allowRenderPreview ? detectMessageRenderKind(value) : 'plain'),
+    [allowRenderPreview, value, viewerOpen],
+  );
+  const [viewerMode, setViewerMode] = useState<'plain' | 'markdown' | 'html' | 'runtime'>('plain');
+  const canRenderMarkdown = viewerOpen && allowRenderPreview && detectedKind !== 'plain';
+  const canRenderHtml = viewerOpen && allowRenderPreview && detectedKind === 'html';
   const shouldRenderMarkdownPreview = viewerOpen && viewerMode === 'markdown' && canRenderMarkdown;
   const shouldRenderHtmlPreview = viewerOpen && viewerMode === 'html' && canRenderHtml;
   const shouldRenderRuntimePreview = viewerOpen && viewerMode === 'runtime' && canRenderHtml;
@@ -2395,8 +2398,8 @@ function TimelineText({
     [shouldRenderRuntimePreview, value],
   );
   useEffect(() => {
-    setViewerMode(preferredPreviewMode(detectedKind));
-  }, [detectedKind, value]);
+    setViewerMode(viewerOpen ? preferredPreviewMode(detectedKind) : 'plain');
+  }, [detectedKind, viewerOpen]);
   const copyText = async () => {
     if (!hasText) return;
     if (await writeTextToClipboard(value)) {
