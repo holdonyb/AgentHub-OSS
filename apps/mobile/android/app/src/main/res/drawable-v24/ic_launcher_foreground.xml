@@ -9,9 +9,9 @@
         android:pivotY="54">
         <path
             android:fillColor="#67C4FF"
-            android:pathData="M36.70,24.68h11.81v58.64h-11.81zM13.18,48.09h35.33v11.81h-35.33z" />
+            android:pathData="M42.38,34.30h7.94v39.40h-7.94zM26.58,50.03h23.74v7.94h-23.74z" />
         <path
             android:fillColor="#50B2FF"
-            android:pathData="M59.48,24.68h11.81v58.64h-11.81zM59.48,48.09h35.33v11.81h-35.33z" />
+            android:pathData="M57.68,34.30h7.94v39.40h-7.94zM57.68,50.03h23.74v7.94h-23.74z" />
     </group>
 </vector>

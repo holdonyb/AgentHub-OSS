@@ -150,7 +150,8 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(launcher).not.toContain('@mipmap/ic_launcher_foreground');
     expect(foreground).toContain('#67C4FF');
     expect(foreground).toContain('#50B2FF');
-    expect(foreground).toContain('M36.70,24.68');
+    expect(foreground).toContain('M42.38,34.30');
+    expect(foreground).not.toContain('M36.70,24.68');
     expect(notificationIcon).toContain('M8.16,5.48');
     expect(webFavicon).toContain('<title>AgentHub</title>');
     expect(webFavicon).toContain('#79D1FF');
