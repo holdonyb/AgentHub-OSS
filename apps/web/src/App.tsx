@@ -2224,9 +2224,26 @@ function latestTimelineItemTime(items: AgentTimelineItem[]) {
   return Math.max(0, ...items.map((item) => new Date(item.created_at ?? '').getTime()).filter(Number.isFinite));
 }
 
+function isConversationTimelineItem(item: AgentTimelineItem) {
+  return ['user_message', 'assistant_message', 'reasoning'].includes(item.item_type);
+}
+
+function latestConversationTimelineItemTime(items: AgentTimelineItem[]) {
+  return Math.max(
+    0,
+    ...items
+      .filter(isConversationTimelineItem)
+      .map((item) => new Date(item.created_at ?? '').getTime())
+      .filter(Number.isFinite),
+  );
+}
+
 function sessionSummaryOutrunsTimeline(session: AgentSession, items: AgentTimelineItem[]) {
   const sessionTime = new Date(session.last_activity_at ?? '').getTime();
-  return Number.isFinite(sessionTime) && sessionTime >= latestTimelineItemTime(items);
+  if (!Number.isFinite(sessionTime)) return false;
+  const latestConversationTime = latestConversationTimelineItemTime(items);
+  if (sessionTime > latestConversationTime) return true;
+  return sessionTime === latestConversationTime && latestTimelineItemTime(items) <= latestConversationTime;
 }
 
 function optimisticMessageKey(item: AgentTimelineItem) {
