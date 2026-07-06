@@ -23,6 +23,12 @@ GRAD_END_RGB = (62, 165, 255)
 LIGHT_FLAT = "#67C4FF"
 DARK_FLAT = "#50B2FF"
 BORDER = "#DCE8F6"
+ICON_BACKGROUND_INSET = 56
+ICON_BACKGROUND_RADIUS = 196
+ICON_BACKGROUND_STROKE = 8
+ICON_MARK_INSET = 168
+ICON_MARK_SIZE = 688
+ICON_MARK_SCALE = ICON_MARK_SIZE / 1024
 
 # (x0, y0, x1, y1) rectangles in the axis-aligned 1024 frame.
 RECTS_LIGHT = [
@@ -73,8 +79,8 @@ MARK_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" r
 ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img">
   <title>AgentHub</title>
   <defs>{_gradient_def("ahIconGradient")}</defs>
-  <rect x="56" y="56" width="912" height="912" rx="196" fill="#ffffff" stroke="{BORDER}" stroke-width="8"/>
-  <g transform="translate(168 168) scale(0.671875)">
+  <rect x="{ICON_BACKGROUND_INSET}" y="{ICON_BACKGROUND_INSET}" width="{1024 - ICON_BACKGROUND_INSET * 2}" height="{1024 - ICON_BACKGROUND_INSET * 2}" rx="{ICON_BACKGROUND_RADIUS}" fill="#ffffff" stroke="{BORDER}" stroke-width="{ICON_BACKGROUND_STROKE}"/>
+  <g transform="translate({ICON_MARK_INSET} {ICON_MARK_INSET}) scale({ICON_MARK_SCALE:g})">
     <g transform="rotate({SVG_ROTATION} 512 512)" fill="url(#ahIconGradient)">
 {_svg_rects()}
     </g>
@@ -83,14 +89,22 @@ ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" r
 """
 
 
-def _vector_rect_path(x0: float, y0: float, x1: float, y1: float, scale: float) -> str:
-    x, y = x0 * scale, y0 * scale
+def _vector_rect_path(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    scale: float,
+    dx: float = 0.0,
+    dy: float = 0.0,
+) -> str:
+    x, y = x0 * scale + dx, y0 * scale + dy
     w, h = (x1 - x0) * scale, (y1 - y0) * scale
     return f"M{x:.2f},{y:.2f}h{w:.2f}v{h:.2f}h-{w:.2f}z"
 
 
-def _vector_paths(rects, color: str, scale: float) -> str:
-    data = "".join(_vector_rect_path(*r, scale) for r in rects)
+def _vector_paths(rects, color: str, scale: float, dx: float = 0.0, dy: float = 0.0) -> str:
+    data = "".join(_vector_rect_path(*r, scale, dx, dy) for r in rects)
     return (
         f'        <path\n'
         f'            android:fillColor="{color}"\n'
@@ -98,7 +112,11 @@ def _vector_paths(rects, color: str, scale: float) -> str:
     )
 
 
-_FG_SCALE = 108 / 1024
+_FG_VIEWPORT = 108
+# Match the padded app icon frame. If the raw 1024 mark is scaled straight to
+# 108dp, Android launchers render the adaptive foreground visibly oversized.
+_FG_SCALE = _FG_VIEWPORT * ICON_MARK_SCALE / 1024
+_FG_OFFSET = _FG_VIEWPORT * ICON_MARK_INSET / 1024
 FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
@@ -108,8 +126,8 @@ FOREGROUND_SVG = f"""<vector xmlns:android="http://schemas.android.com/apk/res/a
         android:rotation="{SVG_ROTATION}"
         android:pivotX="54"
         android:pivotY="54">
-{_vector_paths(RECTS_LIGHT, LIGHT_FLAT, _FG_SCALE)}
-{_vector_paths(RECTS_DARK, DARK_FLAT, _FG_SCALE)}
+{_vector_paths(RECTS_LIGHT, LIGHT_FLAT, _FG_SCALE, _FG_OFFSET, _FG_OFFSET)}
+{_vector_paths(RECTS_DARK, DARK_FLAT, _FG_SCALE, _FG_OFFSET, _FG_OFFSET)}
     </group>
 </vector>
 """
@@ -169,16 +187,24 @@ def render_icon(size: int, include_background: bool = True) -> Image.Image:
         return round(value * canvas / 1024)
 
     if include_background:
-        rect = [s(56), s(56), s(968), s(968)]
-        radius = s(196)
-        draw.rounded_rectangle(rect, radius=radius, fill="white", outline=BORDER, width=max(1, s(8)))
+        rect = [
+            s(ICON_BACKGROUND_INSET),
+            s(ICON_BACKGROUND_INSET),
+            s(1024 - ICON_BACKGROUND_INSET),
+            s(1024 - ICON_BACKGROUND_INSET),
+        ]
+        radius = s(ICON_BACKGROUND_RADIUS)
+        draw.rounded_rectangle(
+            rect,
+            radius=radius,
+            fill="white",
+            outline=BORDER,
+            width=max(1, s(ICON_BACKGROUND_STROKE)),
+        )
 
     mark = render_mark(size)
-    if include_background:
-        mark = mark.resize((s(688), s(688)), Image.Resampling.LANCZOS)
-        image.alpha_composite(mark, (s(168), s(168)))
-    else:
-        image.alpha_composite(mark)
+    mark = mark.resize((s(ICON_MARK_SIZE), s(ICON_MARK_SIZE)), Image.Resampling.LANCZOS)
+    image.alpha_composite(mark, (s(ICON_MARK_INSET), s(ICON_MARK_INSET)))
 
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
