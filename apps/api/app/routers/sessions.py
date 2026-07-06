@@ -120,6 +120,24 @@ def _has_visible_session_activity(session: AgentSession) -> bool:
     return bool(last_message) and last_role not in {"", "system"}
 
 
+def _payload_would_degrade_visible_activity(session: AgentSession, payload: SessionCreateIn) -> bool:
+    if not _has_visible_session_activity(session):
+        return False
+    if _is_idle_discovery_payload(payload):
+        return True
+    existing_message = str(session.last_message or "").strip()
+    incoming_message = str(payload.last_message or "").strip()
+    incoming_role = str(payload.last_role or "").strip()
+    if incoming_role in {"", "system"}:
+        return True
+    return bool(
+        existing_message
+        and incoming_message
+        and len(incoming_message) < len(existing_message)
+        and existing_message.startswith(incoming_message)
+    )
+
+
 def _workspace_label(workspace_root: str) -> str:
     normalized = workspace_root.rstrip("/\\")
     if not normalized:
@@ -519,8 +537,7 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     should_preserve_visible_activity = (
         not is_new_session
         and should_accept_activity
-        and _is_idle_discovery_payload(payload)
-        and _has_visible_session_activity(session)
+        and _payload_would_degrade_visible_activity(session, payload)
     )
     if should_accept_activity and not should_preserve_visible_activity:
         session.activity_summary = payload.activity_summary or payload.last_message or "当前空闲"

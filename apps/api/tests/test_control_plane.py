@@ -367,6 +367,68 @@ def test_idle_discovery_does_not_overwrite_visible_timeline_summary(client: Test
     assert payload["activity_summary"] == "最近上下文：assistant 已经完成"
 
 
+def test_same_activity_discovery_does_not_shrink_visible_timeline_message(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    full_message = "assistant 已经完成，并且这是 timeline 中保留下来的完整正文"
+
+    created = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-discovery-does-not-shrink",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-discovery-does-not-shrink",
+            "status": "needs_reply",
+            "title": "Full timeline message",
+            "activity_summary": "最近上下文：assistant 已经完成",
+            "last_message": full_message,
+            "last_activity_at": "2026-04-26T10:05:00Z",
+            "last_role": "assistant",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    discovered = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "sess-discovery-does-not-shrink",
+            "backend": "claude",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work",
+            "project_name": "work",
+            "namespace": "default",
+            "mode": "direct_reply",
+            "runtime_session_ref": "claude/sess-discovery-does-not-shrink",
+            "status": "needs_reply",
+            "title": "Full timeline message",
+            "activity_summary": "等你回复：assistant 已经完成",
+            "last_message": "assistant 已经完成",
+            "last_activity_at": "2026-04-26T10:05:00Z",
+            "last_role": "system",
+            "metadata": {},
+        },
+        headers=headers,
+    )
+    assert discovered.status_code == 200, discovered.text
+
+    detail = client.get("/api/sessions/sess-discovery-does-not-shrink", headers=headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()["session"]
+    assert payload["last_message"] == full_message
+    assert payload["last_role"] == "assistant"
+    assert payload["activity_summary"] == "最近上下文：assistant 已经完成"
+
+
 def test_operator_can_enqueue_session_fast_refresh_and_toggle_jobs(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)
