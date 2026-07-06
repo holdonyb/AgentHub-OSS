@@ -2379,9 +2379,21 @@ function TimelineText({
   const [viewerMode, setViewerMode] = useState<'plain' | 'markdown' | 'html' | 'runtime'>(preferredPreviewMode(detectedKind));
   const canRenderMarkdown = allowRenderPreview && detectedKind !== 'plain';
   const canRenderHtml = allowRenderPreview && detectedKind === 'html';
-  const markdownPreview = canRenderMarkdown ? renderMarkdownPreview(value) : '';
-  const htmlPreview = canRenderHtml ? buildSandboxedSrcDoc(sanitizeHtmlPreview(value)) : '';
-  const runtimeHtmlPreview = canRenderHtml ? buildSandboxedSrcDoc(sanitizeRunnableHtml(value), { allowScripts: true }) : '';
+  const shouldRenderMarkdownPreview = viewerOpen && viewerMode === 'markdown' && canRenderMarkdown;
+  const shouldRenderHtmlPreview = viewerOpen && viewerMode === 'html' && canRenderHtml;
+  const shouldRenderRuntimePreview = viewerOpen && viewerMode === 'runtime' && canRenderHtml;
+  const markdownPreview = useMemo(
+    () => (shouldRenderMarkdownPreview ? renderMarkdownPreview(value) : ''),
+    [shouldRenderMarkdownPreview, value],
+  );
+  const htmlPreview = useMemo(
+    () => (shouldRenderHtmlPreview ? buildSandboxedSrcDoc(sanitizeHtmlPreview(value)) : ''),
+    [shouldRenderHtmlPreview, value],
+  );
+  const runtimeHtmlPreview = useMemo(
+    () => (shouldRenderRuntimePreview ? buildSandboxedSrcDoc(sanitizeRunnableHtml(value), { allowScripts: true }) : ''),
+    [shouldRenderRuntimePreview, value],
+  );
   useEffect(() => {
     setViewerMode(preferredPreviewMode(detectedKind));
   }, [detectedKind, value]);
