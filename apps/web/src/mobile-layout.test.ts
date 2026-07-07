@@ -99,8 +99,8 @@ describe('mobile WebView layout guardrails', () => {
     expect(mobileBlock).toMatch(/\.notification-toast\s*{[^}]*position:\s*static/s);
     expect(mobileBlock).toMatch(/\.notification-toast \+ \.workspace\s*{[^}]*--mobile-toast-clearance:\s*74px/s);
     expect(mobileBlock).toMatch(/\.ops-rail\s*{[^}]*overflow-y:\s*auto/s);
-    expect(mobileBlock).toMatch(/\.rail-panel summary,\s*\n\s*\.rail-panel-summary\s*{[^}]*color:\s*#f8fafc/s);
-    expect(mobileBlock).toMatch(/\.editor-panel input,\s*\n\s*\.editor-panel select,\s*\n\s*\.editor-panel textarea\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
+    expect(mobileBlock).toMatch(/\.rail-panel summary,\s*\n\s*\.rail-panel-summary\s*{[^}]*color:\s*#e5edf6/s);
+    expect(mobileBlock).toMatch(/\.editor-panel input,\s*\n\s*\.editor-panel select,\s*\n\s*\.editor-panel textarea\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#e5edf6/s);
     expect(mobileBlock).toMatch(/\.rail-panel summary,\s*\n\s*\.rail-panel-summary\s*{[^}]*min-height:\s*48px[^}]*overflow:\s*visible/s);
     expect(mobileBlock).toMatch(/\.rail-panel summary > span,\s*\n\s*\.rail-panel-summary > span\s*{[^}]*white-space:\s*nowrap/s);
   });
