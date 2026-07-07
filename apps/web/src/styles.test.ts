@@ -59,11 +59,11 @@ describe('AgentHub responsive layout styles', () => {
   });
 
   it('restores dark selected states for mobile reply and question controls', () => {
-    expect(styles).toMatch(/\.reply-mode-tabs button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#d8dee8/s);
-    expect(styles).toMatch(/\.reply-mode-tabs button\.selected\s*{[^}]*background:\s*#0d66d0[^}]*color:\s*#ffffff/s);
-    expect(styles).toMatch(/\.question-options button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
-    expect(styles).toMatch(/\.question-options button\.selected\s*{[^}]*background:\s*#0d66d0[^}]*color:\s*#ffffff/s);
-    expect(styles).toMatch(/\.question-options button\.selected small\s*{[^}]*color:\s*rgba\(255,\s*255,\s*255,\s*0\.82\)/s);
+    expect(styles).toMatch(/\.reply-mode-tabs button\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#d6e0ec/s);
+    expect(styles).toMatch(/\.reply-mode-tabs button\.selected\s*{[^}]*background:\s*rgba\(90,\s*167,\s*255,\s*0\.2\)[^}]*color:\s*#dcebff/s);
+    expect(styles).toMatch(/\.question-options button\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.question-options button\.selected\s*{[^}]*background:\s*rgba\(90,\s*167,\s*255,\s*0\.2\)[^}]*color:\s*#dcebff/s);
+    expect(styles).toMatch(/\.question-options button\.selected small\s*{[^}]*color:\s*rgba\(220,\s*235,\s*255,\s*0\.78\)/s);
   });
 
   it('prioritizes the desktop transcript over collapsible session chrome', () => {
@@ -77,20 +77,39 @@ describe('AgentHub responsive layout styles', () => {
   });
 
   it('keeps desktop dark theme surfaces readable instead of mixing white admin cards', () => {
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-box\s*{[^}]*background:\s*rgba\(17,\s*19,\s*23,\s*0\.96\)/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.permission-card,\s*\n\.app-shell\.theme-dark \.rail-panel,\s*\n\.app-shell\.theme-dark \.inspector-overview\s*{[^}]*background:\s*#111317/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-box textarea\s*{[^}]*background:\s*#171a20/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-box\s*{[^}]*background:\s*rgba\(20,\s*29,\s*42,\s*0\.96\)/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.permission-card,\s*\n\.app-shell\.theme-dark \.rail-panel,\s*\n\.app-shell\.theme-dark \.inspector-overview\s*{[^}]*background:\s*#141d2a/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-box textarea\s*{[^}]*background:\s*#1b2736/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.timeline-tabs button,\s*\n\.app-shell\.theme-dark \.native-icon-button,\s*\n\.app-shell\.theme-dark \.secondary-action,\s*\n\.app-shell\.theme-dark \.message-action-button/s);
   });
 
   it('keeps desktop dark chrome from mixing in light topbar and filter controls', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*color-scheme:\s*dark/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar\s*{[^}]*background:\s*rgba\(12,\s*15,\s*20,\s*0\.96\)[^}]*border-bottom-color:\s*rgba\(255,\s*255,\s*255,\s*0\.1\)/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar \.icon-button,\s*\n\.app-shell\.theme-dark \.topbar \.role-chip,\s*\n\.app-shell\.theme-dark \.topbar \.sync-chip\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.search-box input,\s*\n\.app-shell\.theme-dark \.search-clear-button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.provider-filter\s*{[^}]*scrollbar-color:\s*rgba\(148,\s*163,\s*184,\s*0\.5\) transparent/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#d8dee8/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\.selected\s*{[^}]*background:\s*#0d66d0[^}]*color:\s*#ffffff/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar\s*{[^}]*background:\s*rgba\(15,\s*23,\s*34,\s*0\.96\)[^}]*border-bottom-color:\s*rgba\(91,\s*141,\s*184,\s*0\.18\)/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar \.icon-button,\s*\n\.app-shell\.theme-dark \.topbar \.role-chip,\s*\n\.app-shell\.theme-dark \.topbar \.sync-chip\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.search-box input,\s*\n\.app-shell\.theme-dark \.search-clear-button\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.provider-filter\s*{[^}]*scrollbar-color:\s*rgba\(90,\s*167,\s*255,\s*0\.38\) transparent/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#d6e0ec/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\.selected\s*{[^}]*background:\s*rgba\(90,\s*167,\s*255,\s*0\.2\)[^}]*color:\s*#dcebff/s);
+  });
+
+  it('keeps the desktop dark notification inbox on the tonal palette', () => {
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.notification-inbox\s*{[^}]*background:\s*#141d2a[^}]*color:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.notification-inbox-item\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.notification-inbox-item\.unread\s*{[^}]*background:\s*#132236/s);
+  });
+
+  it('uses a tonal dark palette instead of harsh pure black and white contrast', () => {
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-bg:\s*#0b1118/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-bg-elevated:\s*#0f1722/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-surface:\s*#141d2a/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-surface-soft:\s*#1b2736/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-text:\s*#e5edf6/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-muted:\s*#92a3b8/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-accent:\s*#5aa7ff/s);
+    expect(styles).not.toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-bg:\s*#(?:000|000000)\b/s);
+    expect(styles).not.toMatch(/\.app-shell\.theme-dark\s*{[^}]*--ah-text:\s*#f8fafc/s);
+    expect(styles).not.toMatch(/\.app-shell\.theme-dark\s*{[^}]*background:\s*#050607/s);
   });
 
   it('allows the control pane to scroll independently on web and Android', () => {
@@ -129,7 +148,7 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.rich-preview ol\s*{[^}]*list-style:\s*decimal/s);
     expect(styles).toMatch(/\.rich-preview code\s*{[^}]*font-family:\s*ui-monospace/s);
     expect(styles).toMatch(/\.rich-preview h1,\s*\n\.rich-preview h2,\s*\n\.rich-preview h3\s*{[^}]*font-weight:\s*800/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview code,\s*\n\.app-shell\.theme-dark \.rich-preview pre\s*{[^}]*background:\s*#07090d/s);
-    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview th,\s*\n\.app-shell\.theme-dark \.rich-preview td\s*{[^}]*border-color:\s*rgba\(255,\s*255,\s*255,\s*0\.12\)/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview code,\s*\n\.app-shell\.theme-dark \.rich-preview pre\s*{[^}]*background:\s*#0a1018/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview th,\s*\n\.app-shell\.theme-dark \.rich-preview td\s*{[^}]*border-color:\s*rgba\(91,\s*141,\s*184,\s*0\.18\)/s);
   });
 });
