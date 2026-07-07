@@ -177,8 +177,106 @@ textarea:disabled {
   --ah-text: #f8fafc;
   --ah-muted: #9aa4b2;
   --ah-muted-strong: #c7d0dd;
+  color-scheme: dark;
   color: #f8fafc;
   background: #050607;
+}
+
+.app-shell.theme-dark .topbar {
+  color: #f8fafc;
+  background: rgba(12, 15, 20, 0.96);
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.app-shell.theme-dark .brand-row {
+  color: #f8fafc;
+}
+
+.app-shell.theme-dark .topbar .icon-button,
+.app-shell.theme-dark .topbar .role-chip,
+.app-shell.theme-dark .topbar .sync-chip {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #171a20;
+  color: #f8fafc;
+}
+
+.app-shell.theme-dark .topbar .icon-button:hover:not(:disabled) {
+  background: #222832;
+}
+
+.app-shell.theme-dark .topbar .primary-top-action {
+  border-color: #0d66d0;
+  background: #0d66d0;
+  color: #ffffff;
+}
+
+.app-shell.theme-dark .topbar .primary-top-action:hover:not(:disabled) {
+  background: #1f7bea;
+}
+
+.app-shell.theme-dark .topbar .notification-button.has-alert {
+  color: #ffb4a5;
+}
+
+.app-shell.theme-dark .section-heading > span,
+.app-shell.theme-dark .sort-row,
+.app-shell.theme-dark .search-box {
+  color: #9aa4b2;
+}
+
+.app-shell.theme-dark .session-count-inline {
+  background: rgba(255, 255, 255, 0.08);
+  color: #c7d0dd;
+}
+
+.app-shell.theme-dark .search-box input,
+.app-shell.theme-dark .search-clear-button {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #171a20;
+  color: #f8fafc;
+}
+
+.app-shell.theme-dark .search-box input::placeholder {
+  color: #8f98a8;
+}
+
+.app-shell.theme-dark .search-clear-button:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #f8fafc;
+}
+
+.app-shell.theme-dark .provider-filter {
+  scrollbar-color: rgba(148, 163, 184, 0.5) transparent;
+  scrollbar-width: thin;
+}
+
+.app-shell.theme-dark .provider-filter::-webkit-scrollbar {
+  height: 8px;
+}
+
+.app-shell.theme-dark .provider-filter::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-shell.theme-dark .provider-filter::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.app-shell.theme-dark .session-view-tabs {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #111317;
+}
+
+.app-shell.theme-dark .session-view-tabs button {
+  color: #aeb7c5;
+}
+
+.app-shell.theme-dark .session-view-tabs button.selected {
+  background: #0d66d0;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
 }
 
 .app-shell.theme-dark .session-row.selected {
@@ -245,6 +343,18 @@ textarea:disabled {
 
 .app-shell.theme-dark .reply-box textarea {
   background: #171a20;
+}
+
+.app-shell.theme-dark .reply-mode-tabs button {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #171a20;
+  color: #d8dee8;
+}
+
+.app-shell.theme-dark .reply-mode-tabs button.selected {
+  border-color: rgba(77, 163, 255, 0.74);
+  background: #0d66d0;
+  color: #ffffff;
 }
 
 .app-shell.theme-dark .timeline-tabs button,

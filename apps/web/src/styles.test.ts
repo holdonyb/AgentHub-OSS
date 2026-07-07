@@ -83,6 +83,16 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark \.timeline-tabs button,\s*\n\.app-shell\.theme-dark \.native-icon-button,\s*\n\.app-shell\.theme-dark \.secondary-action,\s*\n\.app-shell\.theme-dark \.message-action-button/s);
   });
 
+  it('keeps desktop dark chrome from mixing in light topbar and filter controls', () => {
+    expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*color-scheme:\s*dark/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar\s*{[^}]*background:\s*rgba\(12,\s*15,\s*20,\s*0\.96\)[^}]*border-bottom-color:\s*rgba\(255,\s*255,\s*255,\s*0\.1\)/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar \.icon-button,\s*\n\.app-shell\.theme-dark \.topbar \.role-chip,\s*\n\.app-shell\.theme-dark \.topbar \.sync-chip\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.search-box input,\s*\n\.app-shell\.theme-dark \.search-clear-button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#f8fafc/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.provider-filter\s*{[^}]*scrollbar-color:\s*rgba\(148,\s*163,\s*184,\s*0\.5\) transparent/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\s*{[^}]*background:\s*#171a20[^}]*color:\s*#d8dee8/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-mode-tabs button\.selected\s*{[^}]*background:\s*#0d66d0[^}]*color:\s*#ffffff/s);
+  });
+
   it('allows the control pane to scroll independently on web and Android', () => {
     expect(styles).toMatch(/\.ops-rail\s*{[^}]*min-height:\s*0[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*overflow-y:\s*auto/s);
     expect(styles).toMatch(/grid-template-rows:\s*minmax\(0,\s*1fr\)\s+minmax\(320px,\s*1fr\)/);
