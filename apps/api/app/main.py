@@ -26,6 +26,7 @@ from app.routers import (
     sessions,
     settings as settings_router,
     sync,
+    tasks,
     timeline,
     voice,
     worker_relay,
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(workers.router)
     app.include_router(sessions.router)
+    app.include_router(tasks.router)
     app.include_router(timeline.router)
     app.include_router(jobs.router)
     app.include_router(events.router)
