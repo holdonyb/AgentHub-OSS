@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.db
+*.db-*
 .env
 node_modules/
 dist/
