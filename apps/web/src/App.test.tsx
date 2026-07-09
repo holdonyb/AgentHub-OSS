@@ -64,6 +64,52 @@ const sessionPayload = {
   ],
 };
 
+const taskPayload = {
+  items: [
+    {
+      task_id: 'task-1',
+      space_id: 'spc_default',
+      title: '修复登录页移动端布局',
+      brief_markdown: '登录页在 390px 宽度下按钮遮挡。',
+      success_criteria_markdown: '- npm run web:test passes',
+      status: 'ready_to_review',
+      priority: 100,
+      target_worker_id: 'win-main',
+      backend: 'codex',
+      workspace_root: 'E:/work/AgentHub-OSS',
+      namespace: 'default',
+      latest_job_id: 'job-task-1',
+      latest_session_id: 'sess-1',
+      artifact_count: 1,
+      created_by: 'usr_1',
+      created_at: '2026-07-09T02:00:00Z',
+      updated_at: '2026-07-09T02:18:00Z',
+      due_at: null,
+      archived_at: null,
+      metadata: {},
+    },
+  ],
+};
+
+const taskDetailPayload = {
+  task: taskPayload.items[0],
+  artifacts: [
+    {
+      artifact_id: 'art-1',
+      task_id: 'task-1',
+      kind: 'report',
+      title: '交付报告',
+      path: null,
+      content_markdown: '测试通过，风险较低。',
+      mime_type: 'text/markdown',
+      created_by: 'agent',
+      created_at: '2026-07-09T02:18:00Z',
+      version: 1,
+    },
+  ],
+  executions: [],
+};
+
 const secondSession = {
   ...sessionPayload.items[0],
   session_id: 'sess-2',
@@ -739,6 +785,8 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -875,6 +923,8 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -923,6 +973,23 @@ describe('AgentHub console', () => {
       );
     });
     expect(within(screen.getByLabelText('Transcript')).getByText('继续执行')).toBeInTheDocument();
+  });
+
+  it('switches globally between Workbench and Session modes without hiding session mode', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: /Workbench/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Session/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Workbench/ }));
+    expect(await screen.findByRole('heading', { name: /Task Inbox/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Session/ }));
+    expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
   });
 
   it('does not keep the first screen loading while audit events are slow', async () => {
@@ -4307,6 +4374,8 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });

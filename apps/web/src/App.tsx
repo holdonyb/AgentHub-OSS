@@ -46,8 +46,11 @@ import type { Dispatch, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { App as CapacitorApp } from '@capacitor/app';
 import type {
+  AgentArtifact,
   AgentPermission,
   AgentSession,
+  AgentTask,
+  AgentTaskExecution,
   AgentTimelineItem,
   ConnectionMode,
   Event,
@@ -97,6 +100,7 @@ type FastModeState = 'enabled' | 'disabled' | 'unknown' | 'unavailable';
 type PermissionAction = 'allow' | 'deny' | 'answer';
 type NotificationState = NotificationPermission | 'unsupported';
 type LaunchMode = 'none' | 'start' | 'fork';
+type AppMode = 'session' | 'workbench';
 type NativeMicrophoneState = 'granted' | 'denied' | 'unavailable';
 type ApkUpdateStatus = 'idle' | 'checking' | 'ready' | 'failed';
 type ThemeMode = 'dark' | 'light';
@@ -105,6 +109,11 @@ type VoiceInputMode = 'standard' | 'streaming';
 type VoiceInteractionMode = 'dictation' | 'assistant';
 type InviteRole = Extract<Role, 'admin' | 'operator' | 'viewer'>;
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
+type TaskDetail = {
+  task: AgentTask;
+  artifacts: AgentArtifact[];
+  executions: AgentTaskExecution[];
+};
 
 const mobilePanes = ['sessions', 'thread', 'controls', 'files', 'workers', 'me'] as const;
 const MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024;
@@ -124,6 +133,7 @@ const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
 const APK_DOWNLOAD_PATH = '/downloads/agenthub-android-release.apk';
 const APK_DOWNLOAD_FILENAME = 'agenthub-android-release.apk';
 const THEME_STORAGE_KEY = 'agenthub.theme';
+const APP_MODE_STORAGE_KEY = 'agenthub.appMode';
 const LOCALE_STORAGE_KEY = 'agenthub.locale';
 const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
 const VOICE_INTERACTION_MODE_STORAGE_KEY = 'agenthub.voiceInteractionMode';
@@ -1612,6 +1622,14 @@ function initialThemeMode(): ThemeMode {
   }
 }
 
+function initialAppMode(): AppMode {
+  try {
+    return localStorage.getItem(APP_MODE_STORAGE_KEY) === 'workbench' ? 'workbench' : 'session';
+  } catch {
+    return 'session';
+  }
+}
+
 function initialVoiceInputMode(): VoiceInputMode {
   try {
     return localStorage.getItem(VOICE_INPUT_MODE_STORAGE_KEY) === 'streaming' ? 'streaming' : 'standard';
@@ -2801,12 +2819,91 @@ function timelineLabel(item: AgentTimelineItem) {
   return '系统事件';
 }
 
+function WorkbenchShell({
+  tasks,
+  selectedTaskId,
+  taskDetail,
+  onSelectTask,
+}: {
+  tasks: AgentTask[];
+  selectedTaskId: string | null;
+  taskDetail: TaskDetail | null;
+  onSelectTask: (taskId: string) => void;
+}) {
+  const selectedTask = taskDetail?.task ?? tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null;
+  const ready = tasks.filter((task) => task.status === 'ready_to_review').length;
+  const blocked = tasks.filter((task) => task.status === 'blocked' || task.status === 'needs_approval').length;
+  const working = tasks.filter((task) => task.status === 'working' || task.status === 'queued').length;
+  return (
+    <section className="workbench-layout" aria-label="Agent Workbench">
+      <aside className="task-inbox">
+        <div className="section-heading">
+          <h1>Task Inbox</h1>
+        </div>
+        <div className="task-status-stack" aria-label="Task status summary">
+          <span>Ready to Review · {ready}</span>
+          <span>Blocked · {blocked}</span>
+          <span>Working · {working}</span>
+          <span>All · {tasks.length}</span>
+        </div>
+      </aside>
+      <section className="task-list" aria-label="Tasks">
+        {tasks.length === 0 ? <p className="empty">暂无任务</p> : null}
+        {tasks.map((task) => (
+          <button
+            key={task.task_id}
+            type="button"
+            className={`task-row ${task.task_id === selectedTask?.task_id ? 'selected' : ''}`}
+            onClick={() => onSelectTask(task.task_id)}
+          >
+            <strong>{task.title}</strong>
+            <small>
+              {task.status} · {task.backend ?? 'agent'} · {task.workspace_root ?? 'workspace'}
+            </small>
+          </button>
+        ))}
+      </section>
+      <section className="task-detail" aria-label="Task Detail">
+        {selectedTask ? (
+          <>
+            <p>{selectedTask.backend ?? 'Agent'} · {selectedTask.namespace}</p>
+            <h2>{selectedTask.title}</h2>
+            <span className={`state-pill ${statusClass(selectedTask.status)}`}>{selectedTask.status}</span>
+            <h3>Brief</h3>
+            <p>{selectedTask.brief_markdown}</p>
+            <h3>Artifacts</h3>
+            {taskDetail?.artifacts.length ? (
+              taskDetail.artifacts.map((artifact) => (
+                <article key={artifact.artifact_id} className="artifact-card">
+                  <strong>{artifact.title}</strong>
+                  <small>
+                    {artifact.kind} · v{artifact.version}
+                  </small>
+                  {artifact.content_markdown ? <p>{artifact.content_markdown}</p> : null}
+                </article>
+              ))
+            ) : (
+              <p className="empty">暂无交付物</p>
+            )}
+          </>
+        ) : (
+          <p className="empty">暂无任务</p>
+        )}
+      </section>
+    </section>
+  );
+}
+
 function App() {
   const isIslandView = new URLSearchParams(window.location.search).get('view') === 'island';
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [csrfToken, setCsrfToken] = useState('');
+  const [appMode, setAppMode] = useState<AppMode>(() => initialAppMode());
   const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
@@ -2875,6 +2972,7 @@ function App() {
   const [inviteDraft, setInviteDraft] = useState<InviteDraft>(emptyInviteDraft);
   const [createdInvite, setCreatedInvite] = useState<InviteCreated | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<AgentSession[]>([]);
   const timelineBySessionRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
@@ -3733,6 +3831,30 @@ function App() {
     }
   }
 
+  async function openTask(taskId: string) {
+    selectedTaskIdRef.current = taskId;
+    setSelectedTaskId(taskId);
+    const detail = await apiGet<TaskDetail>(`/api/tasks/${taskId}`);
+    setTaskDetail(detail);
+  }
+
+  async function loadTasks() {
+    const payload = await apiGet<{ items: AgentTask[] }>('/api/tasks');
+    setTasks(payload.items);
+    const currentTaskId = selectedTaskIdRef.current;
+    const nextTaskId = currentTaskId && payload.items.some((task) => task.task_id === currentTaskId)
+      ? currentTaskId
+      : payload.items[0]?.task_id ?? null;
+    selectedTaskIdRef.current = nextTaskId;
+    setSelectedTaskId(nextTaskId);
+    if (nextTaskId) {
+      const detail = await apiGet<TaskDetail>(`/api/tasks/${nextTaskId}`);
+      setTaskDetail(detail);
+    } else {
+      setTaskDetail(null);
+    }
+  }
+
   async function loadData(
     nextCsrf?: string,
     nextUser: User | null = user,
@@ -3783,6 +3905,9 @@ function App() {
       return resolved;
     });
     setLastSyncedAt(new Date().toISOString());
+    await loadTasks().catch((error) => {
+      if (String(error.message) !== '404') throw error;
+    });
     if (nextSelectedId) {
       sessionAfterSeqRef.current[nextSelectedId] =
         timelinePayload.next_after_seq ?? Math.max(0, ...timelinePayload.items.map((item) => Number(item.seq) || 0));
@@ -3819,6 +3944,18 @@ function App() {
     setComposerExpanded(false);
     setFileEditor(null);
   }, [selectedId]);
+
+  useEffect(() => {
+    selectedTaskIdRef.current = selectedTaskId;
+  }, [selectedTaskId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(APP_MODE_STORAGE_KEY, appMode);
+    } catch {
+      // Ignore storage failures in constrained webviews.
+    }
+  }, [appMode]);
 
   useEffect(() => {
     mobilePaneRef.current = mobilePane;
@@ -6043,6 +6180,24 @@ function App() {
           <span className="status-dot status-good" />
           {t(locale, 'workerSignal', { online: onlineWorkers, total: workers.length })}
         </div>
+        <div className="app-mode-switch" role="group" aria-label="AgentHub mode">
+          <button
+            type="button"
+            className={appMode === 'workbench' ? 'selected' : ''}
+            aria-pressed={appMode === 'workbench'}
+            onClick={() => setAppMode('workbench')}
+          >
+            Workbench
+          </button>
+          <button
+            type="button"
+            className={appMode === 'session' ? 'selected' : ''}
+            aria-pressed={appMode === 'session'}
+            onClick={() => setAppMode('session')}
+          >
+            Session
+          </button>
+        </div>
         <div className="topbar-actions">
           <button className="icon-button primary-top-action" type="button" onClick={openStartSession} disabled={!canOperate(user)}>
             <Plus size={17} />
@@ -6141,6 +6296,16 @@ function App() {
         </div>
       )}
 
+      {appMode === 'workbench' ? (
+        <WorkbenchShell
+          tasks={tasks}
+          selectedTaskId={selectedTaskId}
+          taskDetail={taskDetail}
+          onSelectTask={(taskId) => {
+            void openTask(taskId).catch(() => setNotice('任务详情同步失败，稍后重试'));
+          }}
+        />
+      ) : (
       <section className={`workspace mobile-pane-${mobilePane}`}>
         <aside className="session-list" aria-label={text.mobileSessions}>
           <div className="section-heading">
@@ -7374,6 +7539,7 @@ function App() {
           />
         )}
       </section>
+      )}
 
       {launchMode !== 'none' && (
         <SessionLaunchDialog
