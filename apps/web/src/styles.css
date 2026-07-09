@@ -937,6 +937,11 @@ textarea:disabled {
   gap: 10px;
 }
 
+.task-new-button {
+  width: 100%;
+  justify-content: center;
+}
+
 .task-status-stack span,
 .task-row,
 .artifact-card {
@@ -987,6 +992,32 @@ textarea:disabled {
   display: grid;
   gap: 6px;
   margin-top: 10px;
+}
+
+.task-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.task-review-actions button,
+.task-composer > button[type='submit'] {
+  border: 1px solid var(--ah-border);
+  border-radius: 7px;
+  background: var(--ah-surface-soft);
+  color: var(--ah-text);
+  padding: 9px 12px;
+  font-weight: 800;
+}
+
+.task-composer {
+  width: min(720px, calc(100vw - 28px));
+}
+
+.task-composer textarea {
+  min-height: 120px;
+  resize: vertical;
 }
 
 .mobile-panel {
