@@ -18,6 +18,8 @@ The current stabilization round also fixed a real Claude resume regression in th
 
 The Web/App client file surface has now been upgraded from a basic preview pane into a broader mobile-first workspace workbench. The current OSS branch supports richer file capability metadata from workers, inline preview for text, Markdown, images, audio, and video, a stronger text editor with line numbers/search/save shortcuts, recent-file chips, file detail sheets, and safe workspace mutations for creating files, creating folders, renaming entries, and uploading single files through worker-side jobs. The API and worker protocol were extended in lockstep so these operations still stay scoped to the worker workspace root instead of writing directly from the control plane.
 
+The `v1/agent-workbench` line now introduces Workbench Mode beside the existing Session Mode. Workbench Mode uses a top-level `Workbench | Session` switch, adds `AgentTask` and `AgentArtifact` APIs, dispatches task briefs through existing session jobs, and routes completed task jobs into report artifacts for review.
+
 ## Active Work
 
 Current focus is release operations for the open-source distribution:
@@ -29,6 +31,7 @@ Current focus is release operations for the open-source distribution:
 - install-mode consolidation across local, Docker, and VM paths
 - mobile-first file browsing and lightweight file editing inside the Web/App client
 - file-workbench stabilization, QA, and deployment for the new upload/create/rename/media-preview path
+- 1.0 Workbench Mode preview: Task Brief Composer, task-to-session dispatch, report artifacts, and review actions while preserving Session Mode
 
 ## How to Run
 
