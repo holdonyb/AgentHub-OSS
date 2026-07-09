@@ -929,6 +929,7 @@ describe('AgentHub console', () => {
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
       if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
@@ -990,6 +991,76 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: /Session/ }));
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+  });
+
+  it('creates a task brief from Workbench mode and reviews it', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) {
+        return jsonResponse({
+          items: [
+            {
+              worker_id: 'win-main',
+              machine_name: 'DevBox',
+              os: 'windows',
+              reachable_backends: ['codex'],
+              workspace_roots: ['E:/work/AgentHub-OSS'],
+              capabilities: {},
+              status: 'online',
+              last_heartbeat_at: null,
+              runtime_settings: { max_concurrent_jobs: 2, job_poll_interval_seconds: 5, heartbeat_interval_seconds: 30 },
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse(permissionsPayload);
+      if (url.endsWith('/api/tasks') && init?.method === 'POST') {
+        expect(init.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        const body = JSON.parse(String(init.body ?? '{}'));
+        expect(body.title).toBe('修复登录页移动端布局');
+        expect(body.brief_markdown).toBe('登录页移动端按钮遮挡。');
+        expect(body.success_criteria_markdown).toBe('- 390px no overlap');
+        expect(body.target_worker_id).toBe('win-main');
+        expect(body.workspace_root).toBe('E:/work/AgentHub-OSS');
+        expect(body.submit).toBe(true);
+        return jsonResponse({
+          task: { ...taskPayload.items[0], title: body.title },
+          job: { job_id: 'job-task-1', status: 'queued' },
+        });
+      }
+      if (url.endsWith('/api/tasks')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/tasks/task-1/review')) {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        expect(body).toEqual({ action: 'accept', note_markdown: '' });
+        return jsonResponse({ task: { ...taskPayload.items[0], status: 'accepted' } });
+      }
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      return jsonResponse({});
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /New Task Brief/ }));
+    fireEvent.change(screen.getByLabelText('Task title'), { target: { value: '修复登录页移动端布局' } });
+    fireEvent.change(screen.getByLabelText('Task brief'), { target: { value: '登录页移动端按钮遮挡。' } });
+    fireEvent.change(screen.getByLabelText('Success criteria'), { target: { value: '- 390px no overlap' } });
+    fireEvent.click(screen.getByRole('button', { name: /Submit Task/ }));
+
+    expect(await screen.findByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Accept/ }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/tasks/task-1/review', expect.any(Object)));
   });
 
   it('does not keep the first screen loading while audit events are slow', async () => {

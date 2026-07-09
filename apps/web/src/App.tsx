@@ -109,6 +109,7 @@ type VoiceInputMode = 'standard' | 'streaming';
 type VoiceInteractionMode = 'dictation' | 'assistant';
 type InviteRole = Extract<Role, 'admin' | 'operator' | 'viewer'>;
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
+type TaskReviewAction = 'accept' | 'reject' | 'archive' | 'request_changes';
 type TaskDetail = {
   task: AgentTask;
   artifacts: AgentArtifact[];
@@ -2823,12 +2824,16 @@ function WorkbenchShell({
   tasks,
   selectedTaskId,
   taskDetail,
+  onNewTask,
   onSelectTask,
+  onReviewTask,
 }: {
   tasks: AgentTask[];
   selectedTaskId: string | null;
   taskDetail: TaskDetail | null;
+  onNewTask: () => void;
   onSelectTask: (taskId: string) => void;
+  onReviewTask: (action: TaskReviewAction) => void;
 }) {
   const selectedTask = taskDetail?.task ?? tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null;
   const ready = tasks.filter((task) => task.status === 'ready_to_review').length;
@@ -2848,6 +2853,10 @@ function WorkbenchShell({
         </div>
       </aside>
       <section className="task-list" aria-label="Tasks">
+        <button type="button" className="icon-button primary-top-action task-new-button" onClick={onNewTask}>
+          <Plus size={17} />
+          New Task Brief
+        </button>
         {tasks.length === 0 ? <p className="empty">暂无任务</p> : null}
         {tasks.map((task) => (
           <button
@@ -2885,6 +2894,17 @@ function WorkbenchShell({
             ) : (
               <p className="empty">暂无交付物</p>
             )}
+            <div className="task-review-actions" role="group" aria-label="Task review actions">
+              <button type="button" onClick={() => onReviewTask('accept')}>
+                Accept
+              </button>
+              <button type="button" onClick={() => onReviewTask('request_changes')}>
+                Request Changes
+              </button>
+              <button type="button" onClick={() => onReviewTask('archive')}>
+                Archive
+              </button>
+            </div>
           </>
         ) : (
           <p className="empty">暂无任务</p>
@@ -2904,6 +2924,15 @@ function App() {
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
+  const [taskComposerOpen, setTaskComposerOpen] = useState(false);
+  const [taskDraft, setTaskDraft] = useState({
+    title: '',
+    brief_markdown: '',
+    success_criteria_markdown: '',
+    target_worker_id: '',
+    backend: 'codex',
+    workspace_root: '',
+  });
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
@@ -3831,6 +3860,20 @@ function App() {
     }
   }
 
+  function openTaskComposer() {
+    if (!canOperate(user)) return;
+    const worker = workers[0];
+    setTaskDraft({
+      title: '',
+      brief_markdown: '',
+      success_criteria_markdown: '',
+      target_worker_id: worker?.worker_id ?? '',
+      backend: worker?.reachable_backends?.[0] ?? 'codex',
+      workspace_root: worker?.workspace_roots?.[0] ?? '',
+    });
+    setTaskComposerOpen(true);
+  }
+
   async function openTask(taskId: string) {
     selectedTaskIdRef.current = taskId;
     setSelectedTaskId(taskId);
@@ -3853,6 +3896,39 @@ function App() {
     } else {
       setTaskDetail(null);
     }
+  }
+
+  async function handleCreateTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canOperate(user)) return;
+    const payload = await apiPost<{ task: AgentTask; job?: Job }>(
+      '/api/tasks',
+      {
+        ...taskDraft,
+        namespace: 'default',
+        submit: true,
+      },
+      csrfToken,
+    );
+    setTasks((current) => [payload.task, ...current.filter((task) => task.task_id !== payload.task.task_id)]);
+    selectedTaskIdRef.current = payload.task.task_id;
+    setSelectedTaskId(payload.task.task_id);
+    setTaskComposerOpen(false);
+    setNotice(pickLocale(locale, '任务已进入队列', 'Task queued'));
+    const detail = await apiGet<TaskDetail>(`/api/tasks/${payload.task.task_id}`);
+    setTaskDetail(detail);
+  }
+
+  async function handleTaskReview(action: TaskReviewAction) {
+    if (!taskDetail || !canOperate(user)) return;
+    const payload = await apiPost<{ task: AgentTask }>(
+      `/api/tasks/${taskDetail.task.task_id}/review`,
+      { action, note_markdown: '' },
+      csrfToken,
+    );
+    setTaskDetail((current) => (current ? { ...current, task: payload.task } : current));
+    setTasks((current) => current.map((task) => (task.task_id === payload.task.task_id ? payload.task : task)));
+    setNotice(pickLocale(locale, '任务状态已更新', 'Task updated'));
   }
 
   async function loadData(
@@ -6301,8 +6377,12 @@ function App() {
           tasks={tasks}
           selectedTaskId={selectedTaskId}
           taskDetail={taskDetail}
+          onNewTask={openTaskComposer}
           onSelectTask={(taskId) => {
             void openTask(taskId).catch(() => setNotice('任务详情同步失败，稍后重试'));
+          }}
+          onReviewTask={(action) => {
+            void handleTaskReview(action).catch(() => setNotice('任务状态更新失败，稍后重试'));
           }}
         />
       ) : (
@@ -7539,6 +7619,66 @@ function App() {
           />
         )}
       </section>
+      )}
+
+      {taskComposerOpen && (
+        <div className="dialog-backdrop" role="presentation">
+          <form className="launch-dialog task-composer" aria-label="New Task Brief" onSubmit={handleCreateTask}>
+            <div className="dialog-head">
+              <div>
+                <p>Workbench</p>
+                <h2>New Task Brief</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close task composer"
+                onClick={() => setTaskComposerOpen(false)}
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <label>
+              Task title
+              <input
+                aria-label="Task title"
+                value={taskDraft.title}
+                onChange={(event) => setTaskDraft((current) => ({ ...current, title: event.target.value }))}
+                required
+              />
+            </label>
+            <label>
+              Task brief
+              <textarea
+                aria-label="Task brief"
+                value={taskDraft.brief_markdown}
+                onChange={(event) => setTaskDraft((current) => ({ ...current, brief_markdown: event.target.value }))}
+                required
+              />
+            </label>
+            <label>
+              Success criteria
+              <textarea
+                aria-label="Success criteria"
+                value={taskDraft.success_criteria_markdown}
+                onChange={(event) =>
+                  setTaskDraft((current) => ({ ...current, success_criteria_markdown: event.target.value }))
+                }
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={
+                !taskDraft.title.trim() ||
+                !taskDraft.brief_markdown.trim() ||
+                !taskDraft.target_worker_id ||
+                !taskDraft.workspace_root
+              }
+            >
+              Submit Task
+            </button>
+          </form>
+        </div>
       )}
 
       {launchMode !== 'none' && (
