@@ -28,6 +28,7 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 - **Tailscale-first 私有模式。** 不需要把 worker 端口暴露到公网，也能从手机控制本机 agent。
 - **Public relay 公开入口。** 如果你有域名和 HTTPS 反代，也可以把 Web/App 入口放到公网，worker 仍然可以只走私网或出站连接。
 - **配置优先。** 语音识别、服务器地址、worker 根目录、provider 密钥都走配置，不写死维护者环境。
+- **1.0 Workbench Mode（开发中）。** 在保留当前 Session 控制台的基础上，新增异步任务工作台：写任务书、派发到本地 worker、等待 artifact、再验收。
 
 ## 典型使用场景
 

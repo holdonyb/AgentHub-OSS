@@ -52,10 +52,11 @@ The top bar contains:
 
 The selected mode is a user preference. Existing installs should not be forced into Workbench unexpectedly.
 
-Recommended default:
+Phase 1 implementation default:
 
-- Existing users with active sessions: keep Session Mode as default until they switch.
-- New/empty installs: default to Workbench Mode, with a clear path to Session Mode.
+- Default to Session Mode for all installs so the existing console remains the first screen.
+- Persist the user's `Workbench | Session` choice after they switch.
+- Revisit new-install Workbench defaults only when onboarding and empty-state guidance exist.
 
 ### Workbench Mode
 

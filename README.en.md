@@ -28,6 +28,7 @@ Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.
 - **Tailscale-first private mode.** Start without opening worker ports to the public internet.
 - **HTTPS public relay.** If you have a domain and reverse proxy, expose the Web/App entry through HTTPS while workers still use private networking or outbound-only connections.
 - **Configuration-first setup.** Voice ASR, server URL, worker roots, and provider credentials are configuration, not hardcoded maintainer defaults.
+- **1.0 Workbench Mode (in development).** AgentHub keeps the existing Session console and adds an async task workbench for briefs, local worker execution, artifacts, and review.
 
 ## Common Scenarios
 
