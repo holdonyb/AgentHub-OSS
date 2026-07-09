@@ -384,6 +384,96 @@ class SessionStartIn(BaseModel):
     controls: dict[str, Any] = Field(default_factory=dict)
 
 
+TaskStatus = Literal[
+    "draft",
+    "queued",
+    "working",
+    "blocked",
+    "needs_approval",
+    "ready_to_review",
+    "accepted",
+    "rejected",
+    "archived",
+    "failed",
+]
+ArtifactKind = Literal[
+    "report",
+    "diff",
+    "test_result",
+    "screenshot",
+    "log",
+    "document",
+    "patch",
+    "build_output",
+    "review_note",
+]
+
+
+class TaskCreateIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    brief_markdown: str = Field(min_length=1, max_length=80_000)
+    success_criteria_markdown: str = Field(default="", max_length=40_000)
+    target_worker_id: str | None = Field(default=None, max_length=160)
+    backend: str | None = Field(default=None, max_length=64)
+    workspace_root: str | None = None
+    namespace: str = Field(default="default", max_length=120)
+    priority: int = Field(default=100, ge=0, le=1000)
+    controls: dict[str, Any] = Field(default_factory=dict)
+    submit: bool = False
+
+
+class TaskReviewIn(BaseModel):
+    action: Literal["accept", "reject", "archive", "request_changes"]
+    note_markdown: str = Field(default="", max_length=20_000)
+
+
+class AgentTaskOut(BaseModel):
+    space_id: str | None
+    task_id: str
+    title: str
+    brief_markdown: str
+    success_criteria_markdown: str
+    status: str
+    priority: int
+    target_worker_id: str | None
+    backend: str | None
+    workspace_root: str | None
+    namespace: str
+    latest_job_id: str | None
+    latest_session_id: str | None
+    artifact_count: int
+    created_by: str | None
+    created_at: datetime
+    updated_at: datetime
+    due_at: datetime | None
+    archived_at: datetime | None
+    metadata: dict[str, Any]
+
+
+class AgentTaskExecutionOut(BaseModel):
+    execution_id: str
+    task_id: str
+    job_id: str | None
+    session_id: str | None
+    kind: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentArtifactOut(BaseModel):
+    artifact_id: str
+    task_id: str
+    kind: str
+    title: str
+    path: str | None
+    content_markdown: str | None
+    mime_type: str | None
+    created_by: str
+    created_at: datetime
+    version: int
+
+
 class SessionForkIn(BaseModel):
     worker_id: str | None = Field(default=None, max_length=160)
     backend: str | None = Field(default=None, max_length=64)

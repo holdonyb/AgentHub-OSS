@@ -164,3 +164,73 @@ export interface Event {
   payload: Record<string, unknown>;
   created_at: string;
 }
+
+export type TaskStatus =
+  | 'draft'
+  | 'queued'
+  | 'working'
+  | 'blocked'
+  | 'needs_approval'
+  | 'ready_to_review'
+  | 'accepted'
+  | 'rejected'
+  | 'archived'
+  | 'failed';
+
+export type ArtifactKind =
+  | 'report'
+  | 'diff'
+  | 'test_result'
+  | 'screenshot'
+  | 'log'
+  | 'document'
+  | 'patch'
+  | 'build_output'
+  | 'review_note';
+
+export interface AgentTask {
+  task_id: string;
+  space_id: string | null;
+  title: string;
+  brief_markdown: string;
+  success_criteria_markdown: string;
+  status: TaskStatus;
+  priority: number;
+  target_worker_id: string | null;
+  backend: string | null;
+  workspace_root: string | null;
+  namespace: string;
+  latest_job_id: string | null;
+  latest_session_id: string | null;
+  artifact_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  due_at: string | null;
+  archived_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface AgentTaskExecution {
+  execution_id: string;
+  task_id: string;
+  job_id: string | null;
+  session_id: string | null;
+  kind: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentArtifact {
+  artifact_id: string;
+  task_id: string;
+  kind: ArtifactKind;
+  title: string;
+  path: string | null;
+  content_markdown: string | null;
+  mime_type: string | null;
+  created_by: 'agent' | 'human' | 'system';
+  created_at: string;
+  version: number;
+}

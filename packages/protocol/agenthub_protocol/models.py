@@ -110,3 +110,46 @@ class JobResult(BaseModel):
     ok: bool
     result_text: str = ""
     error_text: str = ""
+
+
+TaskStatus = Literal[
+    "draft",
+    "queued",
+    "working",
+    "blocked",
+    "needs_approval",
+    "ready_to_review",
+    "accepted",
+    "rejected",
+    "archived",
+    "failed",
+]
+ArtifactKind = Literal[
+    "report",
+    "diff",
+    "test_result",
+    "screenshot",
+    "log",
+    "document",
+    "patch",
+    "build_output",
+    "review_note",
+]
+
+
+class AgentTask(BaseModel):
+    task_id: str
+    title: str
+    brief_markdown: str
+    success_criteria_markdown: str
+    status: TaskStatus
+    priority: int = 100
+    target_worker_id: str | None = None
+    backend: str | None = None
+    workspace_root: str | None = None
+    namespace: str = "default"
+    latest_job_id: str | None = None
+    latest_session_id: str | None = None
+    artifact_count: int = 0
+    created_at: datetime
+    updated_at: datetime
