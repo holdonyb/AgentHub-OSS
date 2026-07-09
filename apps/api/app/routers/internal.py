@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.core.deps import Actor, DbSession, require_worker
 from app.core.job_recovery import recover_orphaned_running_jobs, recover_stale_running_jobs
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Schedule, Worker, utcnow
+from app.models import AgentArtifact, AgentPermission, AgentSession, AgentTask, AgentTaskExecution, AgentTimeline, Job, Schedule, Worker, utcnow
 from app.routers.sessions import upsert_session
 from app.schemas import ClaimJobIn, CompleteJobIn, DiscoveredSessionsIn, FailJobIn
 from app.services import ALLOWED_JOB_KINDS, ensure_codex_plan_exit_permission, job_out, sync_session_from_timeline, upsert_timeline_items
@@ -336,6 +336,95 @@ def _create_plan_choice_permission(db: DbSession, job: Job, session: AgentSessio
     return True
 
 
+def _task_id_from_job(job: Job) -> str:
+    payload = loads_json(job.payload_json, {})
+    return str(payload.get("task_id") or "").strip() if isinstance(payload, dict) else ""
+
+
+def _task_execution_for_job(db: DbSession, job: Job, task_id: str) -> AgentTaskExecution | None:
+    return (
+        db.query(AgentTaskExecution)
+        .filter(
+            AgentTaskExecution.space_id == job.space_id,
+            AgentTaskExecution.task_id == task_id,
+            AgentTaskExecution.job_id == job.job_id,
+        )
+        .one_or_none()
+    )
+
+
+def _task_for_job(db: DbSession, job: Job) -> AgentTask | None:
+    task_id = _task_id_from_job(job)
+    if not task_id:
+        return None
+    return db.query(AgentTask).filter(AgentTask.space_id == job.space_id, AgentTask.task_id == task_id).one_or_none()
+
+
+def _mark_task_job_running(db: DbSession, job: Job, *, at: datetime) -> None:
+    task = _task_for_job(db, job)
+    if task is None:
+        return
+    execution = _task_execution_for_job(db, job, task.task_id)
+    if execution is not None:
+        execution.status = "running"
+        execution.session_id = job.target_session_id
+        execution.updated_at = at
+    task.status = "working"
+    task.latest_job_id = job.job_id
+    task.latest_session_id = job.target_session_id or task.latest_session_id
+    task.updated_at = at
+
+
+def _mark_task_job_complete(db: DbSession, job: Job, *, result_text: str, at: datetime) -> None:
+    task = _task_for_job(db, job)
+    if task is None:
+        return
+    execution = _task_execution_for_job(db, job, task.task_id)
+    if execution is not None:
+        execution.status = "succeeded"
+        execution.session_id = job.target_session_id
+        execution.updated_at = at
+    task.status = "ready_to_review"
+    task.latest_job_id = job.job_id
+    task.latest_session_id = job.target_session_id or task.latest_session_id
+    task.updated_at = at
+    db.add(
+        AgentArtifact(
+            space_id=job.space_id,
+            task_id=task.task_id,
+            kind="report",
+            title="交付报告",
+            content_markdown=result_text or "任务已完成，但没有返回文本报告。",
+            mime_type="text/markdown",
+            created_by="agent",
+        )
+    )
+
+
+def _mark_task_job_failed(db: DbSession, job: Job, *, error_text: str, at: datetime) -> None:
+    task = _task_for_job(db, job)
+    if task is None:
+        return
+    execution = _task_execution_for_job(db, job, task.task_id)
+    if execution is not None:
+        execution.status = "failed"
+        execution.updated_at = at
+    task.status = "failed"
+    task.latest_job_id = job.job_id
+    task.updated_at = at
+    db.add(
+        AgentArtifact(
+            space_id=job.space_id,
+            task_id=task.task_id,
+            kind="log",
+            title="失败日志",
+            content_markdown=error_text or "任务失败，但没有返回错误信息。",
+            mime_type="text/markdown",
+            created_by="system",
+        )
+    )
+
+
 @router.post("/api/internal/jobs/claim")
 def claim_job(
     payload: ClaimJobIn,
@@ -370,6 +459,7 @@ def claim_job(
     now = utcnow()
     job.claimed_at = now
     job.updated_at = now
+    _mark_task_job_running(db, job, at=now)
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
@@ -433,6 +523,7 @@ def complete_job(
             )
             if not _create_plan_choice_permission(db, job, session, payload.result_text or ""):
                 session.status = "ready"
+    _mark_task_job_complete(db, job, result_text=payload.result_text or "", at=now)
     write_event(
         db,
         space_id=worker.space_id,
@@ -494,6 +585,7 @@ def fail_job(
                 role="system",
                 summary=payload.error_text or session.activity_summary,
             )
+    _mark_task_job_failed(db, job, error_text=payload.error_text or "", at=now)
     write_event(
         db,
         space_id=worker.space_id,
