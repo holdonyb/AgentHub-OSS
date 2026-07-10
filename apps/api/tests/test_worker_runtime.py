@@ -410,7 +410,7 @@ def test_kimi_provider_uses_models_declared_in_config(monkeypatch: pytest.Monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("KIMI_HOME", str(kimi_home))
     monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
 
     def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:

@@ -6,10 +6,14 @@ import re
 import shutil
 import subprocess
 import time
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 workers fall back when TOML support is absent.
+    tomllib = None  # type: ignore[assignment]
 
 
 def _preferred_claude_interactive_bridge() -> str:
@@ -357,6 +361,8 @@ class AgentProvider:
         return _dedupe_models(models)
 
     def _probe_kimi_models(self) -> list[dict[str, str]]:
+        if tomllib is None:
+            return self.default_models
         config_path = Path(os.getenv("KIMI_HOME") or Path.home() / ".kimi") / "config.toml"
         try:
             config = tomllib.loads(config_path.read_text(encoding="utf-8"))
