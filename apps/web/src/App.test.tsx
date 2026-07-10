@@ -3758,6 +3758,85 @@ describe('AgentHub console', () => {
     });
   });
 
+  it('does not re-notify the same pending approval after the app remounts', async () => {
+    const notification = vi.fn();
+    vi.stubGlobal(
+      'Notification',
+      Object.assign(notification, {
+        permission: 'granted',
+        requestPermission: vi.fn(),
+      }),
+    );
+
+    const first = render(<App />);
+    await screen.findByRole('button', { name: /1 个审批待处理/ });
+    await waitFor(() => expect(notification).toHaveBeenCalledTimes(1));
+
+    first.unmount();
+    render(<App />);
+    await screen.findByRole('button', { name: /1 个审批待处理/ });
+    await waitFor(() => expect(notification).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not re-notify the same waiting session after the app remounts', async () => {
+    const notification = vi.fn();
+    vi.stubGlobal(
+      'Notification',
+      Object.assign(notification, {
+        permission: 'granted',
+        requestPermission: vi.fn(),
+      }),
+    );
+    let sessionFetchCount = 0;
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) {
+        sessionFetchCount += 1;
+        if (sessionFetchCount === 1) {
+          return jsonResponse({
+            items: [
+              {
+                ...sessionPayload.items[0],
+                status: 'running',
+                activity_summary: '正在执行：等待 worker',
+              },
+            ],
+          });
+        }
+        return jsonResponse(sessionPayload);
+      }
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    const first = render(<App />);
+    await screen.findByRole('heading', { name: '修复移动控制台' });
+    fireEvent.click(screen.getByRole('button', { name: /刷新/ }));
+    await waitFor(() =>
+      expect(notification).toHaveBeenCalledWith(
+        'AgentHub 会话等待回复',
+        expect.objectContaining({ tag: 'session:sess-1:2026-04-26T10:00:00Z' }),
+      ),
+    );
+    expect(notification).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    render(<App />);
+    await screen.findByRole('heading', { name: '修复移动控制台' });
+    await waitFor(() => expect(notification).toHaveBeenCalledTimes(1));
+  });
+
   it('requests browser notification permission from the bell action', async () => {
     vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

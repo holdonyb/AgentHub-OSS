@@ -128,8 +128,10 @@ const LOCALE_STORAGE_KEY = 'agenthub.locale';
 const VOICE_INPUT_MODE_STORAGE_KEY = 'agenthub.voiceInputMode';
 const VOICE_INTERACTION_MODE_STORAGE_KEY = 'agenthub.voiceInteractionMode';
 const NOTIFICATION_READ_STORAGE_KEY = 'agenthub.notifications.read';
+const NOTIFICATION_DELIVERED_STORAGE_KEY = 'agenthub.notifications.delivered';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
 const MAX_FILE_EDITOR_CHARS = 1_000_000;
+const MAX_REMEMBERED_NOTIFICATION_IDS = 500;
 
 declare global {
   interface Window {
@@ -1677,9 +1679,9 @@ function defaultSettings(): AgentHubSettings {
   };
 }
 
-function readStoredNotificationIds() {
+function readStoredNotificationIdsFromStorage(storageKey: string) {
   try {
-    const raw = localStorage.getItem(NOTIFICATION_READ_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []);
   } catch {
@@ -1687,9 +1689,22 @@ function readStoredNotificationIds() {
   }
 }
 
-function persistNotificationIds(ids: Set<string>) {
+function trimNotificationIds(ids: Set<string>) {
+  if (ids.size <= MAX_REMEMBERED_NOTIFICATION_IDS) return ids;
+  return new Set(Array.from(ids).slice(-MAX_REMEMBERED_NOTIFICATION_IDS));
+}
+
+function readStoredNotificationIds() {
+  return readStoredNotificationIdsFromStorage(NOTIFICATION_READ_STORAGE_KEY);
+}
+
+function readStoredDeliveredNotificationIds() {
+  return readStoredNotificationIdsFromStorage(NOTIFICATION_DELIVERED_STORAGE_KEY);
+}
+
+function persistNotificationIds(storageKey: string, ids: Set<string>) {
   try {
-    localStorage.setItem(NOTIFICATION_READ_STORAGE_KEY, JSON.stringify([...ids]));
+    localStorage.setItem(storageKey, JSON.stringify([...trimNotificationIds(ids)]));
   } catch {
     // Storage can be unavailable in private WebViews.
   }
@@ -2871,8 +2886,7 @@ function App() {
   const applyingMobileHistoryRef = useRef(false);
   const mobileHistoryDepthRef = useRef(0);
   const timelineLoadingRef = useRef<Set<string>>(new Set());
-  const notifiedPermissionIds = useRef<Set<string>>(new Set());
-  const notifiedNeedsReplySessionKeys = useRef<Map<string, string>>(new Map());
+  const deliveredNotificationIdsRef = useRef<Set<string>>(readStoredDeliveredNotificationIds());
   const needsReplyNotificationsPrimed = useRef(false);
   const replyAttachmentsRef = useRef<ReplyAttachment[]>([]);
   const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3378,10 +3392,28 @@ function App() {
     }
   }
 
+  function rememberDeliveredNotificationIds(ids: string[]) {
+    if (ids.length === 0) return;
+    const next = new Set(deliveredNotificationIdsRef.current);
+    let changed = false;
+    ids.forEach((id) => {
+      if (!next.has(id)) {
+        next.add(id);
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    const trimmed = trimNotificationIds(next);
+    deliveredNotificationIdsRef.current = trimmed;
+    persistNotificationIds(NOTIFICATION_DELIVERED_STORAGE_KEY, trimmed);
+  }
+
   function alertNewPendingPermissions(nextPermissions: AgentPermission[]) {
     const pending = nextPermissions.filter((permission) => permission.status === 'pending');
-    const firstUnseen = pending.find((permission) => !notifiedPermissionIds.current.has(permission.permission_id));
-    pending.forEach((permission) => notifiedPermissionIds.current.add(permission.permission_id));
+    const firstUnseen = pending.find(
+      (permission) => !deliveredNotificationIdsRef.current.has(`permission:${permission.permission_id}`),
+    );
+    rememberDeliveredNotificationIds(pending.map((permission) => `permission:${permission.permission_id}`));
     if (firstUnseen) {
       void notifyPendingPermission(firstUnseen, pending.length);
     }
@@ -3399,19 +3431,18 @@ function App() {
     const waitingSessions = nextSessions.filter(
       (session) => session.status === 'needs_reply' && !pendingPermissionSessions.has(session.session_id),
     );
-    const activeKeys = new Map(waitingSessions.map((session) => [session.session_id, needsReplyNotificationKey(session)]));
-    Array.from(notifiedNeedsReplySessionKeys.current.keys()).forEach((sessionId) => {
-      if (!activeKeys.has(sessionId)) notifiedNeedsReplySessionKeys.current.delete(sessionId);
-    });
+    const activeNotificationIds = waitingSessions.map(
+      (session) => `session:${needsReplyNotificationKey(session)}`,
+    );
     if (!needsReplyNotificationsPrimed.current) {
-      activeKeys.forEach((key, sessionId) => notifiedNeedsReplySessionKeys.current.set(sessionId, key));
+      rememberDeliveredNotificationIds(activeNotificationIds);
       needsReplyNotificationsPrimed.current = true;
       return;
     }
     const firstUnseen = waitingSessions.find(
-      (session) => notifiedNeedsReplySessionKeys.current.get(session.session_id) !== activeKeys.get(session.session_id),
+      (session) => !deliveredNotificationIdsRef.current.has(`session:${needsReplyNotificationKey(session)}`),
     );
-    activeKeys.forEach((key, sessionId) => notifiedNeedsReplySessionKeys.current.set(sessionId, key));
+    rememberDeliveredNotificationIds(activeNotificationIds);
     if (firstUnseen) {
       void notifyNeedsReplySession(firstUnseen, waitingSessions.length);
     }
@@ -4612,8 +4643,9 @@ function App() {
     setReadNotificationIds((current) => {
       const next = new Set(current);
       ids.forEach((id) => next.add(id));
-      persistNotificationIds(next);
-      return next;
+      const trimmed = trimNotificationIds(next);
+      persistNotificationIds(NOTIFICATION_READ_STORAGE_KEY, trimmed);
+      return trimmed;
     });
   }
 

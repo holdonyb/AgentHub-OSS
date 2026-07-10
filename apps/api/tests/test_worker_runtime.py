@@ -368,6 +368,13 @@ def test_codex_provider_uses_feature_list_probe_for_native_goal_command(monkeypa
     monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
 
     def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:3] == ["codex", "debug", "models"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps({"models": [{"slug": "gpt-5.6-sol", "display_name": "GPT-5.6-Sol"}]}),
+                stderr="",
+            )
         if args[:3] == ["codex", "features", "list"]:
             return subprocess.CompletedProcess(args, 0, stdout="goals stable false\n", stderr="")
         if args[:3] == ["codex", "login", "status"]:
@@ -381,12 +388,55 @@ def test_codex_provider_uses_feature_list_probe_for_native_goal_command(monkeypa
     assert snapshot["auth_status"] == "ready"
     assert snapshot["diagnostics"]["auth_status"] == "ready"
     assert snapshot["features"]["native_goal_command"] is False
+    assert snapshot["models"] == [{"id": "gpt-5.6-sol", "label": "GPT-5.6-Sol"}]
+
+
+def test_kimi_provider_uses_models_declared_in_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    kimi_home = tmp_path / ".kimi"
+    kimi_home.mkdir(parents=True)
+    (kimi_home / "config.toml").write_text(
+        '\n'.join(
+            [
+                'default_model = "kimi-code/kimi-for-coding"',
+                '',
+                '[models."kimi-code/kimi-for-coding"]',
+                'provider = "managed:kimi-code"',
+                'model = "kimi-for-coding"',
+                '',
+                '[models."kimi-code/kimi-thinking"]',
+                'provider = "managed:kimi-code"',
+                'model = "kimi-thinking"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(["kimi", "--version"], 0, stdout="kimi, version 1.24.0", stderr="")
+
+    monkeypatch.setattr(providers_module.subprocess, "run", fake_run)
+
+    snapshot = AgentProvider(backend="kimi", executable="kimi").snapshot(available=True)
+
+    assert [model["id"] for model in snapshot["models"]] == [
+        "kimi-code/kimi-for-coding",
+        "kimi-code/kimi-thinking",
+    ]
 
 
 def test_opencode_provider_uses_credentials_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(providers_module.shutil, "which", lambda executable: f"C:/tools/{executable}.exe")
 
     def fake_run(args: list[str], *_rest: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ["opencode", "models"]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout="openai/gpt-5\nanthropic/claude-sonnet-4\n",
+                stderr="",
+            )
         if args[:3] == ["opencode", "providers", "list"]:
             return subprocess.CompletedProcess(args, 0, stdout="1 credentials", stderr="")
         if args[:3] == ["opencode", "agent", "list"]:
@@ -402,6 +452,10 @@ def test_opencode_provider_uses_credentials_probe(monkeypatch: pytest.MonkeyPatc
     assert snapshot["features"]["native_goal_command"] is False
     assert snapshot["features"]["native_plan_command"] is False
     assert snapshot["features"]["plan_agent"] is True
+    assert snapshot["models"] == [
+        {"id": "openai/gpt-5", "label": "openai/gpt-5"},
+        {"id": "anthropic/claude-sonnet-4", "label": "anthropic/claude-sonnet-4"},
+    ]
 
 
 def test_opencode_provider_accepts_resolved_config_api_key_without_saved_credentials(
@@ -483,6 +537,8 @@ def test_provider_probes_use_resolved_windows_executable_without_rewriting_args(
 
     def fake_run(args: list[str], *_rest: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         captured.append((list(args), kwargs.get("executable")))
+        if args[:2] == ["opencode", "models"]:
+            return subprocess.CompletedProcess(args, 0, stdout="openai/gpt-5\n", stderr="")
         if args[:3] == ["opencode", "providers", "list"]:
             return subprocess.CompletedProcess(args, 0, stdout="1 credentials", stderr="")
         if args[:3] == ["opencode", "agent", "list"]:
@@ -494,18 +550,22 @@ def test_provider_probes_use_resolved_windows_executable_without_rewriting_args(
     snapshot = AgentProvider(backend="opencode", executable="opencode").snapshot(available=True)
 
     assert snapshot["auth_status"] == "ready"
-    assert captured[0] == (
+    assert (
         ["opencode", "--version"],
         "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
-    )
-    assert captured[1] == (
+    ) in captured
+    assert (
+        ["opencode", "models"],
+        "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
+    ) in captured
+    assert (
         ["opencode", "providers", "list"],
         "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
-    )
-    assert captured[2] == (
+    ) in captured
+    assert (
         ["opencode", "agent", "list"],
         "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
-    )
+    ) in captured
 
 
 def test_worker_runtime_batches_and_trims_large_session_discovery_payloads() -> None:
