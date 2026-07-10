@@ -10,9 +10,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 workers fall back when TOML support is absent.
+    tomllib = None  # type: ignore[assignment]
+
 
 def _preferred_claude_interactive_bridge() -> str:
     return "psmux" if os.name == "nt" else "tmux"
+
+
+def _model_entry(model_id: str, label: str | None = None) -> dict[str, str]:
+    normalized = model_id.strip()
+    return {"id": normalized, "label": (label or normalized).strip()}
+
+
+def _dedupe_models(models: list[dict[str, str]]) -> list[dict[str, str]]:
+    ordered: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for model in models:
+        model_id = str(model.get("id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        ordered.append({"id": model_id, "label": str(model.get("label") or model_id).strip()})
+    return ordered
 
 
 @dataclass
@@ -59,6 +81,7 @@ class AgentProvider:
             "version": version,
             "auth_status": auth_status,
             "feature_overrides": feature_overrides,
+            "models": self._probe_models(),
         }
         self._diagnostic_cache = dict(diagnostics)
         self._diagnostic_cache_at = now
@@ -207,15 +230,31 @@ class AgentProvider:
         feature_overrides = diagnostics.get("feature_overrides")
         if isinstance(feature_overrides, dict):
             features.update(feature_overrides)
+        models = diagnostics.get("models")
+        if not isinstance(models, list) or not models:
+            models = self.default_models
         return {
             "backend": self.backend,
             "status": "ready" if is_available else "unavailable",
             "auth_status": auth_status,
-            "models": self.default_models,
+            "models": models,
             "modes": self.modes,
             "features": features,
             "diagnostics": diagnostics,
         }
+
+    def _probe_models(self) -> list[dict[str, str]]:
+        if not self.is_available():
+            return self.default_models
+        if self.backend == "codex":
+            return self._probe_codex_models()
+        if self.backend == "kimi":
+            return self._probe_kimi_models()
+        if self.backend == "opencode":
+            return self._probe_opencode_models()
+        if self.backend == "claude":
+            return self._probe_claude_models()
+        return self.default_models
 
     def _probe_feature_overrides(self) -> dict[str, Any]:
         if not self.is_available():
@@ -290,11 +329,96 @@ class AgentProvider:
             "native_plan_command": False,
         }
 
+    def _probe_codex_models(self) -> list[dict[str, str]]:
+        completed = self._run_auth_probe(["codex", "debug", "models"])
+        if completed is not None:
+            parsed = _parse_codex_models_payload(completed.stdout)
+            if parsed:
+                return parsed
+        config_path = Path(os.getenv("CODEX_HOME") or Path.home() / ".codex") / "models_cache.json"
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        parsed = _parse_codex_models_payload(payload)
+        if parsed:
+            return parsed
+        return self.default_models
+
+    def _probe_claude_models(self) -> list[dict[str, str]]:
+        settings_path = Path(os.getenv("CLAUDE_CODE_HOME") or Path.home() / ".claude") / "settings.json"
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            settings = {}
+        models = list(self.default_models)
+        env = settings.get("env")
+        if isinstance(env, dict):
+            for key in ("ANTHROPIC_MODEL", "CLAUDE_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"):
+                value = str(env.get(key) or "").strip()
+                if value:
+                    models.insert(0, _model_entry(value))
+        return _dedupe_models(models)
+
+    def _probe_kimi_models(self) -> list[dict[str, str]]:
+        if tomllib is None:
+            return self.default_models
+        config_path = Path(os.getenv("KIMI_HOME") or Path.home() / ".kimi") / "config.toml"
+        try:
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return self.default_models
+        models: list[dict[str, str]] = []
+        default_model = str(config.get("default_model") or "").strip()
+        if default_model:
+            models.append(_model_entry(default_model))
+        declared = config.get("models")
+        if isinstance(declared, dict):
+            for model_id in declared.keys():
+                normalized = str(model_id).strip()
+                if normalized:
+                    models.append(_model_entry(normalized))
+        return _dedupe_models(models or list(self.default_models))
+
+    def _probe_opencode_models(self) -> list[dict[str, str]]:
+        completed = self._run_auth_probe(["opencode", "models"])
+        if completed is None:
+            return self.default_models
+        models = [
+            _model_entry(line.strip())
+            for line in (completed.stdout or "").splitlines()
+            if line.strip() and "/" in line
+        ]
+        return _dedupe_models(models or list(self.default_models))
+
 
 def _models_from_env(name: str, fallback: list[str]) -> list[dict[str, str]]:
     value = os.getenv(name, "")
     model_ids = [item.strip() for item in value.split(",") if item.strip()] or fallback
     return [{"id": model_id, "label": model_id} for model_id in model_ids]
+
+
+def _parse_codex_models_payload(payload: Any) -> list[dict[str, str]]:
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+    if isinstance(payload, dict):
+        payload = payload.get("models")
+    if not isinstance(payload, list):
+        return []
+    models: list[dict[str, str]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            model_id = str(item.get("slug") or item.get("id") or "").strip()
+            if not model_id:
+                continue
+            label = str(item.get("display_name") or item.get("label") or model_id).strip()
+            models.append(_model_entry(model_id, label))
+        elif isinstance(item, str) and item.strip():
+            models.append(_model_entry(item))
+    return _dedupe_models(models)
 
 
 PROVIDERS = {
