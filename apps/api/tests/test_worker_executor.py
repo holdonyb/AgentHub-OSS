@@ -2097,6 +2097,131 @@ def test_codex_context_full_falls_back_to_compact_handoff(monkeypatch: pytest.Mo
     assert "noisy tool output" not in fallback_prompt
 
 
+def test_codex_model_capacity_retries_with_configured_fallback_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    monkeypatch.setenv("AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS", "gpt-5.4-mini,gpt-5.2")
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("codex exited 1: ⚠ Selected model is at capacity. Please try a different model.")
+        if output_file:
+            Path(output_file).write_text("AGENTHUB_CODEX_CAPACITY_FALLBACK_OK", encoding="utf-8")
+        return "AGENTHUB_CODEX_CAPACITY_FALLBACK_OK"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-capacity",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "controls": {"model": "gpt-5.4", "sandbox_mode": "danger-full-access", "approval_mode": "never"},
+            },
+        }
+    )
+
+    assert result == "AGENTHUB_CODEX_CAPACITY_FALLBACK_OK"
+    assert calls[0][calls[0].index("--model") + 1] == "gpt-5.4"
+    assert calls[1][calls[1].index("--model") + 1] == "gpt-5.4-mini"
+    assert calls[1].count("--model") == 1
+
+
+def test_codex_model_capacity_retries_without_model_when_no_fallback_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    monkeypatch.delenv("AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS", raising=False)
+    monkeypatch.delenv("AGENTHUB_CODEX_MODELS", raising=False)
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("codex exited 1: Selected model is at capacity. Please try a different model.")
+        if output_file:
+            Path(output_file).write_text("AGENTHUB_CODEX_DEFAULT_MODEL_FALLBACK_OK", encoding="utf-8")
+        return "AGENTHUB_CODEX_DEFAULT_MODEL_FALLBACK_OK"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-capacity-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": "继续执行", "controls": {"model": "gpt-5.4"}},
+        }
+    )
+
+    assert result == "AGENTHUB_CODEX_DEFAULT_MODEL_FALLBACK_OK"
+    assert "--model" in calls[0]
+    assert "--model" not in calls[1]
+
+
+def test_codex_native_default_capacity_falls_back_to_cli_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("codex app-server error: {'message': 'Selected model is at capacity. Please try a different model.'}")
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        calls.append(args)
+        return "native capacity cli fallback"
+
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn, raising=False)
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-native-capacity",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "reply_mode": "direct",
+                "native_turn_mode": "default",
+                "controls": {"model": "gpt-5.4"},
+            },
+        },
+        client=object(),
+        worker_id="win-main",
+    )
+
+    assert result == "native capacity cli fallback"
+    assert calls[0][-2:] == ["codex-session", "继续执行"]
+
+
 def test_backend_failure_includes_combined_cli_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
 
