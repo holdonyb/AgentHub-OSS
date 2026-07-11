@@ -99,6 +99,27 @@ def _ensure_compatible_columns(engine: Engine) -> None:
             for name, ddl in session_columns.items():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE agent_sessions ADD COLUMN {name} {ddl}"))
+            execution_columns = (
+                {column["name"] for column in inspector.get_columns("agent_task_executions")}
+                if "agent_task_executions" in table_names
+                else set()
+            )
+            if "agent_task_executions" in table_names and "attempt_number" not in execution_columns:
+                execution_columns.add("attempt_number")
+            if {"id", "space_id", "task_id", "attempt_number", "created_at"}.issubset(execution_columns):
+                conn.execute(
+                    text(
+                        "WITH ranked AS ("
+                        "SELECT id, ROW_NUMBER() OVER ("
+                        "PARTITION BY COALESCE(space_id, ''), task_id ORDER BY created_at, id"
+                        ") AS next_attempt FROM agent_task_executions"
+                        ") "
+                        "UPDATE agent_task_executions "
+                        "SET attempt_number = ("
+                        "SELECT next_attempt FROM ranked WHERE ranked.id = agent_task_executions.id"
+                        ")"
+                    )
+                )
             if "agent_timeline" in table_names:
                 conn.execute(
                     text(
@@ -139,6 +160,7 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
             ("CREATE INDEX IF NOT EXISTS ix_agent_artifacts_space_task_created ON agent_artifacts (space_id, task_id, created_at DESC)", {"space_id", "task_id", "created_at"}),
         ],
         "agent_task_executions": [
+            ("CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_task_executions_space_task_attempt ON agent_task_executions (space_id, task_id, attempt_number)", {"space_id", "task_id", "attempt_number"}),
             ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_task_updated ON agent_task_executions (space_id, task_id, updated_at DESC)", {"space_id", "task_id", "updated_at"}),
             ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_job ON agent_task_executions (space_id, job_id)", {"space_id", "job_id"}),
         ],

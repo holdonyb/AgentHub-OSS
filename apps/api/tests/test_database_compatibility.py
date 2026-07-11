@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 
 def _sqlite_index_names(engine, table_name: str) -> set[str]:
@@ -117,6 +118,57 @@ def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_p
     assert "ix_jobs_space_target_updated_at" in _sqlite_index_names(engine, "jobs")
     assert "ix_agent_timeline_space_session_created_seq" in _sqlite_index_names(engine, "agent_timeline")
     assert "ix_agent_timeline_space_session_updated_id" in _sqlite_index_names(engine, "agent_timeline")
+
+
+def test_task_attempt_migration_renumbers_legacy_duplicates_and_enforces_uniqueness(tmp_path: Path) -> None:
+    from app.core.database import _ensure_compatible_columns, _ensure_compatible_indexes
+
+    db_path = tmp_path / "legacy-duplicate-task-attempts.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path.as_posix()}", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE agent_sessions (session_id VARCHAR(180), created_at DATETIME)"))
+        conn.execute(
+            text(
+                "CREATE TABLE agent_task_executions ("
+                "id VARCHAR(64), execution_id VARCHAR(64), space_id VARCHAR(64), task_id VARCHAR(64), "
+                "attempt_number INTEGER NOT NULL DEFAULT 1, status VARCHAR(32), created_at DATETIME"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agent_task_executions "
+                "(id, execution_id, space_id, task_id, attempt_number, status, created_at) VALUES "
+                "('ate_1', 'tex_1', 'spc_1', 'tsk_1', 1, 'completed', '2026-07-01 10:00:00'), "
+                "('ate_2', 'tex_2', 'spc_1', 'tsk_1', 1, 'queued', '2026-07-01 11:00:00')"
+            )
+        )
+
+    _ensure_compatible_columns(engine)
+    _ensure_compatible_indexes(engine)
+
+    with engine.connect() as conn:
+        attempts = conn.execute(
+            text(
+                "SELECT attempt_number FROM agent_task_executions "
+                "WHERE space_id = 'spc_1' AND task_id = 'tsk_1' ORDER BY created_at"
+            )
+        ).scalars().all()
+    assert attempts == [1, 2]
+    assert "uq_agent_task_executions_space_task_attempt" in _sqlite_index_names(
+        engine,
+        "agent_task_executions",
+    )
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO agent_task_executions "
+                    "(id, execution_id, space_id, task_id, attempt_number, status, created_at) "
+                    "VALUES ('ate_3', 'tex_3', 'spc_1', 'tsk_1', 2, 'queued', '2026-07-01 12:00:00')"
+                )
+            )
 
 
 def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: Path) -> None:

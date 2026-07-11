@@ -212,6 +212,14 @@ class AgentTask(Base):
 
 class AgentTaskExecution(Base):
     __tablename__ = "agent_task_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "space_id",
+            "task_id",
+            "attempt_number",
+            name="uq_agent_task_executions_space_task_attempt",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ate"))
     space_id: Mapped[str | None] = mapped_column(ForeignKey("spaces.space_id"), nullable=True, index=True)

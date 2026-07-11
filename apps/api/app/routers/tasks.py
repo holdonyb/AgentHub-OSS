@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 
 from app.core.audit import write_event
 from app.core.config import get_settings
@@ -81,6 +84,43 @@ def _review_state_conflict(task: AgentTask, action: str) -> HTTPException:
             "status": task.status,
         },
     )
+
+
+def _claim_review_transition(
+    db: DbSession,
+    task: AgentTask,
+    *,
+    action: str,
+    allowed_statuses: frozenset[str],
+    next_status: str,
+    now: datetime,
+) -> None:
+    try:
+        updated = (
+            db.query(AgentTask)
+            .filter(
+                AgentTask.id == task.id,
+                AgentTask.space_id == task.space_id,
+                AgentTask.status.in_(allowed_statuses),
+            )
+            .update(
+                {AgentTask.status: next_status, AgentTask.updated_at: now},
+                synchronize_session="fetch",
+            )
+        )
+    except OperationalError as error:
+        if db.bind is None or db.bind.dialect.name != "sqlite" or "locked" not in str(error).lower():
+            raise
+        db.rollback()
+        current = (
+            db.query(AgentTask)
+            .filter(AgentTask.id == task.id, AgentTask.space_id == task.space_id)
+            .one_or_none()
+        )
+        raise _review_state_conflict(current or task, action) from error
+    if updated != 1:
+        db.expire(task)
+        raise _review_state_conflict(task, action)
 
 
 def _workspace_project_name(workspace_root: str) -> str:
@@ -256,11 +296,29 @@ def review_task(
         )
 
     now = utcnow()
+    if payload.action in {"accept", "reject"}:
+        _claim_review_transition(
+            db,
+            task,
+            action=payload.action,
+            allowed_statuses=frozenset({"ready_to_review"}),
+            next_status="accepted" if payload.action == "accept" else "rejected",
+            now=now,
+        )
+    elif payload.action == "request_changes":
+        _claim_review_transition(
+            db,
+            task,
+            action=payload.action,
+            allowed_statuses=REWORKABLE_TASK_STATUSES,
+            next_status="queued",
+            now=now,
+        )
     job: Job | None = None
     if payload.action == "accept":
-        task.status = "accepted"
+        pass
     elif payload.action == "reject":
-        task.status = "rejected"
+        pass
     elif payload.action == "archive":
         if task.status == "archived" and task.archived_at is not None:
             return {"task": task_out(task, artifact_count=_artifact_count(db, task))}

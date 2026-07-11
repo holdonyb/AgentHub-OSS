@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
@@ -196,6 +198,69 @@ def test_task_request_changes_dispatches_second_attempt_with_stored_controls(cli
     review_notes = [item for item in payload["artifacts"] if item["kind"] == "review_note"]
     assert len(review_notes) == 1
     assert review_notes[0]["content_markdown"] == "请补充失败路径测试。"
+
+
+def test_concurrent_task_review_only_creates_one_new_attempt(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.routers import tasks as task_router
+
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="并发返工只能创建一次",
+    )
+    task_id = created["task"]["task_id"]
+    _claim_and_complete_task_job(
+        client,
+        worker["worker_token"],
+        worker_id,
+        created["job"]["job_id"],
+        "等待并发验收",
+    )
+
+    barrier = Barrier(2)
+    original_require_task = task_router._require_task
+
+    def synchronized_require_task(*args, **kwargs):
+        task = original_require_task(*args, **kwargs)
+        barrier.wait(timeout=5)
+        return task
+
+    monkeypatch.setattr(task_router, "_require_task", synchronized_require_task)
+
+    def request_changes(note: str):
+        return client.post(
+            f"/api/tasks/{task_id}/review",
+            headers=headers,
+            json={"action": "request_changes", "note_markdown": note},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(request_changes, "补充 Windows 回归"),
+            executor.submit(request_changes, "补充 Linux 回归"),
+        ]
+        responses = [future.result(timeout=10) for future in futures]
+
+    monkeypatch.setattr(task_router, "_require_task", original_require_task)
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["detail"]["code"] == "TASK_REVIEW_STATE_INVALID"
+
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert [(item["attempt_number"], item["status"]) for item in detail["executions"]] == [
+        (2, "queued"),
+        (1, "succeeded"),
+    ]
+    assert len([item for item in detail["artifacts"] if item["kind"] == "review_note"]) == 1
 
 
 def test_task_request_changes_requires_non_empty_note(client: TestClient) -> None:
