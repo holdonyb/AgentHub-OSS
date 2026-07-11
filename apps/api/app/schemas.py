@@ -423,7 +423,7 @@ class TaskCreateIn(BaseModel):
 
 
 class TaskReviewIn(BaseModel):
-    action: Literal["accept", "reject", "archive", "request_changes"]
+    action: Literal["accept", "reject", "archive", "restore", "request_changes"]
     note_markdown: str = Field(default="", max_length=20_000)
 
 
@@ -455,6 +455,7 @@ class AgentTaskExecutionOut(BaseModel):
     task_id: str
     job_id: str | None
     session_id: str | None
+    attempt_number: int = Field(ge=1)
     kind: str
     status: str
     created_at: datetime

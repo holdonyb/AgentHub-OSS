@@ -216,6 +216,7 @@ export interface AgentTaskExecution {
   task_id: string;
   job_id: string | null;
   session_id: string | null;
+  attempt_number: number;
   kind: string;
   status: string;
   created_at: string;

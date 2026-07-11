@@ -71,6 +71,7 @@ def _ensure_compatible_columns(engine: Engine) -> None:
         "schedules": {"space_id": "VARCHAR(64)"},
         "invites": {"space_id": "VARCHAR(64)"},
         "access_tokens": {"space_id": "VARCHAR(64)"},
+        "agent_task_executions": {"attempt_number": "INTEGER NOT NULL DEFAULT 1"},
     }
     existing = {column["name"] for column in inspector.get_columns("agent_sessions")}
     session_columns = {

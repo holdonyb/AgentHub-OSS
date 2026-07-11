@@ -6,7 +6,7 @@ from sqlalchemy import func
 from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.deps import Actor, DbSession, require_min_role
-from app.core.json import dumps_json
+from app.core.json import dumps_json, loads_json
 from app.models import AgentArtifact, AgentTask, AgentTaskExecution, Job, utcnow
 from app.routers.sessions import _normalize_controls, _require_worker_backend_available
 from app.schemas import TaskCreateIn, TaskReviewIn
@@ -14,9 +14,11 @@ from app.services import artifact_out, job_out, task_execution_out, task_out
 
 router = APIRouter()
 
+REWORKABLE_TASK_STATUSES = frozenset({"ready_to_review", "failed", "blocked", "rejected"})
 
-def _task_prompt(task: AgentTask) -> str:
-    return (
+
+def _task_prompt(task: AgentTask, *, review_note: str = "") -> str:
+    prompt = (
         "You are executing an AgentHub Task, not chatting casually.\n\n"
         f"# AgentHub Task: {task.title}\n\n"
         "## Brief\n"
@@ -27,6 +29,9 @@ def _task_prompt(task: AgentTask) -> str:
         "Work asynchronously. Only ask the user when blocked, over authority, or missing critical context. "
         "When finished, return a final report with changed files, validation, risks, and next steps."
     )
+    if review_note:
+        prompt += f"\n\n## Requested Changes\n{review_note}"
+    return prompt
 
 
 def _require_task(db: DbSession, actor: Actor, task_id: str) -> AgentTask:
@@ -45,11 +50,51 @@ def _artifact_count(db: DbSession, task: AgentTask) -> int:
     )
 
 
+def _has_report_artifact(db: DbSession, task: AgentTask) -> bool:
+    return (
+        db.query(AgentArtifact.id)
+        .filter(
+            AgentArtifact.space_id == task.space_id,
+            AgentArtifact.task_id == task.task_id,
+            AgentArtifact.kind == "report",
+        )
+        .first()
+        is not None
+    )
+
+
+def _stored_task_controls(task: AgentTask) -> dict[str, object]:
+    metadata = loads_json(task.metadata_json, {})
+    if not isinstance(metadata, dict):
+        return {}
+    controls = metadata.get("controls")
+    return dict(controls) if isinstance(controls, dict) else {}
+
+
+def _review_state_conflict(task: AgentTask, action: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "message": f"Task cannot {action} from {task.status}",
+            "code": "TASK_REVIEW_STATE_INVALID",
+            "action": action,
+            "status": task.status,
+        },
+    )
+
+
 def _workspace_project_name(workspace_root: str) -> str:
     return workspace_root.rstrip("/\\").replace("\\", "/").split("/")[-1] or "workspace"
 
 
-def _dispatch_task(db: DbSession, actor: Actor, task: AgentTask, controls: dict[str, object]) -> Job:
+def _dispatch_task(
+    db: DbSession,
+    actor: Actor,
+    task: AgentTask,
+    controls: dict[str, object],
+    *,
+    review_note: str = "",
+) -> Job:
     if not task.target_worker_id or not task.backend or not task.workspace_root:
         raise HTTPException(
             status_code=400,
@@ -60,6 +105,15 @@ def _dispatch_task(db: DbSession, actor: Actor, task: AgentTask, controls: dict[
         )
     backend = task.backend.strip().lower()
     _require_worker_backend_available(db, actor.space_id, task.target_worker_id, backend)
+    latest_attempt = (
+        db.query(func.max(AgentTaskExecution.attempt_number))
+        .filter(
+            AgentTaskExecution.space_id == actor.space_id,
+            AgentTaskExecution.task_id == task.task_id,
+        )
+        .scalar()
+    )
+    attempt_number = int(latest_attempt or 0) + 1
     now = utcnow()
     job = Job(
         space_id=actor.space_id,
@@ -72,7 +126,7 @@ def _dispatch_task(db: DbSession, actor: Actor, task: AgentTask, controls: dict[
         payload_json=dumps_json(
             {
                 "task_id": task.task_id,
-                "prompt": _task_prompt(task),
+                "prompt": _task_prompt(task, review_note=review_note),
                 "title": task.title,
                 "controls": _normalize_controls(controls, backend=backend),
                 "project_name": _workspace_project_name(task.workspace_root),
@@ -90,6 +144,7 @@ def _dispatch_task(db: DbSession, actor: Actor, task: AgentTask, controls: dict[
             space_id=actor.space_id,
             task_id=task.task_id,
             job_id=job.job_id,
+            attempt_number=attempt_number,
             kind=job.kind,
             status=job.status,
         )
@@ -169,7 +224,7 @@ def get_task(task_id: str, db: DbSession, actor: Actor = Depends(require_min_rol
     executions = (
         db.query(AgentTaskExecution)
         .filter(AgentTaskExecution.space_id == actor.space_id, AgentTaskExecution.task_id == task.task_id)
-        .order_by(AgentTaskExecution.created_at.desc())
+        .order_by(AgentTaskExecution.attempt_number.desc(), AgentTaskExecution.created_at.desc())
         .all()
     )
     return {
@@ -187,24 +242,49 @@ def review_task(
     actor: Actor = Depends(require_min_role("operator")),
 ):
     task = _require_task(db, actor, task_id)
+    note = payload.note_markdown.strip()
+    if payload.action in {"accept", "reject"} and task.status != "ready_to_review":
+        raise _review_state_conflict(task, payload.action)
+    if payload.action == "request_changes" and task.status not in REWORKABLE_TASK_STATUSES:
+        raise _review_state_conflict(task, payload.action)
+    if payload.action == "restore" and task.archived_at is None and task.status != "archived":
+        raise _review_state_conflict(task, payload.action)
+    if payload.action == "request_changes" and not note:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Request changes requires a review note", "code": "TASK_REVIEW_NOTE_REQUIRED"},
+        )
+
     now = utcnow()
+    job: Job | None = None
     if payload.action == "accept":
         task.status = "accepted"
     elif payload.action == "reject":
         task.status = "rejected"
     elif payload.action == "archive":
+        if task.status == "archived" and task.archived_at is not None:
+            return {"task": task_out(task, artifact_count=_artifact_count(db, task))}
         task.status = "archived"
-        task.archived_at = now
+        task.archived_at = task.archived_at or now
+    elif payload.action == "restore":
+        task.archived_at = None
+        task.status = "ready_to_review" if _has_report_artifact(db, task) else "draft"
     elif payload.action == "request_changes":
-        task.status = "blocked"
-    if payload.note_markdown.strip():
+        job = _dispatch_task(
+            db,
+            actor,
+            task,
+            _stored_task_controls(task),
+            review_note=note,
+        )
+    if note:
         db.add(
             AgentArtifact(
                 space_id=actor.space_id,
                 task_id=task.task_id,
                 kind="review_note",
                 title=f"Review: {payload.action}",
-                content_markdown=payload.note_markdown.strip(),
+                content_markdown=note,
                 mime_type="text/markdown",
                 created_by="human",
             )
@@ -218,6 +298,10 @@ def review_task(
         source_type="task",
         source_id=task.task_id,
         event_type=f"task.{payload.action}",
+        payload={"job_id": job.job_id} if job is not None else None,
     )
     db.commit()
-    return {"task": task_out(task, artifact_count=_artifact_count(db, task))}
+    response: dict[str, object] = {"task": task_out(task, artifact_count=_artifact_count(db, task))}
+    if job is not None:
+        response["job"] = job_out(job)
+    return response

@@ -49,6 +49,44 @@ def test_ensure_compatible_columns_adds_timeline_updated_at_to_legacy_sqlite(tmp
     assert str(updated_at) == "2026-07-05 12:34:56"
 
 
+def test_ensure_compatible_columns_adds_task_attempt_number_with_default_one(tmp_path: Path) -> None:
+    from app.core.database import _ensure_compatible_columns
+
+    db_path = tmp_path / "legacy-task-attempt.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path.as_posix()}", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE agent_sessions (session_id VARCHAR(180), created_at DATETIME)"))
+        conn.execute(
+            text(
+                "CREATE TABLE agent_task_executions ("
+                "id VARCHAR(64), execution_id VARCHAR(64), task_id VARCHAR(64), status VARCHAR(32)"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agent_task_executions (id, execution_id, task_id, status) "
+                "VALUES ('ate_1', 'tex_1', 'tsk_1', 'succeeded')"
+            )
+        )
+
+    _ensure_compatible_columns(engine)
+
+    assert "attempt_number" in _sqlite_column_names(engine, "agent_task_executions")
+    with engine.connect() as conn:
+        attempt_number = conn.execute(
+            text("SELECT attempt_number FROM agent_task_executions WHERE id = 'ate_1'")
+        ).scalar_one()
+        default_value = next(
+            row[4]
+            for row in conn.execute(text("PRAGMA table_info('agent_task_executions')")).all()
+            if row[1] == "attempt_number"
+        )
+
+    assert attempt_number == 1
+    assert str(default_value).strip("'\"") == "1"
+
+
 def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_path: Path) -> None:
     from app.core.database import _ensure_compatible_indexes
 

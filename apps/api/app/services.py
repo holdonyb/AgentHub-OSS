@@ -288,6 +288,7 @@ def task_execution_out(execution: AgentTaskExecution) -> dict[str, Any]:
         "task_id": execution.task_id,
         "job_id": execution.job_id,
         "session_id": execution.session_id,
+        "attempt_number": execution.attempt_number,
         "kind": execution.kind,
         "status": execution.status,
         "created_at": execution.created_at,

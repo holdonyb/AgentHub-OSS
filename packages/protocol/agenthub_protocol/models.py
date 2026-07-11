@@ -153,3 +153,15 @@ class AgentTask(BaseModel):
     artifact_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class AgentTaskExecution(BaseModel):
+    execution_id: str
+    task_id: str
+    job_id: str | None = None
+    session_id: str | None = None
+    attempt_number: int = Field(default=1, ge=1)
+    kind: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
