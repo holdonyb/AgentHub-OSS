@@ -213,9 +213,9 @@ def main() -> None:
     worker_token = cli_worker_token or _load_worker_token(token_path)
     if not worker_token and not (args.enrollment_token or args.worker_registration_token):
         worker_token = env_worker_token
-    if not worker_token:
+    if args.enrollment_token or not worker_token:
         bootstrap_client = AgentHubClient(args.api_url, args.worker_id, "", mode=args.connection_mode)
-        bootstrap_token = _generate_worker_token()
+        bootstrap_token = worker_token or _generate_worker_token()
         registration_payload = {
             "worker_id": args.worker_id,
             "machine_name": socket.gethostname(),

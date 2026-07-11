@@ -154,3 +154,74 @@ def test_macos_bootstrap_only_enrolls_without_starting_runtime(
 
     assert token_path.is_file()
     assert enroll_payloads[0]["reachable_backends"] == ["codex"]
+
+
+def test_macos_explicit_enrollment_consumes_token_when_cached_worker_token_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_main_module()
+    workspace = tmp_path / "Work"
+    workspace.mkdir()
+    token_path = tmp_path / "runtime" / "mac.worker-token"
+    module._persist_worker_token(token_path, "ahw_cached")
+    enroll_payloads: list[dict] = []
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def enroll(self, payload: dict) -> dict:
+            enroll_payloads.append(payload)
+            return {"worker": {"worker_id": payload["worker_id"]}}
+
+    monkeypatch.setattr(module, "AgentHubClient", FakeClient)
+    monkeypatch.setattr(module, "WorkerRuntime", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("runtime started")))
+    monkeypatch.setattr(
+        module,
+        "discover_capabilities",
+        lambda: {"codex": True, "claude": False, "kimi": False, "opencode": False, "tmux": True},
+    )
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            "worker",
+            "--api-url",
+            "https://agenthub.example.com",
+            "--worker-id",
+            "macbook",
+            "--connection-mode",
+            "public_relay",
+            "--enrollment-token",
+            "ahe_once",
+            "--worker-token-path",
+            str(token_path),
+            "--workspace-root",
+            str(workspace),
+            "--bootstrap-only",
+        ],
+    )
+
+    module.main()
+
+    assert enroll_payloads == [
+        {
+            "worker_id": "macbook",
+            "machine_name": module.socket.gethostname(),
+            "os": "macos",
+            "connection_mode": "public_relay",
+            "transport_state": "polling",
+            "reachable_backends": ["codex"],
+            "workspace_roots": [str(workspace).replace("\\", "/")],
+            "capabilities": {
+                "codex": True,
+                "claude": False,
+                "kimi": False,
+                "opencode": False,
+                "tmux": True,
+            },
+            "worker_token": "ahw_cached",
+            "enrollment_token": "ahe_once",
+        }
+    ]
+    assert token_path.read_text(encoding="utf-8") == "ahw_cached\n"
