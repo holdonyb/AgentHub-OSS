@@ -146,15 +146,28 @@ const worker: NativeWorkerSummary = {
   last_heartbeat_at: '2026-07-11T11:59:00.000Z',
 };
 
+function createSessionsApi(listSessions: jest.Mock) {
+  return {
+    getSession: jest.fn(async () => ({ session })),
+    getSessionTimeline: jest.fn(async () => ({ items: [], has_more: false })),
+    listJobs: jest.fn(async () => ({ items: [] })),
+    listPermissions: jest.fn(async () => ({ items: [] })),
+    listSessions,
+    respondPermission: jest.fn(),
+    sendSessionInput: jest.fn(),
+    terminateSession: jest.fn(),
+  };
+}
+
 describe('native resource screens', () => {
-  it('loads, selects, and refreshes sessions without hiding current data', async () => {
+  it('loads and refreshes sessions without hiding current data', async () => {
     const initialRequest = deferred<{ items: NativeSessionSummary[] }>();
     const refreshRequest = deferred<{ items: NativeSessionSummary[] }>();
     const listSessions = jest
       .fn()
       .mockImplementationOnce(() => initialRequest.promise)
       .mockImplementationOnce(() => refreshRequest.promise);
-    const renderer = renderPending(<SessionsScreen api={{ listSessions }} />);
+    const renderer = renderPending(<SessionsScreen api={createSessionsApi(listSessions)} />);
 
     expect(renderedText(renderer)).toContain('正在加载会话');
 
@@ -167,12 +180,6 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('worker-main');
     expect(renderedText(renderer)).toContain('待回复');
 
-    const sessionButton = renderer.root.findByProps({ accessibilityLabel: '选择会话 修复登录问题' });
-    await act(async () => press(sessionButton));
-    expect(
-      renderer.root.findByProps({ accessibilityLabel: '选择会话 修复登录问题' }).props.accessibilityState,
-    ).toEqual({ selected: true });
-
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '刷新会话' })));
     expect(listSessions).toHaveBeenCalledTimes(2);
     expect(renderedText(renderer)).toContain('修复登录问题');
@@ -184,12 +191,44 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('登录问题已定位');
   });
 
+  it('opens a dedicated session detail and returns to the inbox', async () => {
+    const api = {
+      getSession: jest.fn(async () => ({ session })),
+      getSessionTimeline: jest.fn(async () => ({ items: [], has_more: false })),
+      listJobs: jest.fn(async () => ({ items: [] })),
+      listPermissions: jest.fn(async () => ({ items: [] })),
+      listSessions: jest.fn(async () => ({ items: [session] })),
+      respondPermission: jest.fn(),
+      sendSessionInput: jest.fn(),
+      terminateSession: jest.fn(),
+    };
+    const renderer = await render(
+      <SessionsScreen api={api} canTerminate csrfToken="csrf-token" />,
+    );
+    await settle();
+
+    await act(async () => {
+      press(renderer.root.findByProps({ accessibilityLabel: '打开会话 修复登录问题' }));
+    });
+    await settle();
+
+    expect(renderedText(renderer)).toContain('会话详情');
+    expect(renderedText(renderer)).toContain('暂无消息');
+    expect(api.getSessionTimeline).toHaveBeenCalledWith('session-1');
+
+    await act(async () => {
+      press(renderer.root.findByProps({ accessibilityLabel: '返回会话列表' }));
+    });
+    expect(renderedText(renderer)).toContain('SESSION INBOX');
+    expect(renderedText(renderer)).toContain('修复登录问题');
+  });
+
   it('shows session errors, retries, and then renders an empty state', async () => {
     const listSessions = jest
       .fn()
       .mockRejectedValueOnce(new Error('网络不可用'))
       .mockResolvedValueOnce({ items: [] });
-    const renderer = await render(<SessionsScreen api={{ listSessions }} />);
+    const renderer = await render(<SessionsScreen api={createSessionsApi(listSessions)} />);
     await settle();
 
     expect(renderedText(renderer)).toContain('会话加载失败');
@@ -210,7 +249,9 @@ describe('native resource screens', () => {
     });
     const listSessions = jest.fn().mockRejectedValue(unauthorized);
     const onRequestError = jest.fn();
-    await render(<SessionsScreen api={{ listSessions }} onRequestError={onRequestError} />);
+    await render(
+      <SessionsScreen api={createSessionsApi(listSessions)} onRequestError={onRequestError} />,
+    );
     await settle();
 
     expect(onRequestError).toHaveBeenCalledWith(unauthorized);

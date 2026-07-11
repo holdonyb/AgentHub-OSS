@@ -34,6 +34,87 @@ export interface NativeSessionSummary {
   worker_id: string;
   status: NativeSessionStatus;
   last_activity_at: string | null;
+  project_name?: string;
+  workspace_root?: string;
+  namespace?: string;
+  activity_summary?: string;
+  last_message?: string;
+}
+
+export interface NativeTimelineItem {
+  session_id: string;
+  seq: number;
+  item_type:
+    | 'user_message'
+    | 'assistant_message'
+    | 'reasoning'
+    | 'tool_call'
+    | 'todo'
+    | 'goal'
+    | 'error'
+    | 'compaction';
+  role: 'user' | 'assistant' | 'system' | 'tool' | null;
+  text: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+  status: 'started' | 'running' | 'completed' | 'failed' | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at?: string;
+}
+
+export type NativePermissionAction = 'allow' | 'deny' | 'answer' | 'edit_and_allow';
+
+export interface NativePermission {
+  permission_id: string;
+  session_id: string;
+  worker_id: string;
+  backend: string;
+  kind:
+    | 'tool'
+    | 'tool_approval'
+    | 'command_approval'
+    | 'plan'
+    | 'plan_exit'
+    | 'question'
+    | 'mode'
+    | 'other';
+  title: string;
+  description: string;
+  detail: Record<string, unknown>;
+  actions: Record<string, unknown>;
+  status: 'pending' | 'allowed' | 'denied' | 'answered' | 'expired';
+  response: Record<string, unknown>;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface NativeJob {
+  job_id: string;
+  kind: string;
+  target_session_id: string | null;
+  worker_id: string | null;
+  backend: string | null;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  queue_reason?: string | null;
+  queue_reason_text?: string | null;
+  error_text: string | null;
+  result_text?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface NativeTimelinePayload {
+  items: NativeTimelineItem[];
+  has_more: boolean;
+  next_after_seq?: number;
+  next_after_cursor?: string;
+}
+
+export interface NativeTimelinePageOptions {
+  beforeCreatedAt?: string;
+  beforeSeq?: number;
+  limit?: number;
 }
 
 export type NativeTaskStatus =
@@ -108,6 +189,31 @@ export interface MobileApi {
   me(): Promise<NativeAuthPayload>;
   logout(csrfToken: string): Promise<{ ok: boolean }>;
   listSessions(): Promise<NativeListPayload<NativeSessionSummary>>;
+  getSession(sessionId: string): Promise<{ session: NativeSessionSummary }>;
+  getSessionTimeline(
+    sessionId: string,
+    options?: NativeTimelinePageOptions,
+  ): Promise<NativeTimelinePayload>;
+  listPermissions(
+    sessionId: string,
+    status?: NativePermission['status'],
+  ): Promise<NativeListPayload<NativePermission>>;
+  listJobs(): Promise<NativeListPayload<NativeJob>>;
+  sendSessionInput(
+    sessionId: string,
+    payload: { prompt: string; reply_mode?: 'direct' | 'plan' },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  respondPermission(
+    permissionId: string,
+    action: NativePermissionAction,
+    response: Record<string, unknown>,
+    csrfToken: string,
+  ): Promise<{ permission: NativePermission }>;
+  terminateSession(
+    sessionId: string,
+    csrfToken: string,
+  ): Promise<{ session: NativeSessionSummary }>;
   listTasks(status?: NativeTaskStatus): Promise<NativeListPayload<NativeTaskSummary>>;
   getTask(taskId: string): Promise<NativeTaskDetail>;
   listWorkers(): Promise<NativeListPayload<NativeWorkerSummary>>;
@@ -115,6 +221,7 @@ export interface MobileApi {
 
 export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi {
   const client = createAgentHubClient({ baseUrl, fetcher });
+  const sessionPath = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}`;
   return {
     login: (email, password) =>
       client.post<NativeAuthPayload>('/api/auth/login', { email, password }),
@@ -122,6 +229,39 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
     logout: (csrfToken) =>
       client.post<{ ok: boolean }>('/api/auth/logout', {}, { csrfToken }),
     listSessions: () => client.get<NativeListPayload<NativeSessionSummary>>('/api/sessions'),
+    getSession: (sessionId) =>
+      client.get<{ session: NativeSessionSummary }>(sessionPath(sessionId)),
+    getSessionTimeline: (sessionId, options = {}) => {
+      const query = [
+        `limit=${encodeURIComponent(String(options.limit ?? 100))}`,
+        ...(options.beforeCreatedAt
+          ? [`before_created_at=${encodeURIComponent(options.beforeCreatedAt)}`]
+          : []),
+        ...(typeof options.beforeSeq === 'number'
+          ? [`before_seq=${encodeURIComponent(String(options.beforeSeq))}`]
+          : []),
+      ].join('&');
+      return client.get<NativeTimelinePayload>(`${sessionPath(sessionId)}/timeline?${query}`);
+    },
+    listPermissions: (sessionId, status = 'pending') =>
+      client.get<NativeListPayload<NativePermission>>(
+        `/api/permissions?status=${encodeURIComponent(status)}&session_id=${encodeURIComponent(sessionId)}`,
+      ),
+    listJobs: () => client.get<NativeListPayload<NativeJob>>('/api/jobs?limit=200'),
+    sendSessionInput: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/input`, payload, { csrfToken }),
+    respondPermission: (permissionId, action, response, csrfToken) =>
+      client.post<{ permission: NativePermission }>(
+        `/api/permissions/${encodeURIComponent(permissionId)}/respond`,
+        { action, response },
+        { csrfToken },
+      ),
+    terminateSession: (sessionId, csrfToken) =>
+      client.post<{ session: NativeSessionSummary }>(
+        `${sessionPath(sessionId)}/terminate`,
+        {},
+        { csrfToken },
+      ),
     listTasks: (status) =>
       client.get<NativeListPayload<NativeTaskSummary>>(
         status ? `/api/tasks?status=${encodeURIComponent(status)}` : '/api/tasks',

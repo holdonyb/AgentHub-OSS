@@ -10,6 +10,9 @@ Current supported scope:
 - cookie-session login, restore check, logout, and server switching through `@agenthub/client-core`
 - authenticated tab shell for Sessions, Tasks, Files, Workers, and Profile
 - API-backed session inbox with status, worker/backend metadata, last activity, selection, and refresh
+- dedicated session detail with chronological timeline, older-history paging, multiline replies, and queued/running/failed delivery state
+- pending approval and `request_user_input` handling with multi-question choices, freeform answers, notes, and duplicate-submit protection
+- owner/admin session termination with explicit confirmation and visible API errors
 - API-backed task inbox with status filters and task detail for briefs, criteria, artifacts, and executions
 - API-backed worker list with online state, heartbeat, and reported capabilities
 - loading, empty, error, retry, and refresh states across the API-backed lists

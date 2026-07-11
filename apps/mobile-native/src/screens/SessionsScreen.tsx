@@ -1,43 +1,72 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { MobileApi, NativeSessionSummary } from '../api/mobileApi';
 import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
 import { formatLastActivity, sessionStatusLabel } from './resourcePresentation';
+import { SessionDetailScreen } from './SessionDetailScreen';
 
-type SessionsApi = Pick<MobileApi, 'listSessions'>;
+type SessionsApi = Pick<
+  MobileApi,
+  | 'getSession'
+  | 'getSessionTimeline'
+  | 'listJobs'
+  | 'listPermissions'
+  | 'listSessions'
+  | 'respondPermission'
+  | 'sendSessionInput'
+  | 'terminateSession'
+>;
 
 export function SessionsScreen({
   api,
   onRequestError,
+  csrfToken = '',
+  canTerminate = false,
 }: {
   api: SessionsApi;
   onRequestError?(error: unknown): void;
+  csrfToken?: string;
+  canTerminate?: boolean;
 }) {
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<NativeSessionSummary | null>(null);
   const loadSessions = useCallback(async () => (await api.listSessions()).items, [api]);
   const resource = useAsyncResource(loadSessions, { onError: onRequestError });
   const sessions = resource.data ?? [];
 
+  if (selectedSession) {
+    return (
+      <SessionDetailScreen
+        api={api}
+        canTerminate={canTerminate}
+        csrfToken={csrfToken}
+        onBack={() => {
+          setSelectedSession(null);
+          void resource.reload();
+        }}
+        onRequestError={onRequestError}
+        session={selectedSession}
+      />
+    );
+  }
+
   function renderSession({ item }: { item: NativeSessionSummary }) {
-    const selected = item.session_id === selectedSessionId;
     return (
       <Pressable
-        accessibilityLabel={`选择会话 ${item.title}`}
+        accessibilityLabel={`打开会话 ${item.title}`}
         accessibilityRole="button"
-        accessibilityState={{ selected }}
-        onPress={() => setSelectedSessionId(item.session_id)}
+        onPress={() => setSelectedSession(item)}
         style={({ pressed }) => [
           styles.card,
-          selected && styles.cardSelected,
           pressed && styles.cardPressed,
         ]}
       >
         <View style={styles.cardTitleRow}>
           <Text numberOfLines={2} style={styles.cardTitle}>{item.title}</Text>
-          {selected ? <Ionicons color={colors.accent} name="checkmark-circle" size={20} /> : null}
+          <Ionicons color={colors.muted} name="chevron-forward" size={20} />
         </View>
         <View style={styles.metadataRow}>
           <View style={styles.badge}><Text style={styles.badgeText}>{item.backend}</Text></View>
@@ -53,7 +82,7 @@ export function SessionsScreen({
 
   const fullState = resource.loading || (resource.error !== null && resource.data === null) || sessions.length === 0;
   return (
-    <View style={styles.screen}>
+    <SafeAreaView edges={['top']} style={styles.screen}>
       <ResourceHeader
         eyebrow="SESSION INBOX"
         onRefresh={resource.reload}
@@ -95,7 +124,7 @@ export function SessionsScreen({
           renderItem={renderSession}
         />
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -110,7 +139,6 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 15,
   },
-  cardSelected: { borderColor: colors.accent, borderWidth: 2, padding: 14 },
   cardPressed: { opacity: 0.72 },
   cardTitleRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 10 },
   cardTitle: { color: colors.text, flex: 1, fontSize: 16, fontWeight: '700', lineHeight: 22 },

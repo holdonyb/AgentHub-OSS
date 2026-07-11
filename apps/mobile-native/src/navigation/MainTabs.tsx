@@ -70,6 +70,7 @@ function ProfileScreen({
 
 interface MainTabsProps {
   api: MobileApi;
+  csrfToken: string;
   user: NativeUser;
   serverUrl: string;
   busy: boolean;
@@ -81,6 +82,7 @@ interface MainTabsProps {
 
 export function MainTabs({
   api,
+  csrfToken,
   user,
   serverUrl,
   busy,
@@ -95,6 +97,7 @@ export function MainTabs({
         screenOptions={({ route }) => {
           const definition = nativeTabs.find((tab) => tab.key === route.name)!;
           return {
+            headerShown: !definition.ownsHeader,
             headerShadowVisible: false,
             headerStyle: { backgroundColor: colors.canvas },
             headerTitleStyle: { color: colors.text, fontSize: 18, fontWeight: '700' },
@@ -112,7 +115,14 @@ export function MainTabs({
           <Tab.Screen key={tab.key} name={tab.key} options={{ title: tab.label }}>
             {() => {
               if (tab.key === 'sessions') {
-                return <SessionsScreen api={api} onRequestError={onRequestError} />;
+                return (
+                  <SessionsScreen
+                    api={api}
+                    canTerminate={user.role === 'owner' || user.role === 'admin'}
+                    csrfToken={csrfToken}
+                    onRequestError={onRequestError}
+                  />
+                );
               }
               if (tab.key === 'tasks') {
                 return <TasksScreen api={api} onRequestError={onRequestError} />;

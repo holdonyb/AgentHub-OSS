@@ -10,4 +10,9 @@ describe('native tab shell', () => {
       { key: 'me', label: '我的' },
     ]);
   });
+
+  it('lets the session flow own its list and detail headers', () => {
+    expect(nativeTabs.find((tab) => tab.key === 'sessions')?.ownsHeader).toBe(true);
+    expect(nativeTabs.find((tab) => tab.key === 'tasks')?.ownsHeader).toBe(false);
+  });
 });

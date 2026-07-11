@@ -131,6 +131,7 @@ export default function App() {
       <MainTabs
         api={api}
         busy={busy}
+        csrfToken={runtime.auth.csrf_token}
         error={runtime.error}
         onChangeServer={handleChangeServer}
         onLogout={handleLogout}
