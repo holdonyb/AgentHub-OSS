@@ -77,6 +77,21 @@ describe('client-core HTTP transport', () => {
     }
   });
 
+  it('preserves the existing web GET request shape', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = createAgentHubClient({ fetcher });
+
+    const request = client.get('/api/workers');
+
+    expect(fetcher).toHaveBeenCalledWith('/api/workers', { credentials: 'include' });
+    await expect(request).resolves.toEqual({ ok: true });
+  });
+
   it('returns structured API errors and supports empty responses', async () => {
     const responses = [
       new Response(JSON.stringify({ detail: { message: 'Worker offline', code: 'WORKER_OFFLINE' } }), {

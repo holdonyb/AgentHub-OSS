@@ -5592,7 +5592,7 @@ describe('AgentHub console', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
-    expect(screen.getByLabelText('回复当前会话')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('回复当前会话')).toHaveValue(''));
   });
 
   it('does not enqueue native fast state refresh just by opening a codex session', async () => {

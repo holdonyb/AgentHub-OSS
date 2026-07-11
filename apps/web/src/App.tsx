@@ -5722,6 +5722,10 @@ function App() {
     };
     setNotice('正在发送…');
     appendOptimisticUserMessage(optimisticItem);
+    setReply('');
+    setReplyAttachmentsSafely([]);
+    setComposerFocused(false);
+    replyTextareaRef.current?.blur();
     let response: { job: Job };
     try {
       response = await apiPost<{ job: Job }>(
@@ -5731,6 +5735,8 @@ function App() {
       );
     } catch (error) {
       discardOptimisticUserMessage(selectedSession.session_id, optimisticItem);
+      setReply(currentReplyValue);
+      setReplyAttachmentsSafely(currentAttachments);
       setNotice(`发送失败：${error instanceof Error ? error.message : '未知错误'}`);
       return;
     }
@@ -5746,10 +5752,6 @@ function App() {
     };
     replaceOptimisticUserMessage(optimisticItem, confirmedOptimisticItem);
     rememberOptimisticUserMessage(confirmedOptimisticItem);
-    setReply('');
-    setReplyAttachmentsSafely([]);
-    setComposerFocused(false);
-    replyTextareaRef.current?.blur();
     const queuedNotice =
       selectedSession.status === 'running' || selectedSession.status === 'queued'
         ? '已排队，当前作业结束后自动执行'

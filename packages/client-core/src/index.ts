@@ -75,18 +75,17 @@ export function createAgentHubClient(options: AgentHubClientOptions = {}) {
   const baseUrl = normalizedBaseUrl ?? '';
 
   async function request<T>(method: string, path: string, body?: unknown, requestOptions: RequestOptions = {}): Promise<T> {
-    const token = await options.getBearerToken?.();
+    const token = options.getBearerToken ? await options.getBearerToken() : null;
     const headers: Record<string, string> = { ...requestOptions.headers };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = `Bearer ${token}`;
     if (requestOptions.csrfToken) headers['X-CSRF-Token'] = requestOptions.csrfToken;
-    const response = await (options.fetcher ?? globalThis.fetch)(endpointUrl(baseUrl, path), {
-      method,
-      credentials: options.getBearerToken ? 'omit' : 'include',
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: requestOptions.signal,
-    });
+    const init: RequestInit = { credentials: options.getBearerToken ? 'omit' : 'include' };
+    if (method !== 'GET') init.method = method;
+    if (Object.keys(headers).length > 0) init.headers = headers;
+    if (body !== undefined) init.body = JSON.stringify(body);
+    if (requestOptions.signal) init.signal = requestOptions.signal;
+    const response = await (options.fetcher ?? globalThis.fetch)(endpointUrl(baseUrl, path), init);
     if (!response.ok) throw await errorFromResponse(response);
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
