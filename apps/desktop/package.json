@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "package:win": "npm run build && node scripts/package-win.mjs",
+    "package:mac": "npm run build && node scripts/package-mac.mjs",
     "start": "electron .",
     "test": "vitest"
   },
@@ -23,6 +24,7 @@
     "files": [
       "dist/**/*",
       "assets/icon.ico",
+      "assets/icon.png",
       "package.json"
     ],
     "extraMetadata": {
@@ -33,6 +35,15 @@
       "artifactName": "AgentHub-${version}-${arch}.${ext}",
       "target": [
         "portable"
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.png",
+      "artifactName": "AgentHub-${version}-macos-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
       ]
     }
   },

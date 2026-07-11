@@ -113,13 +113,46 @@ jobs:
         with:
           name: agenthub-desktop-windows
           if-no-files-found: error
-          path: apps/desktop/release/*
+          path: apps/desktop/release/AgentHub-*.exe
+
+  build-macos-desktop:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test desktop packaging
+        run: npm run desktop:test
+
+      - name: Build unsigned macOS packages
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run desktop:package:mac
+
+      - name: Upload macOS desktop assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-macos
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/AgentHub-*-macos-*.dmg
+            apps/desktop/release/AgentHub-*-macos-*.zip
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - build-web-mobile-workers
       - build-windows-desktop
+      - build-macos-desktop
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
