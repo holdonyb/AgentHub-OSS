@@ -168,10 +168,13 @@ def test_worker_scripts_wire_auto_update_configuration() -> None:
     assert "New-ScheduledTaskTrigger -Once" in install_windows
     assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in install_windows
     assert "update-windows-worker.ps1" in loop_windows
+    assert "Stop-StaleWorkerProcesses" in loop_windows
+    assert "stopped stale worker processes" in loop_windows
     assert "AGENTHUB_WORKER_AUTO_UPDATE" in install_linux
     assert "command -v uv" in install_linux
     assert "ExecStartPre=" in install_linux
     assert "update-linux-worker.sh" in install_linux
+    assert "PSNativeCommandUseErrorActionPreference" in (REPO_ROOT / "scripts" / "update-windows-worker.ps1").read_text(encoding="utf-8")
 
 
 def test_windows_worker_scripts_parse_on_windows() -> None:

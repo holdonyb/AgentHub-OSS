@@ -394,6 +394,8 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "client_max_body_size" in nginx_template
     assert "location ^~ /api/internal/" in nginx_template
     assert "location ^~ /api/worker/" in nginx_template
+    assert "location ^~ /downloads/workers/" in nginx_template
+    assert "__AGENTHUB_DOWNLOADS_ROOT__/workers/" in nginx_template
     assert "try_files $uri /index.html" in nginx_template
 
     assert "SELFHOST_SMOKE_OK" in smoke_vm
@@ -550,6 +552,7 @@ def test_selfhost_installer_supports_render_only_config_generation() -> None:
         assert f"WorkingDirectory={install_root}" in service_path.read_text(encoding="utf-8")
         assert "server_name agenthub-smoke.example.test;" in nginx_path.read_text(encoding="utf-8")
         assert f"ssl_certificate {cert_dir}/fullchain.pem;" in nginx_path.read_text(encoding="utf-8")
+        assert f"alias {data_dir}/downloads/workers/;" in nginx_path.read_text(encoding="utf-8")
         assert "render-only complete" in result.stdout
 
 
