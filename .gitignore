@@ -21,6 +21,8 @@ data/
 *.mobileprovision
 apps/mobile/android/app/*.jks
 apps/mobile/android/app/*.keystore
+apps/desktop/.electron-dist-cache/
+apps/desktop/release/
 .gstack/
 .superpowers/
 
