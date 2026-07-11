@@ -47,6 +47,11 @@ CODEX_CONTEXT_FULL_MARKERS = (
     "context window",
     "上下文已满",
 )
+CODEX_MODEL_CAPACITY_MARKERS = (
+    "selected model is at capacity",
+    "please try a different model",
+)
+CODEX_CAPACITY_FALLBACK_MODELS_ENV = "AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS"
 DEFAULT_JOB_TIMEOUT_SECONDS = 3600
 IMAGE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 MAX_FILE_LIST_ENTRIES = 300
@@ -968,7 +973,15 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
             return f"dry_run: {_format_command(args)}"
         roots = _session_discovery_roots(workspace_root)
         before = _discover_local_sessions(roots)
-        cli_output = _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
+        if backend == "codex":
+            cli_output = _run_codex_command_with_capacity_fallback(
+                args,
+                workspace_root,
+                timeout_seconds,
+                output_file=output_file,
+            )
+        else:
+            cli_output = _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
         created = _poll_created_session(
             before,
             roots=roots,
@@ -1053,6 +1066,14 @@ def _execute_session_btw(job: dict[str, Any], *, client: Any | None) -> str:
         process_env = _backend_process_env(job, secret_env)
         if payload.get("dry_run"):
             return f"dry_run: {_format_command(args)}"
+        if backend == "codex":
+            return _run_codex_command_with_capacity_fallback(
+                args,
+                workspace_root,
+                timeout_seconds,
+                output_file=output_file,
+                env=process_env,
+            )
         if process_env:
             return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file, env=process_env)
         return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
@@ -1160,6 +1181,11 @@ def _is_codex_context_full_error(message: str) -> bool:
     )
 
 
+def _is_codex_model_capacity_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in CODEX_MODEL_CAPACITY_MARKERS)
+
+
 def _is_codex_native_plan_fallback_error(message: str) -> bool:
     lowered = message.lower()
     if "timed out waiting for agenthub user input" in lowered:
@@ -1178,6 +1204,7 @@ def _is_codex_native_default_fallback_error(message: str) -> bool:
     lowered = message.lower()
     return (
         _is_codex_native_resume_fallback_error(lowered)
+        or _is_codex_model_capacity_error(lowered)
         or (
             "codex app-server thread/resume failed" in lowered
             and "failed to load configuration" in lowered
@@ -1268,6 +1295,115 @@ def _run_backend_command(
     if _looks_like_backend_auth_error(output or captured_file_output):
         raise RuntimeError(_format_backend_failure(args[0], completed.returncode, output, captured_file_output))
     return captured_file_output or output or "已送达后端 CLI，等待 transcript 同步"
+
+
+def _env_csv(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _codex_model_arg(args: list[str]) -> str:
+    try:
+        index = args.index("--model")
+    except ValueError:
+        return ""
+    if index + 1 >= len(args):
+        return ""
+    return str(args[index + 1]).strip()
+
+
+def _codex_command_insert_index(args: list[str]) -> int:
+    for command in ("exec", "login", "logout"):
+        if command in args:
+            return args.index(command)
+    return len(args)
+
+
+def _codex_without_model_args(args: list[str]) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(args):
+        if args[index] == "--model":
+            index += 2
+            continue
+        result.append(args[index])
+        index += 1
+    return result
+
+
+def _codex_with_model_args(args: list[str], model: str) -> list[str]:
+    next_args = _codex_without_model_args(args)
+    insert_at = _codex_command_insert_index(next_args)
+    return [*next_args[:insert_at], "--model", model, *next_args[insert_at:]]
+
+
+def _codex_capacity_fallback_commands(args: list[str]) -> list[list[str]]:
+    selected_model = _codex_model_arg(args)
+    configured_models = [
+        *_env_csv(CODEX_CAPACITY_FALLBACK_MODELS_ENV),
+        *_env_csv("AGENTHUB_CODEX_MODELS"),
+    ]
+    commands: list[list[str]] = []
+    seen_models: set[str] = set()
+    for model in configured_models:
+        if model == selected_model or model in seen_models:
+            continue
+        seen_models.add(model)
+        commands.append(_codex_with_model_args(args, model))
+    without_model = _codex_without_model_args(args)
+    if without_model != args and without_model not in commands:
+        commands.append(without_model)
+    return commands
+
+
+def _clear_output_file(output_file: str | None) -> None:
+    if output_file:
+        Path(output_file).write_text("", encoding="utf-8")
+
+
+def _run_backend_command_with_optional_env(
+    args: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    *,
+    output_file: str | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    if env is None:
+        return _run_backend_command(args, cwd, timeout_seconds, output_file=output_file)
+    return _run_backend_command(args, cwd, timeout_seconds, output_file=output_file, env=env)
+
+
+def _run_codex_command_with_capacity_fallback(
+    args: list[str],
+    cwd: str,
+    timeout_seconds: int,
+    *,
+    output_file: str | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    try:
+        return _run_backend_command_with_optional_env(args, cwd, timeout_seconds, output_file=output_file, env=env)
+    except RuntimeError as exc:
+        if not args or args[0] != "codex" or not _is_codex_model_capacity_error(str(exc)):
+            raise
+        first_error = str(exc)
+        last_error: RuntimeError = exc
+        for fallback_args in _codex_capacity_fallback_commands(args):
+            _clear_output_file(output_file)
+            try:
+                return _run_backend_command_with_optional_env(
+                    fallback_args,
+                    cwd,
+                    timeout_seconds,
+                    output_file=output_file,
+                    env=env,
+                )
+            except RuntimeError as fallback_exc:
+                last_error = fallback_exc
+                if not _is_codex_model_capacity_error(str(fallback_exc)):
+                    raise
+        raise RuntimeError(f"{first_error}\nAgentHub Codex capacity fallback exhausted: {last_error}") from last_error
 
 
 def _job_timeout_seconds(payload: dict[str, Any]) -> int:
@@ -1799,15 +1935,16 @@ def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], sec
         process_env = _backend_process_env(job, secret_env)
         if payload.get("dry_run"):
             return f"dry_run: {_format_command(args)}"
+        run_backend = _run_codex_command_with_capacity_fallback if backend == "codex" else _run_backend_command
         if process_env:
-            return _run_backend_command(
+            return run_backend(
                 args,
                 workspace_root,
                 timeout_seconds,
                 output_file=output_file,
                 env=process_env,
             )
-        return _run_backend_command(args, workspace_root, timeout_seconds, output_file=output_file)
+        return run_backend(args, workspace_root, timeout_seconds, output_file=output_file)
     except RuntimeError as exc:
         if backend == "codex" and _is_codex_context_full_error(str(exc)):
             if output_file:
@@ -1818,14 +1955,14 @@ def _execute_session_input_cli(job: dict[str, Any], payload: dict[str, Any], sec
                 attachment_paths=[str(attachment.path) for attachment in attachments if attachment.is_image],
             )
             if process_env:
-                return _run_backend_command(
+                return _run_codex_command_with_capacity_fallback(
                     fallback_args,
                     workspace_root,
                     timeout_seconds,
                     output_file=output_file,
                     env=process_env,
                 )
-            return _run_backend_command(
+            return _run_codex_command_with_capacity_fallback(
                 fallback_args,
                 workspace_root,
                 timeout_seconds,

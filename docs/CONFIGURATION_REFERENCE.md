@@ -93,6 +93,34 @@ Notes:
 - Linux workers need both `tmux` and `claude` installed for the bridge to be useful
 - Windows workers need both `psmux` and `claude` installed for the bridge to be useful
 
+## Codex Capacity Fallback
+
+Codex may occasionally return:
+
+```text
+Selected model is at capacity. Please try a different model.
+```
+
+When a worker sees that exact capacity error, AgentHub retries the same Codex command instead of immediately failing the job.
+
+Worker-side fallback order:
+
+1. `AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS`
+2. `AGENTHUB_CODEX_MODELS`
+3. the same command with `--model` removed, letting the local Codex CLI use its configured default
+
+Example:
+
+```env
+AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS=gpt-5.4-mini,gpt-5.2
+```
+
+Notes:
+
+- This only handles model-capacity errors. Authentication, missing CLI, invalid workspace, and other failures still fail normally.
+- The retry is bounded. If all fallback models also report capacity, the job fails with the original diagnostics.
+- Configure this on each local worker machine, because the worker is the process that runs Codex.
+
 ## Voice ASR Provider Selection
 
 AgentHub voice transcription is configurable. Set:
