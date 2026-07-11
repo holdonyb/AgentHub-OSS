@@ -18,6 +18,36 @@ from app.services import artifact_out, job_out, task_execution_out, task_out
 router = APIRouter()
 
 REWORKABLE_TASK_STATUSES = frozenset({"ready_to_review", "failed", "blocked", "rejected"})
+READ_ONLY_AUTHORITY_PRESETS = frozenset({"read_only", "review_only"})
+
+
+def _authority_controls(
+    authority_preset: str,
+    backend: str | None,
+    requested_controls: dict[str, object],
+) -> dict[str, object]:
+    controls = dict(requested_controls)
+    backend_name = str(backend or "").strip().lower()
+    read_only = authority_preset in READ_ONLY_AUTHORITY_PRESETS
+    controls["yolo"] = False
+    if backend_name == "codex":
+        controls.pop("permission_mode", None)
+        controls["sandbox_mode"] = "read-only" if read_only else "workspace-write"
+        controls["approval_mode"] = "on-request"
+    elif backend_name == "claude":
+        controls.pop("sandbox_mode", None)
+        controls.pop("approval_mode", None)
+        controls["permission_mode"] = "plan" if read_only else "default"
+    else:
+        controls.pop("sandbox_mode", None)
+        controls.pop("approval_mode", None)
+        controls.pop("permission_mode", None)
+    return controls
+
+
+def _task_metadata(task: AgentTask) -> dict[str, object]:
+    metadata = loads_json(task.metadata_json, {})
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def _task_prompt(task: AgentTask, *, review_note: str = "") -> str:
@@ -67,11 +97,46 @@ def _has_report_artifact(db: DbSession, task: AgentTask) -> bool:
 
 
 def _stored_task_controls(task: AgentTask) -> dict[str, object]:
-    metadata = loads_json(task.metadata_json, {})
-    if not isinstance(metadata, dict):
-        return {}
+    metadata = _task_metadata(task)
     controls = metadata.get("controls")
     return dict(controls) if isinstance(controls, dict) else {}
+
+
+def _task_workspace_config(
+    task: AgentTask,
+    *,
+    controls: dict[str, object],
+    attempt_number: int,
+    review_note: str,
+) -> dict[str, object]:
+    metadata = _task_metadata(task)
+    template_key = str(metadata.get("template_key") or "implement_feature")
+    authority_preset = str(metadata.get("authority_preset") or "feature")
+    raw_paths = metadata.get("relevant_paths")
+    relevant_paths = [str(path) for path in raw_paths] if isinstance(raw_paths, list) else []
+    boundary_paths = relevant_paths or ["."]
+    return {
+        "schema_version": 1,
+        "task_id": task.task_id,
+        "relative_path": f".agenthub/tasks/{task.task_id}",
+        "title": task.title,
+        "brief_markdown": task.brief_markdown,
+        "success_criteria_markdown": task.success_criteria_markdown,
+        "template_key": template_key,
+        "authority_preset": authority_preset,
+        "relevant_paths": relevant_paths,
+        "attempt_number": attempt_number,
+        "review_note": review_note,
+        "authority": {
+            "read_paths": boundary_paths,
+            "write_paths": [] if authority_preset in READ_ONLY_AUTHORITY_PRESETS else boundary_paths,
+            "runtime_controls": controls,
+            "enforcement": {
+                "runtime_controls": "mapped",
+                "command_level": "declared_only",
+            },
+        },
+    }
 
 
 def _review_state_conflict(task: AgentTask, action: str) -> HTTPException:
@@ -155,6 +220,11 @@ def _dispatch_task(
     )
     attempt_number = int(latest_attempt or 0) + 1
     now = utcnow()
+    normalized_controls = _authority_controls(
+        str(_task_metadata(task).get("authority_preset") or "feature"),
+        backend,
+        controls,
+    )
     job = Job(
         space_id=actor.space_id,
         kind="session_start",
@@ -168,7 +238,13 @@ def _dispatch_task(
                 "task_id": task.task_id,
                 "prompt": _task_prompt(task, review_note=review_note),
                 "title": task.title,
-                "controls": _normalize_controls(controls, backend=backend),
+                "controls": _normalize_controls(normalized_controls, backend=backend),
+                "task_workspace": _task_workspace_config(
+                    task,
+                    controls=_normalize_controls(normalized_controls, backend=backend),
+                    attempt_number=attempt_number,
+                    review_note=review_note,
+                ),
                 "project_name": _workspace_project_name(task.workspace_root),
                 "namespace": task.namespace or "default",
                 "start_mode": "new",
@@ -197,6 +273,8 @@ def _dispatch_task(
 
 @router.post("/api/tasks")
 def create_task(payload: TaskCreateIn, db: DbSession, actor: Actor = Depends(require_min_role("operator"))):
+    backend = payload.backend.strip().lower() if payload.backend else None
+    controls = _authority_controls(payload.authority_preset, backend, payload.controls)
     task = AgentTask(
         space_id=actor.space_id,
         title=payload.title.strip(),
@@ -204,15 +282,22 @@ def create_task(payload: TaskCreateIn, db: DbSession, actor: Actor = Depends(req
         success_criteria_markdown=payload.success_criteria_markdown.strip(),
         priority=payload.priority,
         target_worker_id=payload.target_worker_id.strip() if payload.target_worker_id else None,
-        backend=payload.backend.strip().lower() if payload.backend else None,
+        backend=backend,
         workspace_root=payload.workspace_root.strip() if payload.workspace_root else None,
         namespace=(payload.namespace or "default").strip() or "default",
         created_by=actor.actor_id,
-        metadata_json=dumps_json({"controls": payload.controls}),
+        metadata_json=dumps_json(
+            {
+                "template_key": payload.template_key,
+                "authority_preset": payload.authority_preset,
+                "relevant_paths": payload.relevant_paths,
+                "controls": controls,
+            }
+        ),
     )
     db.add(task)
     db.flush()
-    job = _dispatch_task(db, actor, task, payload.controls) if payload.submit else None
+    job = _dispatch_task(db, actor, task, controls) if payload.submit else None
     write_event(
         db,
         space_id=actor.space_id,

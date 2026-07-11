@@ -2755,6 +2755,105 @@ def test_session_start_publishes_newly_discovered_session(monkeypatch: pytest.Mo
     assert calls[0][:3] == ["codex", "-C", "E:/work/AgentHub"]
 
 
+def test_task_session_start_materializes_workspace_and_prefers_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    task_id = "tsk_0123456789abcdef0123456789abcdef"
+    task_directory = tmp_path / ".agenthub" / "tasks" / task_id
+    captured: dict[str, object] = {}
+    fixture: list[dict[str, object]] = []
+
+    monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/bin/{name}.cmd")
+    monkeypatch.setattr(executor, "resolve_codex_executable", lambda: "C:/bin/codex.cmd")
+    monkeypatch.setattr(executor, "_discover_local_sessions", lambda roots: list(fixture))
+
+    def fake_run_backend_command(
+        args: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        *,
+        output_file: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> str:
+        captured["prompt"] = args[-1]
+        captured["cwd"] = cwd
+        assert (task_directory / "task.md").exists()
+        assert (task_directory / "agenthub.task.json").exists()
+        assert (task_directory / "status.md").exists()
+        (task_directory / "report.md").write_text(
+            "# Worker report\n\nUsed the task workspace contract.",
+            encoding="utf-8",
+        )
+        fixture.append(
+            discovered_session(
+                session_id="task-session",
+                backend="codex",
+                workspace_root=str(tmp_path),
+                project_name=tmp_path.name,
+                runtime_session_ref="codex/task-session.jsonl",
+                user_text="execute task",
+                assistant_text="assistant final fallback",
+            )
+        )
+        if output_file:
+            Path(output_file).write_text("assistant final fallback", encoding="utf-8")
+        return "assistant final fallback"
+
+    monkeypatch.setattr(executor, "_run_backend_command", fake_run_backend_command)
+
+    result = execute_job(
+        {
+            "job_id": "job-task-start",
+            "kind": "session_start",
+            "backend": "codex",
+            "worker_id": "win-main",
+            "workspace_root": str(tmp_path),
+            "payload": {
+                "task_id": task_id,
+                "prompt": "execute task",
+                "controls": {
+                    "sandbox_mode": "workspace-write",
+                    "approval_mode": "on-request",
+                    "yolo": False,
+                },
+                "task_workspace": {
+                    "schema_version": 1,
+                    "task_id": task_id,
+                    "relative_path": f".agenthub/tasks/{task_id}",
+                    "title": "Worker task",
+                    "brief_markdown": "Use the task workspace.",
+                    "success_criteria_markdown": "- report.md exists",
+                    "template_key": "implement_feature",
+                    "authority_preset": "feature",
+                    "relevant_paths": ["workers/shared"],
+                    "attempt_number": 1,
+                    "review_note": "",
+                    "authority": {
+                        "read_paths": ["workers/shared"],
+                        "write_paths": ["workers/shared"],
+                        "runtime_controls": {
+                            "sandbox_mode": "workspace-write",
+                            "approval_mode": "on-request",
+                            "yolo": False,
+                        },
+                        "enforcement": {
+                            "runtime_controls": "mapped",
+                            "command_level": "declared_only",
+                        },
+                    },
+                },
+            },
+        },
+        worker_id="win-main",
+    )
+
+    assert captured["cwd"] == str(tmp_path)
+    assert ".agenthub/tasks/" in str(captured["prompt"])
+    assert "write the final delivery to report.md" in str(captured["prompt"])
+    assert result == "created_session_id=task-session\n# Worker report\n\nUsed the task workspace contract."
+
+
 def test_session_start_rejects_created_session_without_assistant_output(monkeypatch: pytest.MonkeyPatch) -> None:
     published: list[list[dict[str, object]]] = []
 

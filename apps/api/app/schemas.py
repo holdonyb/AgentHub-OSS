@@ -408,6 +408,8 @@ ArtifactKind = Literal[
     "build_output",
     "review_note",
 ]
+TaskTemplateKey = Literal["fix_bug", "implement_feature", "code_review", "release_assistant"]
+TaskAuthorityPreset = Literal["read_only", "code_fix", "feature", "review_only"]
 
 
 class TaskCreateIn(BaseModel):
@@ -419,8 +421,31 @@ class TaskCreateIn(BaseModel):
     workspace_root: str | None = None
     namespace: str = Field(default="default", max_length=120)
     priority: int = Field(default=100, ge=0, le=1000)
+    template_key: TaskTemplateKey = "implement_feature"
+    authority_preset: TaskAuthorityPreset = "feature"
+    relevant_paths: list[str] = Field(default_factory=list, max_length=80)
     controls: dict[str, Any] = Field(default_factory=dict)
     submit: bool = False
+
+    @field_validator("relevant_paths")
+    @classmethod
+    def normalize_relevant_paths(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            raw = str(value or "").strip().replace("\\", "/")
+            if not raw or "\x00" in raw or raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
+                raise ValueError("relevant_paths must contain workspace-relative paths")
+            parts = [part for part in raw.split("/") if part not in {"", "."}]
+            if any(part == ".." or ":" in part for part in parts):
+                raise ValueError("relevant_paths must stay inside the workspace")
+            path = "/".join(parts) or "."
+            if len(path) > 1024:
+                raise ValueError("relevant path is too long")
+            if path not in seen:
+                normalized.append(path)
+                seen.add(path)
+        return normalized
 
 
 class TaskReviewIn(BaseModel):

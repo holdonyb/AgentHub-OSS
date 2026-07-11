@@ -189,6 +189,34 @@ export type ArtifactKind =
   | 'build_output'
   | 'review_note';
 
+export type TaskTemplateKey = 'fix_bug' | 'implement_feature' | 'code_review' | 'release_assistant';
+export type TaskAuthorityPreset = 'read_only' | 'code_fix' | 'feature' | 'review_only';
+
+export interface TaskAuthorityBoundary {
+  read_paths: string[];
+  write_paths: string[];
+  runtime_controls: Record<string, unknown>;
+  enforcement: {
+    runtime_controls: 'mapped';
+    command_level: 'declared_only';
+  };
+}
+
+export interface TaskWorkspaceConfig {
+  schema_version: 1;
+  task_id: string;
+  relative_path: string;
+  title: string;
+  brief_markdown: string;
+  success_criteria_markdown: string;
+  template_key: TaskTemplateKey;
+  authority_preset: TaskAuthorityPreset;
+  relevant_paths: string[];
+  attempt_number: number;
+  review_note: string;
+  authority: TaskAuthorityBoundary;
+}
+
 export interface AgentTask {
   task_id: string;
   space_id: string | null;

@@ -24,6 +24,13 @@ _TASK_STATUS_BY_JOB_STATE: dict[TaskJobState, str] = {
 }
 
 
+def report_artifact_content(detail_text: str) -> str:
+    match = _CREATED_SESSION_MARKER.match(detail_text)
+    if match is None:
+        return detail_text
+    return detail_text[match.end() :].lstrip("\r\n")
+
+
 def _task_id_from_job(job: Job) -> str:
     payload = loads_json(job.payload_json, {})
     return str(payload.get("task_id") or "").strip() if isinstance(payload, dict) else ""
@@ -68,7 +75,7 @@ def _ensure_terminal_artifact(
         return
     if state == "succeeded":
         title = "交付报告"
-        content = detail_text or "任务已完成，但没有返回文本报告。"
+        content = report_artifact_content(detail_text) or "任务已完成，但没有返回文本报告。"
         created_by = "agent"
         kind = "report"
     elif state == "cancelled":

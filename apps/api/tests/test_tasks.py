@@ -89,6 +89,137 @@ def test_task_submit_creates_session_start_job_and_execution(client: TestClient)
     assert detail.json()["executions"][0]["attempt_number"] == 1
 
 
+def test_task_submit_normalizes_template_authority_and_workspace_contract(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    response = client.post(
+        "/api/tasks",
+        headers=headers,
+        json={
+            "title": "修复任务目录协议",
+            "brief_markdown": "让 worker 使用任务目录完成修复。",
+            "success_criteria_markdown": "- report.md exists",
+            "target_worker_id": worker["worker"]["worker_id"],
+            "backend": "codex",
+            "workspace_root": "E:/work/AgentHub-OSS",
+            "template_key": "fix_bug",
+            "authority_preset": "read_only",
+            "relevant_paths": ["apps\\api\\app\\routers\\tasks.py", "./apps/api/tests/test_tasks.py"],
+            "controls": {"model": "gpt-5", "yolo": True, "sandbox_mode": "danger-full-access"},
+            "submit": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    task = payload["task"]
+    expected_paths = ["apps/api/app/routers/tasks.py", "apps/api/tests/test_tasks.py"]
+    expected_controls = {
+        "model": "gpt-5",
+        "yolo": False,
+        "sandbox_mode": "read-only",
+        "approval_mode": "on-request",
+    }
+    assert task["metadata"] == {
+        "template_key": "fix_bug",
+        "authority_preset": "read_only",
+        "relevant_paths": expected_paths,
+        "controls": expected_controls,
+    }
+
+    job_payload = payload["job"]["payload"]
+    assert job_payload["controls"] == expected_controls
+    workspace = job_payload["task_workspace"]
+    assert workspace["schema_version"] == 1
+    assert workspace["task_id"] == task["task_id"]
+    assert workspace["relative_path"] == f".agenthub/tasks/{task['task_id']}"
+    assert workspace["template_key"] == "fix_bug"
+    assert workspace["authority_preset"] == "read_only"
+    assert workspace["relevant_paths"] == expected_paths
+    assert workspace["attempt_number"] == 1
+    assert workspace["review_note"] == ""
+    assert workspace["authority"] == {
+        "read_paths": expected_paths,
+        "write_paths": [],
+        "runtime_controls": expected_controls,
+        "enforcement": {
+            "runtime_controls": "mapped",
+            "command_level": "declared_only",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("authority_preset", "expected_permission"),
+    [
+        ("read_only", "plan"),
+        ("review_only", "plan"),
+        ("code_fix", "default"),
+        ("feature", "default"),
+    ],
+)
+def test_task_authority_maps_to_claude_permission_controls(
+    client: TestClient,
+    authority_preset: str,
+    expected_permission: str,
+) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+
+    response = client.post(
+        "/api/tasks",
+        headers=headers,
+        json={
+            "title": f"Claude {authority_preset}",
+            "brief_markdown": "验证 authority 到 permission control 的映射。",
+            "target_worker_id": worker["worker"]["worker_id"],
+            "backend": "claude",
+            "workspace_root": "E:/work/AgentHub-OSS",
+            "authority_preset": authority_preset,
+            "controls": {"model": "sonnet", "approval_mode": "never", "yolo": True},
+            "submit": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    controls = response.json()["job"]["payload"]["controls"]
+    assert controls == {"model": "sonnet", "yolo": False, "permission_mode": expected_permission}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("template_key", "arbitrary_shell"),
+        ("authority_preset", "full_access"),
+        ("relevant_paths", ["../outside.txt"]),
+        ("relevant_paths", ["C:\\secrets\\token.txt"]),
+        ("relevant_paths", ["/etc/passwd"]),
+    ],
+)
+def test_task_create_rejects_unknown_presets_and_unsafe_relevant_paths(
+    client: TestClient,
+    field: str,
+    value: object,
+) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    body: dict[str, object] = {
+        "title": "非法任务配置",
+        "brief_markdown": "必须在入队前拒绝。",
+    }
+    body[field] = value
+
+    response = client.post("/api/tasks", headers=headers, json=body)
+
+    assert response.status_code == 422, response.text
+
+
 def _claim_and_complete_task_job(client: TestClient, worker_token: str, worker_id: str, job_id: str, result_text: str) -> None:
     claimed = _claim_task_job(client, worker_token, worker_id)
     assert claimed["job"]["job_id"] == job_id
@@ -174,8 +305,19 @@ def test_task_request_changes_dispatches_second_attempt_with_stored_controls(cli
     assert review_payload["task"]["status"] == "queued"
     assert review_payload["job"]["kind"] == "session_start"
     assert review_payload["job"]["job_id"] != first_job_id
-    assert review_payload["job"]["payload"]["controls"] == controls
+    expected_controls = {
+        **controls,
+        "yolo": False,
+        "approval_mode": "on-request",
+    }
+    assert review_payload["job"]["payload"]["controls"] == expected_controls
     assert "请补充失败路径测试" in review_payload["job"]["payload"]["prompt"]
+    first_workspace = created["job"]["payload"]["task_workspace"]
+    second_workspace = review_payload["job"]["payload"]["task_workspace"]
+    assert first_workspace["relative_path"] == second_workspace["relative_path"]
+    assert first_workspace["attempt_number"] == 1
+    assert second_workspace["attempt_number"] == 2
+    assert second_workspace["review_note"] == "请补充失败路径测试。"
 
     second_job_id = review_payload["job"]["job_id"]
     _claim_and_complete_task_job(
@@ -676,6 +818,7 @@ def test_task_session_start_completion_links_anchored_created_session(client: Te
     detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
     assert detail["task"]["latest_session_id"] == "task-created-session"
     assert detail["executions"][0]["session_id"] == "task-created-session"
+    assert detail["artifacts"][0]["content_markdown"] == "Delivery complete."
 
 
 def test_task_session_start_ignores_non_leading_created_session_marker(client: TestClient) -> None:
