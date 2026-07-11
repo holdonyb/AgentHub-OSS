@@ -41,7 +41,7 @@ def test_fi_5_notification_webhook_failure_retries_and_does_not_block_job_comple
 
     from app.core.database import reset_database
     from app.core.config import get_settings
-    from app.main import create_app
+    from app.factory import create_app
 
     get_settings.cache_clear()
     app = create_app()

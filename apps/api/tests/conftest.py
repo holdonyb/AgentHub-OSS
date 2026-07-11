@@ -31,12 +31,15 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("AGENTHUB_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
 
     from app.core.database import reset_database
-    from app.main import create_app
+    from app.factory import create_app
 
     app = create_app()
     reset_database(app.state.db_engine)
-    with TestClient(app) as test_client:
-        yield test_client
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.state.db_engine.dispose()
 
 
 def bootstrap_owner(client: TestClient, email: str = "owner@example.com") -> dict[str, Any]:

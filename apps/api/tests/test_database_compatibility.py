@@ -187,7 +187,7 @@ def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: P
 
 
 def test_database_busy_operational_error_maps_to_503() -> None:
-    from app.main import _database_error_payload
+    from app.factory import _database_error_payload
 
     status_code, detail = _database_error_payload(
         OperationalError("SELECT 1", {}, Exception("database is locked"))
