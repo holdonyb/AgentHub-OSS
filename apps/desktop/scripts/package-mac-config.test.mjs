@@ -38,5 +38,6 @@ describe('package-mac-config', () => {
     expect(workflow).toContain('npm run desktop:package:mac');
     expect(workflow).toContain('name: agenthub-desktop-macos');
     expect(workflow).toContain('- build-macos-desktop');
+    expect(workflow).not.toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
   });
 });

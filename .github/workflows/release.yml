@@ -133,9 +133,7 @@ jobs:
       - name: Test desktop packaging
         run: npm run desktop:test
 
-      - name: Build unsigned macOS packages
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Build macOS packages
         run: npm run desktop:package:mac
 
       - name: Upload macOS desktop assets
