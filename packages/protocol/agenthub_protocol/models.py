@@ -122,6 +122,7 @@ TaskStatus = Literal[
     "accepted",
     "rejected",
     "archived",
+    "cancelled",
     "failed",
 ]
 ArtifactKind = Literal[

@@ -175,6 +175,7 @@ export type TaskStatus =
   | 'accepted'
   | 'rejected'
   | 'archived'
+  | 'cancelled'
   | 'failed';
 
 export type ArtifactKind =

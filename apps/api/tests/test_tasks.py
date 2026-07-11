@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
+
+from app.models import AgentTask, Job, Worker, utcnow
 
 from conftest import auth_headers, bootstrap_owner, create_worker, login
 
@@ -84,13 +88,8 @@ def test_task_submit_creates_session_start_job_and_execution(client: TestClient)
 
 
 def _claim_and_complete_task_job(client: TestClient, worker_token: str, worker_id: str, job_id: str, result_text: str) -> None:
-    claimed = client.post(
-        "/api/internal/jobs/claim",
-        headers={"Authorization": f"Bearer {worker_token}"},
-        json={"worker_id": worker_id},
-    )
-    assert claimed.status_code == 200, claimed.text
-    assert claimed.json()["job"]["job_id"] == job_id
+    claimed = _claim_task_job(client, worker_token, worker_id)
+    assert claimed["job"]["job_id"] == job_id
 
     completed = client.post(
         f"/api/internal/jobs/{job_id}/complete",
@@ -98,6 +97,16 @@ def _claim_and_complete_task_job(client: TestClient, worker_token: str, worker_i
         json={"worker_id": worker_id, "result_text": result_text},
     )
     assert completed.status_code == 200, completed.text
+
+
+def _claim_task_job(client: TestClient, worker_token: str, worker_id: str) -> dict[str, object]:
+    claimed = client.post(
+        "/api/internal/jobs/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+        json={"worker_id": worker_id},
+    )
+    assert claimed.status_code == 200, claimed.text
+    return claimed.json()
 
 
 def _create_submitted_task(
@@ -570,3 +579,305 @@ def test_task_job_failure_marks_task_failed_with_log_artifact(client: TestClient
     assert detail.json()["task"]["status"] == "failed"
     assert detail.json()["artifacts"][0]["kind"] == "log"
     assert "runtime crashed" in detail.json()["artifacts"][0]["content_markdown"]
+
+
+def test_task_session_start_completion_links_anchored_created_session(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Link created session",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers={"Authorization": f"Bearer {worker['worker_token']}"},
+        json={
+            "worker_id": worker_id,
+            "result_text": "created_session_id=task-created-session\nDelivery complete.",
+        },
+    )
+
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["job"]["target_session_id"] == "task-created-session"
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["latest_session_id"] == "task-created-session"
+    assert detail["executions"][0]["session_id"] == "task-created-session"
+
+
+def test_task_session_start_ignores_non_leading_created_session_marker(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Ignore embedded session marker",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers={"Authorization": f"Bearer {worker['worker_token']}"},
+        json={
+            "worker_id": worker_id,
+            "result_text": "Delivery complete.\ncreated_session_id=not-the-created-session",
+        },
+    )
+
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["job"]["target_session_id"] is None
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["latest_session_id"] is None
+    assert detail["executions"][0]["session_id"] is None
+
+
+def test_task_job_manual_cancel_projects_cancelled_once(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker["worker"]["worker_id"],
+        title="Cancel task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+
+    cancelled = client.post(f"/api/jobs/{job_id}/cancel", headers=headers)
+    duplicate = client.post(f"/api/jobs/{job_id}/cancel", headers=headers)
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["job"]["status"] == "cancelled"
+    assert duplicate.status_code == 409, duplicate.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "cancelled"
+    assert detail["executions"][0]["status"] == "cancelled"
+    logs = [artifact for artifact in detail["artifacts"] if artifact["kind"] == "log"]
+    assert len(logs) == 1
+    assert "Cancelled by" in logs[0]["content_markdown"]
+
+
+def test_stale_task_job_timeout_projects_failure_once(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Stale task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        job = db.query(Job).filter(Job.job_id == job_id).one()
+        job.claimed_at = utcnow() - timedelta(seconds=3700)
+        job.updated_at = job.claimed_at
+        db.commit()
+
+    first_recovery = client.get("/api/jobs", headers=headers)
+    second_recovery = client.get("/api/jobs", headers=headers)
+
+    assert first_recovery.status_code == 200, first_recovery.text
+    assert second_recovery.status_code == 200, second_recovery.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "failed"
+    assert detail["executions"][0]["status"] == "failed"
+    logs = [artifact for artifact in detail["artifacts"] if artifact["kind"] == "log"]
+    assert len(logs) == 1
+    assert "timed out" in logs[0]["content_markdown"]
+
+
+def test_orphaned_task_job_recovery_projects_failure_once(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    worker_headers = {"Authorization": f"Bearer {worker['worker_token']}"}
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Orphaned task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        job = db.query(Job).filter(Job.job_id == job_id).one()
+        job.claimed_at = utcnow() - timedelta(seconds=180)
+        job.updated_at = job.claimed_at
+        db.commit()
+
+    first_recovery = client.post(
+        f"/api/workers/{worker_id}/heartbeat",
+        headers=worker_headers,
+        json={"status": "online", "active_job_ids": []},
+    )
+    second_recovery = client.post(
+        f"/api/workers/{worker_id}/heartbeat",
+        headers=worker_headers,
+        json={"status": "online", "active_job_ids": []},
+    )
+
+    assert first_recovery.status_code == 200, first_recovery.text
+    assert second_recovery.status_code == 200, second_recovery.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "failed"
+    assert detail["executions"][0]["status"] == "failed"
+    logs = [artifact for artifact in detail["artifacts"] if artifact["kind"] == "log"]
+    assert len(logs) == 1
+    assert "orphaned" in logs[0]["content_markdown"]
+
+
+def test_offline_worker_task_recovery_projects_failure_once(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Offline worker task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        db_worker = db.query(Worker).filter(Worker.worker_id == worker_id).one()
+        db_worker.status = "online"
+        db_worker.last_heartbeat_at = utcnow() - timedelta(seconds=240)
+        job = db.query(Job).filter(Job.job_id == job_id).one()
+        job.claimed_at = utcnow() - timedelta(seconds=180)
+        job.updated_at = job.claimed_at
+        db.commit()
+
+    first_recovery = client.get("/api/workers", headers=headers)
+    second_recovery = client.get("/api/workers", headers=headers)
+
+    assert first_recovery.status_code == 200, first_recovery.text
+    assert second_recovery.status_code == 200, second_recovery.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "failed"
+    assert detail["executions"][0]["status"] == "failed"
+    logs = [artifact for artifact in detail["artifacts"] if artifact["kind"] == "log"]
+    assert len(logs) == 1
+    assert "heartbeat expired" in logs[0]["content_markdown"]
+
+
+def test_late_attempt_completion_does_not_overwrite_newer_task_projection(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Late first attempt",
+    )
+    task_id = created["task"]["task_id"]
+    first_job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        task = db.query(AgentTask).filter(AgentTask.task_id == task_id).one()
+        task.status = "failed"
+        task.updated_at = utcnow()
+        db.commit()
+
+    rework = client.post(
+        f"/api/tasks/{task_id}/review",
+        headers=headers,
+        json={"action": "request_changes", "note_markdown": "Run a second attempt."},
+    )
+    assert rework.status_code == 200, rework.text
+    second_job_id = rework.json()["job"]["job_id"]
+
+    completed = client.post(
+        f"/api/internal/jobs/{first_job_id}/complete",
+        headers={"Authorization": f"Bearer {worker['worker_token']}"},
+        json={
+            "worker_id": worker_id,
+            "result_text": "created_session_id=late-first-session\nLate first delivery.",
+        },
+    )
+
+    assert completed.status_code == 200, completed.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "queued"
+    assert detail["task"]["latest_job_id"] == second_job_id
+    assert detail["task"]["latest_session_id"] is None
+    executions = {execution["job_id"]: execution for execution in detail["executions"]}
+    assert executions[first_job_id]["status"] == "succeeded"
+    assert executions[first_job_id]["session_id"] == "late-first-session"
+    assert executions[second_job_id]["status"] == "queued"
+    assert [artifact["kind"] for artifact in detail["artifacts"]].count("report") == 1
+
+
+@pytest.mark.parametrize("terminal_status", ["accepted", "archived"])
+def test_late_completion_does_not_overwrite_terminal_task_state(
+    client: TestClient,
+    terminal_status: str,
+) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title=f"Protected {terminal_status} task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        task = db.query(AgentTask).filter(AgentTask.task_id == task_id).one()
+        task.status = terminal_status
+        task.latest_session_id = "reviewed-session"
+        if terminal_status == "archived":
+            task.archived_at = utcnow()
+        task.updated_at = utcnow()
+        db.commit()
+
+    completed = client.post(
+        f"/api/internal/jobs/{job_id}/complete",
+        headers={"Authorization": f"Bearer {worker['worker_token']}"},
+        json={
+            "worker_id": worker_id,
+            "result_text": "created_session_id=late-terminal-session\nLate delivery.",
+        },
+    )
+
+    assert completed.status_code == 200, completed.text
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == terminal_status
+    assert detail["task"]["latest_session_id"] == "reviewed-session"
+    assert detail["executions"][0]["status"] == "succeeded"
+    assert detail["executions"][0]["session_id"] == "late-terminal-session"
+    assert [artifact["kind"] for artifact in detail["artifacts"]].count("report") == 1
