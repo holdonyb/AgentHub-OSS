@@ -19,6 +19,10 @@
     "mobile:sync": "npm --workspace @agenthub/mobile run sync",
     "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
     "mobile:build:release": "npm --workspace @agenthub/mobile run build:release",
+    "mobile:native:start": "npm --workspace @agenthub/mobile-native run start",
+    "mobile:native:test": "npm --workspace @agenthub/mobile-native run test",
+    "mobile:native:typecheck": "npm --workspace @agenthub/mobile-native run typecheck",
+    "mobile:native:prebuild": "npm --workspace @agenthub/mobile-native run prebuild",
     "worker:cli:test": "npm --workspace agenthub-worker run test -- --run",
     "client:core:test": "npm --workspace @agenthub/client-core run test -- --run",
     "worker:version:check": "node scripts/check-worker-package-version.mjs"
@@ -26,6 +30,7 @@
   "workspaces": [
     "apps/web",
     "apps/mobile",
+    "apps/mobile-native",
     "apps/desktop",
     "packages/protocol",
     "packages/client-core",
