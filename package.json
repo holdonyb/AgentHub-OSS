@@ -3,6 +3,9 @@
   "version": "0.1.4",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "api:test": ".\\.venv\\Scripts\\python.exe -m pytest apps/api/tests -q",
     "api:dev": ".\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --app-dir apps/api --host 127.0.0.1 --port 43080",
@@ -35,5 +38,34 @@
     "packages/protocol",
     "packages/client-core",
     "packages/worker-cli"
-  ]
+  ],
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "form-data": "4.0.6",
+    "tmp": "0.2.7",
+    "vite": "6.4.3"
+  },
+  "overrides": {
+    "byted-ailab-speech-sdk@4.0.10": {
+      "lodash-es": "4.18.1",
+      "qs": "6.15.3",
+      "uuid": "11.1.1"
+    },
+    "ws@>=8.0.0 <9.0.0": "8.21.0",
+    "@vitejs/plugin-react": {
+      "@babel/core": "7.29.7"
+    },
+    "@expo/fingerprint": {
+      "brace-expansion": "5.0.7"
+    },
+    "@expo/cli": {
+      "js-yaml": "4.3.0"
+    },
+    "form-data": "4.0.6",
+    "tmp": "0.2.7",
+    "vite": "6.4.3"
+  }
 }

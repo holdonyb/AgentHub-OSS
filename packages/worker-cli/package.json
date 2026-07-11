@@ -38,6 +38,6 @@
     "test": "vitest"
   },
   "devDependencies": {
-    "vitest": "^2.1.9"
+    "vitest": "3.2.7"
   }
 }

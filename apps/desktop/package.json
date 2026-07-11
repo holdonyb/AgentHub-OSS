@@ -16,7 +16,7 @@
   "build": {
     "appId": "xin.ifix.agenthub.desktop",
     "productName": "AgentHub",
-    "electronVersion": "36.2.1",
+    "electronVersion": "39.8.5",
     "asar": true,
     "directories": {
       "output": "release"
@@ -49,9 +49,9 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
-    "electron": "^36.2.1",
-    "electron-builder": "24.13.3",
+    "electron": "39.8.5",
+    "electron-builder": "26.15.3",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "3.2.7"
   }
 }

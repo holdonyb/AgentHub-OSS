@@ -4,9 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDesktopPackagingEnv } from './package-win-config.mjs';
 import { prewarmElectronDistCache } from './electron-dist-cache.mjs';
+import { assertDesktopPackagingNodeVersion, resolveElectronBuilderCli } from './package-runtime.mjs';
+
+assertDesktopPackagingNodeVersion();
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, '..', '..', '..');
 const desktopRoot = path.resolve(scriptDir, '..');
 const command = process.execPath;
 const env = buildDesktopPackagingEnv();
@@ -27,7 +29,7 @@ await prewarmElectronDistCache({
   version: electronVersion,
 });
 
-const cli = path.join(repoRoot, 'node_modules', 'electron-builder', 'cli.js');
+const cli = resolveElectronBuilderCli();
 const result = spawnSync(
   command,
   [cli, '--win', 'portable', '--publish', 'never', '--config.electronDist=.electron-dist-cache'],

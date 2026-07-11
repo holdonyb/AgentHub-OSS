@@ -14,9 +14,8 @@
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.6.2",
     "@capacitor/local-notifications": "^7.0.6",
-    "@vitejs/plugin-react": "^4.3.4",
     "byted-ailab-speech-sdk": "^4.0.10",
-    "dompurify": "^3.2.6",
+    "dompurify": "3.4.12",
     "lucide-react": "^0.555.0",
     "marked": "^15.0.12",
     "react": "^18.3.1",
@@ -29,12 +28,14 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.27",
     "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.22",
     "happy-dom": "^20.0.10",
+    "jsdom": "26.1.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "typescript": "^5.9.3",
-    "vite": "^5.4.21",
-    "vitest": "^2.1.9"
+    "vite": "6.4.3",
+    "vitest": "3.2.7"
   }
 }

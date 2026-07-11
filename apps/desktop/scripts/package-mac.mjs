@@ -1,15 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import { hasNotarizationCredentials, macBuilderArgs } from './package-mac-config.mjs';
+import { assertDesktopPackagingNodeVersion, resolveElectronBuilderCli } from './package-runtime.mjs';
 
 if (process.platform !== 'darwin') {
   throw new Error('macOS desktop packages must be built on a macOS host');
 }
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, '..', '..', '..');
-const cli = path.join(repoRoot, 'node_modules', 'electron-builder', 'cli.js');
+assertDesktopPackagingNodeVersion();
+const cli = resolveElectronBuilderCli();
 const signed = Boolean(process.env.CSC_LINK || process.env.CSC_NAME);
 const notarized = signed && hasNotarizationCredentials(process.env);
 const result = spawnSync(process.execPath, [cli, ...macBuilderArgs({ signed, notarized })], {
