@@ -23,7 +23,7 @@ Official first-party support:
 - Web self-host
 - Android APK
 - Windows desktop
-- Windows/Linux worker bundles
+- Windows/Linux/macOS worker bundles
 
 Not first-party in this release:
 

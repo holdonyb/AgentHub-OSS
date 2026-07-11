@@ -23,7 +23,7 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 ## 它解决什么
 
 - **统一会话收件箱。** 把本机和远程机器上的 Codex、Claude、Kimi、OpenCode 会话放到同一个入口。
-- **多机器控制。** Windows 和 Linux worker 都可以接入，消息、健康检查和任务会路由到对应机器。
+- **多机器控制。** Windows、Linux 和 macOS worker 都可以接入，消息、健康检查和任务会路由到对应机器。
 - **手机和桌面都能用。** Web、Android APK、Windows 桌面端都可以接入同一个 AgentHub server；其中 Android APK 首启会先要求填写 server URL。
 - **Tailscale-first 私有模式。** 不需要把 worker 端口暴露到公网，也能从手机控制本机 agent。
 - **Public relay 公开入口。** 如果你有域名和 HTTPS 反代，也可以把 Web/App 入口放到公网，worker 仍然可以只走私网或出站连接。
@@ -33,7 +33,7 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 ## 典型使用场景
 
 - **只有一台主力电脑。** 直接在 Windows、macOS 或 Linux 上跑 AgentHub server，通过 Tailscale 地址让手机和桌面端接入；worker 可以和 server 在同一台机器上。
-- **一台云端 VM + 多台本地电脑。** VM 提供稳定 HTTPS 入口，本地 Windows / Linux worker 通过 Tailscale private mode 或 public relay 接入，适合长期在线和多机器协作。
+- **一台云端 VM + 多台本地电脑。** VM 提供稳定 HTTPS 入口，本地 Windows / Linux / macOS worker 通过 Tailscale private mode 或 public relay 接入，适合长期在线和多机器协作。
 - **手机查看和轻量控制。** Android APK 首启填写你的 server URL，之后用同一个账号查看 session、发回复、处理审批和查看状态。
 - **不想暴露 worker。** 只把 Web/API 入口暴露给 HTTPS，worker 继续通过 Tailscale 或出站连接通信，不开放 SSH、数据库或 worker 端口。
 - **给工程 agent 部署。** 把 [Deployment brief template](docs/DEPLOYMENT_BRIEF.example.json) 填好，再让 Codex / Claude Code 按 [AI deployment runbook](docs/AI_DEPLOYMENT_RUNBOOK.md) 执行。
@@ -70,14 +70,14 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 ### 装 worker：直接走 npm / npx
 
-如果你的 server 已经起来了，单独给 Windows 或 Linux 机器装 worker 时，优先走这个入口：
+如果你的 server 已经起来了，单独给 Windows、Linux 或 macOS 机器装 worker 时，优先走这个入口：
 
 ```bash
 npx agenthub-worker doctor
 npx agenthub-worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
 ```
 
-Windows 机器同样可以用 `npx agenthub-worker install`，只需要把 `--platform windows` 和 `--workspace-root E:/Work` 这类参数改成实际值。
+Windows 和 macOS 机器同样使用 `npx agenthub-worker install`。macOS 使用 `--platform macos --workspace-root "$HOME/Work"`，并以当前用户的 LaunchAgent 常驻；详见 [macOS Worker](docs/MACOS_WORKER.md)。
 
 ### 推荐方式：直接给另一个 agent 一份部署提示词
 
@@ -173,6 +173,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 | Windows desktop | 已支持 | Electron 客户端，首启配置服务器 |
 | Windows worker | 已支持 | bundle + PowerShell 安装脚本 |
 | Linux worker | 已支持 | bundle + shell/systemd 安装脚本 |
+| macOS worker | 已支持 | bundle + 每用户 LaunchAgent 安装脚本 |
 | iOS client | 欢迎社区贡献 | `CONTRIBUTING.md` 里已有可直接开工的提示词 |
 | macOS desktop | 欢迎社区贡献 | `CONTRIBUTING.md` 里已有可直接开工的提示词 |
 
@@ -188,6 +189,7 @@ sudo bash scripts/install-selfhost-linux.sh \
 - [Public website deployment](docs/WEBSITE_DEPLOYMENT.md)
 - [Branding and logo source](docs/BRANDING.md)
 - [Worker package release](docs/WORKER_PACKAGE_RELEASE.md)
+- [macOS Worker](docs/MACOS_WORKER.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security model](docs/SECURITY.md)
 - [Testing](docs/TESTING.md)

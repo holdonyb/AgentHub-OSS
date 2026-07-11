@@ -30,6 +30,12 @@ LINUX_PATHS = (
     Path("scripts/install-linux-worker.sh"),
     Path("scripts/update-linux-worker.sh"),
 )
+MACOS_PATHS = (
+    Path("workers/local-macos/agenthub_macos_worker"),
+    Path("scripts/install-macos-worker.sh"),
+    Path("scripts/uninstall-macos-worker.sh"),
+    Path("scripts/start-macos-worker.sh"),
+)
 
 
 def git_revision() -> str:
@@ -71,6 +77,8 @@ def stage_bundle(platform: str, version: str, staging_root: Path) -> tuple[Path,
         relative_paths.extend(WINDOWS_PATHS)
     elif platform == "linux":
         relative_paths.extend(LINUX_PATHS)
+    elif platform == "macos":
+        relative_paths.extend(MACOS_PATHS)
     else:
         raise ValueError(f"Unsupported platform: {platform}")
 
@@ -96,7 +104,15 @@ def write_zip(bundle_root: Path, destination: Path) -> None:
 def _tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo:
     if info.isdir():
         info.mode = 0o755
-    elif info.name.endswith(("scripts/install-linux-worker.sh", "scripts/update-linux-worker.sh")):
+    elif info.name.endswith(
+        (
+            "scripts/install-linux-worker.sh",
+            "scripts/update-linux-worker.sh",
+            "scripts/install-macos-worker.sh",
+            "scripts/uninstall-macos-worker.sh",
+            "scripts/start-macos-worker.sh",
+        )
+    ):
         info.mode = 0o755
     else:
         info.mode = 0o644
@@ -118,7 +134,12 @@ def sha256(path: Path) -> str:
 
 def build_platform_bundle(platform: str, version: str, output_root: Path) -> dict[str, str]:
     output_root.mkdir(parents=True, exist_ok=True)
-    archive_name = "agenthub-worker-windows.zip" if platform == "windows" else "agenthub-worker-linux.tar.gz"
+    archive_names = {
+        "windows": "agenthub-worker-windows.zip",
+        "linux": "agenthub-worker-linux.tar.gz",
+        "macos": "agenthub-worker-macos.tar.gz",
+    }
+    archive_name = archive_names[platform]
 
     with tempfile.TemporaryDirectory(prefix=f"agenthub-{platform}-bundle-") as temp_dir:
         staging_root = Path(temp_dir)
@@ -172,6 +193,7 @@ def main() -> None:
     bundles = [
         build_platform_bundle("windows", version, output_root),
         build_platform_bundle("linux", version, output_root),
+        build_platform_bundle("macos", version, output_root),
     ]
     build_manifest(version, output_root, bundles)
 

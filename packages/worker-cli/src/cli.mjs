@@ -6,7 +6,7 @@ import { renderDoctor } from "./doctor.mjs";
 function renderHelp() {
   return `Usage:
   agenthub-worker install --api-url URL --enrollment-token TOKEN [options]
-  agenthub-worker doctor [--platform windows|linux]
+  agenthub-worker doctor [--platform windows|linux|macos]
 
 Options:
   --worker-id VALUE
@@ -21,7 +21,8 @@ Options:
   --start-at-boot
   --start-at-logon
   --service-name VALUE
-  --platform windows|linux
+  --launch-agent-label VALUE
+  --platform windows|linux|macos
 `;
 }
 

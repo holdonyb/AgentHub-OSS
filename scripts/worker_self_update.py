@@ -19,6 +19,7 @@ from typing import Any
 ARCHIVE_NAMES = {
     "windows": "agenthub-worker-windows.zip",
     "linux": "agenthub-worker-linux.tar.gz",
+    "macos": "agenthub-worker-macos.tar.gz",
 }
 MANIFEST_NAME = "worker-bundles-manifest.json"
 VERSION_FILE = Path(".runtime/worker-bundle-version.txt")
@@ -224,8 +225,10 @@ def update_worker(platform: str, repo_root: Path, dry_run: bool = False, force: 
     bundle_url = default_bundle_url(platform, manifest_url, archive_name)
     archive_payload = read_url(bundle_url)
     expected_sha = str(bundle.get("sha256") or "").strip().lower()
+    if len(expected_sha) != 64 or any(character not in "0123456789abcdef" for character in expected_sha):
+        raise RuntimeError(f"Worker manifest is missing a valid sha256 for {platform}")
     actual_sha = sha256_bytes(archive_payload)
-    if expected_sha and expected_sha != actual_sha:
+    if expected_sha != actual_sha:
         raise RuntimeError(f"Worker bundle sha256 mismatch: expected {expected_sha}, got {actual_sha}")
 
     paths = [str(path) for path in bundle.get("paths", [])]

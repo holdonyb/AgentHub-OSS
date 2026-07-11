@@ -317,6 +317,12 @@ The Linux installer writes `.runtime/linux-worker.env`, caches the worker token,
 
 Installed Linux workers auto-update through the generated systemd unit's `ExecStartPre`. It runs `scripts/update-linux-worker.sh`, which uses the same manifest, sha256 validation, and version file behavior as Windows. Logs are written to `.runtime/agenthub-linux-worker-update.log`. Disable it with `--disable-auto-update` during install or set `AGENTHUB_WORKER_AUTO_UPDATE=false` in `.runtime/linux-worker.env`.
 
+## macOS Worker Startup
+
+macOS workers use a per-user LaunchAgent and must be installed without `sudo`. The supported `npx agenthub-worker install --platform macos` path verifies the published manifest SHA256 before extracting the bundle, requires an explicit workspace root, and installs under `~/Library/Application Support/AgentHub/workers/<worker-id>`.
+
+See [MACOS_WORKER.md](MACOS_WORKER.md) for install, logs, restart, foreground diagnostics, and uninstall commands.
+
 Session input jobs default to `AGENTHUB_DEFAULT_SESSION_JOB_TIMEOUT_SECONDS=3600`.
 The API writes that timeout into each queued session job so stale-job recovery does not requeue a still-running Codex/Claude/Kimi turn too early.
 

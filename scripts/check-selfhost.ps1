@@ -108,6 +108,7 @@ if ($ExpectWorkerBundles) {
     $checks += Assert-Status -Method GET -Path "/downloads/workers/worker-bundles-manifest.json" -Expected @(200)
     $checks += Assert-Status -Method GET -Path "/downloads/workers/agenthub-worker-windows.zip" -Expected @(200)
     $checks += Assert-Status -Method GET -Path "/downloads/workers/agenthub-worker-linux.tar.gz" -Expected @(200)
+    $checks += Assert-Status -Method GET -Path "/downloads/workers/agenthub-worker-macos.tar.gz" -Expected @(200)
 }
 
 Write-CheckLog "self-host smoke checks passed"

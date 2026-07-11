@@ -23,7 +23,7 @@ Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.
 ## What It Does
 
 - **One inbox for every agent session.** See local Codex, Claude, Kimi, and OpenCode sessions in one place.
-- **Multi-machine control.** Register Windows and Linux workers, then route session input and health jobs to the right machine.
+- **Multi-machine control.** Register Windows, Linux, and macOS workers, then route session input and health jobs to the right machine.
 - **Phone and desktop access.** Use Web, Android APK, or Windows desktop to continue work away from the terminal. The Android APK asks for your server URL on first launch before showing login.
 - **Tailscale-first private mode.** Start without opening worker ports to the public internet.
 - **HTTPS public relay.** If you have a domain and reverse proxy, expose the Web/App entry through HTTPS while workers still use private networking or outbound-only connections.
@@ -33,7 +33,7 @@ Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.
 ## Common Scenarios
 
 - **One main machine.** Run AgentHub server directly on Windows, macOS, or Linux. Point your phone and desktop client at the Tailscale URL. The worker can run on the same machine.
-- **Cloud VM plus local workers.** Put the server on a small VM with HTTPS. Connect Windows/Linux workers through Tailscale private mode or public relay for always-on access and multi-machine coordination.
+- **Cloud VM plus local workers.** Put the server on a small VM with HTTPS. Connect Windows/Linux/macOS workers through Tailscale private mode or public relay for always-on access and multi-machine coordination.
 - **Phone-based check-ins.** Install the Android APK, enter your own server URL on first launch, then use the same account to inspect sessions, reply, approve prompts, and check worker state.
 - **No exposed workers.** Expose only the Web/API entry through HTTPS. Keep worker ports, SSH, and databases private.
 - **Agent-assisted deployment.** Fill in the [Deployment brief template](docs/DEPLOYMENT_BRIEF.example.json), then let Codex / Claude Code follow the [AI deployment runbook](docs/AI_DEPLOYMENT_RUNBOOK.md).
@@ -70,14 +70,14 @@ Website install chooser:
 
 ### Install workers directly with npm / npx
 
-If your server is already running and you only need to attach a Windows or Linux machine as a worker, start here:
+If your server is already running and you only need to attach a Windows, Linux, or macOS machine as a worker, start here:
 
 ```bash
 npx agenthub-worker doctor
 npx agenthub-worker install --api-url https://agenthub.example.com --enrollment-token ahe_worker_enroll_xxx --platform linux --worker-id build-vm-01 --workspace-root /srv/work
 ```
 
-The same `npx agenthub-worker install` entrypoint works on Windows with `--platform windows` and Windows-style workspace roots.
+The same entrypoint works on Windows and macOS. On macOS use `--platform macos --workspace-root "$HOME/Work"`; the installer registers a per-user LaunchAgent. See [macOS Worker](docs/MACOS_WORKER.md).
 
 ### Recommended: deploy from an agent-friendly prompt
 
@@ -173,6 +173,7 @@ If you want a fuller chooser page before picking one of the three paths, use:
 | Windows desktop | Supported | Electron client with first-launch server setup |
 | Windows worker | Supported | Bundle + PowerShell installer |
 | Linux worker | Supported | Bundle + shell/systemd installer |
+| macOS worker | Supported | Bundle + per-user LaunchAgent installer |
 | iOS client | Community welcome | Prompt and guardrails are in `CONTRIBUTING.md` |
 | macOS desktop | Community welcome | Prompt and guardrails are in `CONTRIBUTING.md` |
 
@@ -187,6 +188,7 @@ If you want a fuller chooser page before picking one of the three paths, use:
 - [Configuration reference](docs/CONFIGURATION_REFERENCE.md)
 - [Branding and logo source](docs/BRANDING.md)
 - [Worker package release](docs/WORKER_PACKAGE_RELEASE.md)
+- [macOS Worker](docs/MACOS_WORKER.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Security model](docs/SECURITY.md)
 - [Testing](docs/TESTING.md)

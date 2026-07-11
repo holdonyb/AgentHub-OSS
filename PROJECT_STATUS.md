@@ -2,7 +2,7 @@
 
 ## Purpose
 
-AgentHub-OSS is the public self-hosted distribution of AgentHub. It packages the FastAPI control plane, Web console, Android APK build, Windows desktop build, and Windows/Linux worker bundles for users who want to manage Codex, Claude, Kimi, and similar local agent sessions across their own machines.
+AgentHub-OSS is the public self-hosted distribution of AgentHub. It packages the FastAPI control plane, Web console, Android APK build, Windows desktop build, and Windows/Linux/macOS worker bundles for users who want to manage Codex, Claude, Kimi, and similar local agent sessions across their own machines.
 
 ## Current State
 
@@ -146,6 +146,7 @@ bash scripts/check-selfhost.sh \
 - 2026-06-06: Added a public `/press/` page plus `docs/LAUNCH_COPY.md`, so the website, README, GitHub Release body, and community launch copy share one stable wording surface.
 - 2026-06-15: Merged PR `#36` to fix OSS Claude resume stability: Windows Claude now has an interactive bridge path, legacy `approval_mode=never` is translated into `bypassPermissions`, and runtime session refs under `.claude/projects/<bucket>/...jsonl` are resolved back to the correct workspace root before resume.
 - 2026-06-18: Expanded the mobile file surface into a workspace workbench with Markdown/image/audio/video preview plus safe create/upload/rename/mkdir mutations routed through worker jobs.
+- 2026-07-11: Added official macOS Worker support with a per-user LaunchAgent, durable user-local installation, explicit workspace roots, manifest SHA256 verification, bundle self-update, macOS CI plist validation, and matching npm installer routing.
 
 ## Next Step
 

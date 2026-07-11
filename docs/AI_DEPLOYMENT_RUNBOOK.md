@@ -30,7 +30,7 @@ The deployer should fill or confirm:
 - repository URL and branch
 - server host/domain/install root
 - whether the voice provider is enabled and which provider to use
-- whether Windows/Linux workers are expected
+- whether Windows/Linux/macOS workers are expected
 
 ## Validation Tool
 

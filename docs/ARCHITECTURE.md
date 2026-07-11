@@ -13,7 +13,7 @@
 - **方案 B：云端 VM Self-Host**
   - 适合固定域名、长期在线、多台机器协作
   - Linux VM 可以通过 HTTPS public relay 对外提供 Web/App 入口，也可以只放在 Tailscale private mode 里
-  - Windows / Linux worker 继续跑在各自机器上，通过 Tailscale private mode 或 public relay 接入
+  - Windows / Linux / macOS worker 继续跑在各自机器上，通过 Tailscale private mode 或 public relay 接入
 - **社区贡献期待**
   - iOS client 和 macOS desktop 当前不是 first-party 支持面
   - `CONTRIBUTING.md` 里已有平台贡献提示词和配置化约束

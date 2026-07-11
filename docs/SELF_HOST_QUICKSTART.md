@@ -117,7 +117,7 @@ Expected checks:
 - `/` returns `200`.
 - `/api/internal/jobs/claim` rejects public unauthenticated calls with `401` or `403`.
 - `/api/worker/enroll` rejects invalid enrollment with `403`.
-- `/downloads/workers/worker-bundles-manifest.json` and both worker archives return `200`.
+- `/downloads/workers/worker-bundles-manifest.json` and the Windows, Linux, and macOS worker archives return `200`.
 
 For a repeatable real-VM check, use the GitHub Actions **Self-host Smoke** workflow. It is manual only and requires `confirm=SELFHOST_SMOKE_OK`, a dedicated smoke VM/domain, and SSH secrets. The workflow runs `scripts/smoke-selfhost-vm.sh`, installs the selected branch, checks nginx/systemd/HTTPS, verifies worker bundles, and can optionally run `scripts/smoke-worker-onboarding.sh` when `AGENTHUB_SMOKE_ADMIN_TOKEN` is configured.
 

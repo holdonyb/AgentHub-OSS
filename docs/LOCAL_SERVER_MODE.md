@@ -17,7 +17,7 @@ Supported local server hosts:
 - macOS
 - Linux
 
-This document is about the server role. It is separate from the currently published first-party client matrix. The public release still ships Web, Android, Windows desktop, and Windows/Linux worker bundles.
+This document is about the server role. It is separate from the currently published first-party client matrix. The public release ships Web, Android, Windows desktop, and Windows/Linux/macOS worker bundles.
 
 ## What local server mode looks like
 

@@ -44,3 +44,46 @@ jobs:
 
       - name: Run Desktop tests
         run: npm run desktop:test
+
+  macos-worker:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.4'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          python -m pip install pytest -r workers/requirements.txt
+          npm ci
+
+      - name: Test worker CLI and macOS worker
+        run: |
+          npm --workspace agenthub-worker test -- --run
+          python -m pytest workers/local-macos/tests -q
+          bash -n scripts/install-macos-worker.sh scripts/start-macos-worker.sh scripts/uninstall-macos-worker.sh
+
+      - name: Render and validate LaunchAgent
+        run: |
+          mkdir -p "$RUNNER_TEMP/workspace"
+          bash scripts/install-macos-worker.sh \
+            --api-url https://agenthub.example.invalid \
+            --enrollment-token ahe_ci_placeholder \
+            --worker-id ci-macos \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/agenthub-worker" \
+            --workspace-root "$RUNNER_TEMP/workspace" \
+            --skip-bootstrap \
+            --skip-launchctl
+          plutil -lint "$HOME/Library/LaunchAgents/dev.myagenthub.worker.ci-macos.plist"
