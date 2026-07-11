@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 api_url=""
 enrollment_token=""
@@ -84,7 +85,7 @@ if [[ ${#workspace_roots[@]} -eq 0 ]]; then
   exit 1
 fi
 
-join_by_colon() {
+join_by_pathsep() {
   local result=""
   local item=""
   for item in "$@"; do
@@ -95,20 +96,24 @@ join_by_colon() {
   printf '%s' "$result"
 }
 
+normalize_existing_root() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    /*) ;;
+    *) echo "$label must be an absolute path: $value" >&2; exit 1 ;;
+  esac
+  if [[ ! -d "$value" ]]; then
+    echo "$label does not exist or is not a directory: $value" >&2
+    exit 1
+  fi
+  (cd -- "$value" && pwd -P)
+}
+
 write_env() {
   local key="$1"
   local value="$2"
   printf 'export %s=%q\n' "$key" "$value"
-}
-
-xml_escape() {
-  local value="$1"
-  value="${value//&/&amp;}"
-  value="${value//</&lt;}"
-  value="${value//>/&gt;}"
-  value="${value//\"/&quot;}"
-  value="${value//\'/&apos;}"
-  printf '%s' "$value"
 }
 
 copy_bundle_path() {
@@ -133,7 +138,7 @@ create_virtualenv() {
   elif command -v python >/dev/null 2>&1; then
     python -m venv "$venv_root"
   elif command -v uv >/dev/null 2>&1; then
-    uv venv "$venv_root" --python 3
+    uv venv "$venv_root" --python 3 --seed
   else
     echo "Python 3 or uv is required to install the macOS worker" >&2
     exit 1
@@ -145,6 +150,10 @@ if [[ -z "$safe_worker_id" || "$safe_worker_id" == "." || "$safe_worker_id" == "
   safe_worker_id="worker"
 fi
 install_root="${install_root:-$HOME/Library/Application Support/AgentHub/workers/$safe_worker_id}"
+case "$install_root" in
+  /*) ;;
+  *) echo "--install-root must be an absolute path: $install_root" >&2; exit 1 ;;
+esac
 launch_agent_label="${launch_agent_label:-dev.myagenthub.worker.$safe_worker_id}"
 if [[ "$launch_agent_label" == "." || "$launch_agent_label" == ".." || ! "$launch_agent_label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "Invalid --launch-agent-label: $launch_agent_label" >&2
@@ -154,10 +163,38 @@ launch_agents_dir="$HOME/Library/LaunchAgents"
 logs_dir="$HOME/Library/Logs/AgentHub"
 plist_path="$launch_agents_dir/$launch_agent_label.plist"
 stable_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$HOME/.npm-global/bin:${PATH:-}"
+launch_domain="gui/$(id -u)"
 
-resolved_source_root="$(cd "$repo_root" && pwd)"
-mkdir -p "$install_root" "$launch_agents_dir" "$logs_dir"
-resolved_repo_root="$(cd "$install_root" && pwd)"
+launch_agent_loaded() {
+  launchctl print "$launch_domain/$launch_agent_label" >/dev/null 2>&1
+}
+
+stop_launch_agent() {
+  if ! launch_agent_loaded; then
+    return 0
+  fi
+  launchctl bootout "$launch_domain/$launch_agent_label"
+  local attempt
+  for attempt in {1..50}; do
+    if ! launch_agent_loaded; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "LaunchAgent did not stop: $launch_agent_label" >&2
+  exit 1
+}
+
+normalized_workspace_roots=()
+for root in "${workspace_roots[@]}"; do
+  normalized_workspace_roots+=("$(normalize_existing_root "Workspace root" "$root")")
+done
+workspace_roots=("${normalized_workspace_roots[@]}")
+normalized_session_roots=()
+for root in "${session_roots[@]}"; do
+  normalized_session_roots+=("$(normalize_existing_root "Session root" "$root")")
+done
+session_roots=("${normalized_session_roots[@]}")
 
 bundle_paths=(
   "packages/protocol/agenthub_protocol"
@@ -169,33 +206,176 @@ bundle_paths=(
   "scripts/start-macos-worker.sh"
   "scripts/worker_self_update.py"
 )
-if [[ "$resolved_source_root" != "$resolved_repo_root" ]]; then
-  for relative_path in "${bundle_paths[@]}"; do
-    copy_bundle_path "$resolved_source_root" "$resolved_repo_root" "$relative_path"
-  done
+resolved_source_root="$(cd "$repo_root" && pwd -P)"
+install_parent="$(dirname "$install_root")"
+install_name="$(basename "$install_root")"
+mkdir -p "$install_parent" "$launch_agents_dir" "$logs_dir"
+resolved_install_parent="$(cd "$install_parent" && pwd -P)"
+resolved_repo_root="$resolved_install_parent/$install_name"
+staging_root="$(mktemp -d "$resolved_install_parent/.${install_name}.staging.XXXXXX")"
+backup_root="$(mktemp -d "$resolved_install_parent/.${install_name}.backup.XXXXXX")"
+switch_state_path="$backup_root/switch-state.json"
+install_complete="0"
+rollback_in_progress="0"
+service_was_loaded="0"
+
+cleanup_install_artifacts() {
+  rm -rf -- "$staging_root" "$backup_root"
+}
+trap cleanup_install_artifacts EXIT
+
+for relative_path in "${bundle_paths[@]}"; do
+  copy_bundle_path "$resolved_source_root" "$staging_root" "$relative_path"
+done
+
+venv_root="$staging_root/.venv"
+python_path="$venv_root/bin/python"
+create_virtualenv
+"$python_path" -m pip install -r "$staging_root/workers/requirements.txt"
+
+if [[ "$skip_launchctl" != "1" ]] && launch_agent_loaded; then
+  service_was_loaded="1"
+fi
+runtime_root="$resolved_repo_root/.runtime"
+env_path="$runtime_root/macos-worker.env"
+token_path="$runtime_root/$safe_worker_id.worker-token"
+if [[ -f "$env_path" ]]; then
+  cp -p -- "$env_path" "$backup_root/macos-worker.env"
+fi
+if [[ -f "$plist_path" ]]; then
+  cp -p -- "$plist_path" "$backup_root/launch-agent.plist"
 fi
 
-runtime_root="$resolved_repo_root/.runtime"
+rollback_install() {
+  local status="${1:-1}"
+  if [[ "$install_complete" == "1" || "$rollback_in_progress" == "1" ]]; then
+    exit "$status"
+  fi
+  rollback_in_progress="1"
+  trap - ERR
+  set +e
+  if [[ "$skip_launchctl" != "1" ]] && launch_agent_loaded; then
+    launchctl bootout "$launch_domain/$launch_agent_label" >/dev/null 2>&1
+    for attempt in {1..50}; do
+      launch_agent_loaded || break
+      sleep 0.1
+    done
+  fi
+  local restore_python=""
+  if [[ -x "$resolved_repo_root/.venv/bin/python" ]]; then
+    restore_python="$resolved_repo_root/.venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    restore_python="$(command -v python3)"
+  fi
+  if [[ -n "$restore_python" && -f "$switch_state_path" ]]; then
+    "$restore_python" - "$resolved_repo_root" "$backup_root" "$switch_state_path" <<'PY'
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+backup_root = Path(sys.argv[2])
+state = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+for item in reversed(state):
+    relative = Path(item["path"])
+    target = repo_root / relative
+    backup = backup_root / relative
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    else:
+        target.unlink(missing_ok=True)
+    if item["had_original"] and (backup.exists() or backup.is_symlink()):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(backup, target)
+PY
+  fi
+  if [[ -f "$backup_root/macos-worker.env" ]]; then
+    cp -p -- "$backup_root/macos-worker.env" "$env_path"
+  else
+    rm -f -- "$env_path"
+  fi
+  if [[ -f "$backup_root/launch-agent.plist" ]]; then
+    cp -p -- "$backup_root/launch-agent.plist" "$plist_path"
+  else
+    rm -f -- "$plist_path"
+  fi
+  if [[ "$service_was_loaded" == "1" && -f "$plist_path" ]]; then
+    launchctl bootstrap "$launch_domain" "$plist_path" >/dev/null 2>&1
+    launchctl kickstart -k "$launch_domain/$launch_agent_label" >/dev/null 2>&1
+  fi
+  exit "$status"
+}
+trap 'rollback_install $?' ERR
+
+if [[ "$skip_launchctl" != "1" ]]; then
+  stop_launch_agent
+fi
+mkdir -p "$runtime_root"
+
+"$python_path" - "$staging_root" "$resolved_repo_root" "$backup_root" "$switch_state_path" "${bundle_paths[@]}" <<'PY'
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+staging_root = Path(sys.argv[1])
+repo_root = Path(sys.argv[2])
+backup_root = Path(sys.argv[3])
+state_path = Path(sys.argv[4])
+paths = [Path(value) for value in sys.argv[5:]] + [Path(".venv")]
+state = []
+
+def remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+try:
+    for relative in paths:
+        staged = staging_root / relative
+        target = repo_root / relative
+        backup = backup_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        had_original = target.exists() or target.is_symlink()
+        if had_original:
+            os.replace(target, backup)
+        try:
+            os.replace(staged, target)
+        except BaseException:
+            if had_original and (backup.exists() or backup.is_symlink()):
+                os.replace(backup, target)
+            raise
+        state.append({"path": relative.as_posix(), "had_original": had_original})
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+except BaseException:
+    for item in reversed(state):
+        relative = Path(item["path"])
+        target = repo_root / relative
+        backup = backup_root / relative
+        remove(target)
+        if item["had_original"] and (backup.exists() or backup.is_symlink()):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(backup, target)
+    raise
+PY
+
 venv_root="$resolved_repo_root/.venv"
 python_path="$venv_root/bin/python"
 worker_path="$resolved_repo_root/workers/local-macos/agenthub_macos_worker/main.py"
 start_path="$resolved_repo_root/scripts/start-macos-worker.sh"
-env_path="$runtime_root/macos-worker.env"
-token_path="$runtime_root/$safe_worker_id.worker-token"
-mkdir -p "$runtime_root"
 chmod +x "$resolved_repo_root/scripts/"*"macos-worker.sh"
 
-if [[ ! -x "$python_path" ]]; then
-  create_virtualenv
-fi
-"$python_path" -m pip install -r "$resolved_repo_root/workers/requirements.txt"
-
-workspace_root_value="$(join_by_colon "${workspace_roots[@]}")"
-session_root_value="$(join_by_colon "${session_roots[@]}")"
+workspace_root_value="$(join_by_pathsep "${workspace_roots[@]}")"
+session_root_value="$(join_by_pathsep "${session_roots[@]}")"
+env_temp_path="$runtime_root/.macos-worker.env.$$"
 {
   write_env AGENTHUB_API_URL "$api_url"
   write_env AGENTHUB_CONNECTION_MODE "$connection_mode"
-  write_env AGENTHUB_ENROLLMENT_TOKEN "$enrollment_token"
   write_env AGENTHUB_WORKER_ID "$worker_id"
   write_env AGENTHUB_WORKER_JOB_POLL_SECONDS "$job_poll_seconds"
   write_env AGENTHUB_WORKER_MAX_CONCURRENT_JOBS "$max_concurrent_jobs"
@@ -207,7 +387,9 @@ session_root_value="$(join_by_colon "${session_roots[@]}")"
   write_env AGENTHUB_WORKER_PATH "$stable_path"
   write_env AGENTHUB_WORKSPACE_ROOTS "$workspace_root_value"
   write_env AGENTHUB_SESSION_ROOTS "$session_root_value"
-} >"$env_path"
+} >"$env_temp_path"
+chmod 600 "$env_temp_path"
+mv -f -- "$env_temp_path" "$env_path"
 chmod 600 "$env_path"
 
 if [[ "$skip_bootstrap" != "1" ]]; then
@@ -215,47 +397,45 @@ if [[ "$skip_bootstrap" != "1" ]]; then
   # shellcheck disable=SC1090
   source "$env_path"
   export PYTHONPATH="$resolved_repo_root/workers/shared:$resolved_repo_root/workers/local-macos:$resolved_repo_root/packages/protocol"
-  "$python_path" "$worker_path" --once
+  "$python_path" "$worker_path" --enrollment-token "$enrollment_token" --bootstrap-only
 fi
 
-escaped_label="$(xml_escape "$launch_agent_label")"
-escaped_root="$(xml_escape "$resolved_repo_root")"
-escaped_start="$(xml_escape "$start_path")"
-escaped_stdout="$(xml_escape "$logs_dir/$safe_worker_id.stdout.log")"
-escaped_stderr="$(xml_escape "$logs_dir/$safe_worker_id.stderr.log")"
-escaped_path="$(xml_escape "$stable_path")"
-cat >"$plist_path" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$escaped_label</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$escaped_start</string>
-    <string>--repo-root</string>
-    <string>$escaped_root</string>
-  </array>
-  <key>WorkingDirectory</key><string>$escaped_root</string>
-  <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>$escaped_path</string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>$escaped_stdout</string>
-  <key>StandardErrorPath</key><string>$escaped_stderr</string>
-</dict>
-</plist>
-EOF
+"$python_path" - "$plist_path" "$launch_agent_label" "$start_path" "$resolved_repo_root" "$stable_path" "$logs_dir/$safe_worker_id.stdout.log" "$logs_dir/$safe_worker_id.stderr.log" <<'PY'
+import os
+import plistlib
+import sys
+from pathlib import Path
+
+plist_path, label, start_path, repo_root, stable_path, stdout_path, stderr_path = sys.argv[1:]
+payload = {
+    "Label": label,
+    "ProgramArguments": [start_path, "--repo-root", repo_root],
+    "WorkingDirectory": repo_root,
+    "EnvironmentVariables": {"PATH": stable_path},
+    "RunAtLoad": True,
+    "KeepAlive": True,
+    "ThrottleInterval": 10,
+    "ProcessType": "Background",
+    "StandardOutPath": stdout_path,
+    "StandardErrorPath": stderr_path,
+}
+target = Path(plist_path)
+temporary = target.with_name(f".{target.name}.{os.getpid()}")
+with temporary.open("wb") as handle:
+    plistlib.dump(payload, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+os.chmod(temporary, 0o600)
+os.replace(temporary, target)
+PY
+chmod 600 "$plist_path"
 
 if [[ "$skip_launchctl" != "1" ]]; then
-  launch_domain="gui/$(id -u)"
-  launchctl bootout "$launch_domain" "$plist_path" >/dev/null 2>&1 || true
   launchctl bootstrap "$launch_domain" "$plist_path"
   launchctl enable "$launch_domain/$launch_agent_label"
   launchctl kickstart -k "$launch_domain/$launch_agent_label"
 fi
+
+install_complete="1"
+trap - ERR
 
 echo "Installed macOS worker root: $resolved_repo_root"
 echo "Rendered LaunchAgent: $plist_path"

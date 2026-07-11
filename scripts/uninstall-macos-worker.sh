@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 worker_id="$(hostname)"
 install_root=""
@@ -47,10 +48,34 @@ install_root="${install_root:-$HOME/Library/Application Support/AgentHub/workers
 plist_path="$HOME/Library/LaunchAgents/$launch_agent_label.plist"
 launch_domain="gui/$(id -u)"
 
-launchctl bootout "$launch_domain" "$plist_path" >/dev/null 2>&1 || true
+launch_agent_loaded() {
+  launchctl print "$launch_domain/$launch_agent_label" >/dev/null 2>&1
+}
+
+if launch_agent_loaded; then
+  launchctl bootout "$launch_domain/$launch_agent_label"
+  for attempt in {1..50}; do
+    if ! launch_agent_loaded; then
+      break
+    fi
+    if [[ "$attempt" == "50" ]]; then
+      echo "LaunchAgent is still running: $launch_agent_label" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+fi
+if launch_agent_loaded; then
+  echo "Refusing to remove files while LaunchAgent is running: $launch_agent_label" >&2
+  exit 1
+fi
 rm -f -- "$plist_path"
 
 if [[ "$purge" == "1" ]]; then
+  if launch_agent_loaded; then
+    echo "Refusing to purge a running worker: $launch_agent_label" >&2
+    exit 1
+  fi
   workers_root="$HOME/Library/Application Support/AgentHub/workers"
   mkdir -p "$workers_root"
   resolved_workers_root="$(cd "$workers_root" && pwd -P)"

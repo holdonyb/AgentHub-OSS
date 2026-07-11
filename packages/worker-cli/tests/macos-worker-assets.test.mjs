@@ -115,11 +115,27 @@ describe("macOS LaunchAgent contract", () => {
     expect(installer).toContain("Library/Logs/AgentHub");
     expect(installer).toContain("At least one --workspace-root is required");
     expect(installer).toContain("Invalid --launch-agent-label");
+    expect(installer).toContain("umask 077");
+    expect(installer).toContain("--bootstrap-only");
+    expect(installer).not.toContain("write_env AGENTHUB_ENROLLMENT_TOKEN");
+    expect(installer).toContain("plistlib");
+    expect(installer).toContain("normalize_existing_root");
+    expect(installer).toContain('uv venv "$venv_root" --python 3 --seed');
+    expect(installer).toContain("rollback_install");
+    expect(installer.indexOf('pip install -r "$staging_root/workers/requirements.txt"')).toBeLessThan(
+      installer.lastIndexOf("stop_launch_agent"),
+    );
     expect(installer).toContain("launchctl bootstrap");
     expect(installer).not.toContain("/Library/LaunchDaemons");
     expect(starter).toContain("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
     expect(starter).toContain("worker_self_update.py");
+    expect(starter).toContain("instance.lock");
+    expect(starter).toContain("unset AGENTHUB_ENROLLMENT_TOKEN");
+    expect(starter).toContain("forward_signal");
+    expect(starter).toContain('wait "$worker_pid"');
+    expect(starter).not.toMatch(/worker_self_update\.py[^\n]+\|\| true/);
     expect(uninstaller).toContain("launchctl bootout");
+    expect(uninstaller).toContain("launchctl print");
     expect(uninstaller).toContain("Invalid --launch-agent-label");
     expect(uninstaller).toContain("resolved_workers_root");
     expect(uninstaller).toContain("resolved_install_root");
@@ -127,6 +143,15 @@ describe("macOS LaunchAgent contract", () => {
     expect(workerMain).toContain('"os": "macos"');
     expect(workerMain).toContain("AGENTHUB_WORKSPACE_ROOTS");
     expect(cliRunner).toContain("install-macos-worker.sh");
+  });
+
+  it("documents a diagnostic flow that stops the LaunchAgent before --once", () => {
+    const docs = readRepoFile("docs/MACOS_WORKER.md");
+
+    expect(docs).toContain("launchctl bootout");
+    expect(docs).toContain("--once");
+    expect(docs.indexOf("launchctl bootout")).toBeLessThan(docs.indexOf("--once"));
+    expect(docs).toContain("launchctl bootstrap");
   });
 
   it("uses uv venv correctly when Linux has no Python launcher", () => {

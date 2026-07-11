@@ -85,6 +85,83 @@ def test_private_enrollment_registers_worker_inside_space(client: TestClient) ->
     assert worker["connection_mode"] == "private"
 
 
+def test_worker_enrollment_token_is_consumed_once(client: TestClient) -> None:
+    owner = bootstrap_owner(client)
+    enrollment = client.post(
+        "/api/worker-enrollments",
+        json={"label": "single use", "expires_in_hours": 2},
+        headers=auth_headers(owner),
+    ).json()
+    payload = {
+        "enrollment_token": enrollment["enrollment_token"],
+        "worker_id": "single-use-worker",
+        "machine_name": "SingleUse",
+        "os": "macos",
+        "connection_mode": "public_relay",
+        "transport_state": "polling",
+        "reachable_backends": ["codex"],
+        "workspace_roots": ["/Users/alice/Work"],
+        "capabilities": {"codex": True},
+        "worker_token": "ahw_original_worker_token",
+    }
+
+    first = client.post("/api/worker/enroll", json=payload)
+    second = client.post("/api/worker/enroll", json={**payload, "worker_id": "replay-worker"})
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 403, second.text
+    assert second.json()["detail"]["code"] == "WORKER_ENROLLMENT_INVALID"
+
+
+def test_fresh_enrollment_cannot_replace_an_existing_worker_token(client: TestClient) -> None:
+    owner = bootstrap_owner(client)
+    headers = auth_headers(owner)
+
+    def create_enrollment(label: str) -> str:
+        response = client.post(
+            "/api/worker-enrollments",
+            json={"label": label, "expires_in_hours": 2},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["enrollment_token"]
+
+    base_payload = {
+        "worker_id": "protected-worker",
+        "machine_name": "Protected",
+        "os": "macos",
+        "connection_mode": "public_relay",
+        "transport_state": "polling",
+        "reachable_backends": ["codex"],
+        "workspace_roots": ["/Users/alice/Work"],
+        "capabilities": {"codex": True},
+    }
+    original_token = "ahw_original_worker_token"
+    first = client.post(
+        "/api/worker/enroll",
+        json={**base_payload, "enrollment_token": create_enrollment("first"), "worker_token": original_token},
+    )
+    takeover = client.post(
+        "/api/worker/enroll",
+        json={**base_payload, "enrollment_token": create_enrollment("takeover"), "worker_token": "ahw_attacker"},
+    )
+    anonymous_refresh = client.post(
+        "/api/worker/enroll",
+        json={**base_payload, "enrollment_token": create_enrollment("anonymous refresh")},
+    )
+    heartbeat = client.post(
+        "/api/worker/heartbeat",
+        headers={"Authorization": f"Bearer {original_token}"},
+        json={"status": "online", "active_job_ids": []},
+    )
+
+    assert first.status_code == 200, first.text
+    assert takeover.status_code == 409, takeover.text
+    assert takeover.json()["detail"]["code"] == "WORKER_ALREADY_ENROLLED"
+    assert anonymous_refresh.status_code == 409, anonymous_refresh.text
+    assert heartbeat.status_code == 200, heartbeat.text
+
+
 def test_public_relay_worker_can_heartbeat_and_claim_jobs(client: TestClient) -> None:
     owner = bootstrap_owner(client)
     owner_headers = auth_headers(owner)

@@ -8,15 +8,44 @@ function hasCommand(command) {
   return result.status === 0;
 }
 
-export function renderDoctor(options = {}) {
+export function inspectDoctor(options = {}, probe = hasCommand) {
   const platform = normalizePlatform(options.platform);
-  const lines = [
-    `Platform: ${platform}`,
-    `PowerShell: ${hasCommand("powershell.exe") ? "available" : "missing"}`,
-    `bash: ${hasCommand("bash") ? "available" : "missing"}`,
-    `python: ${hasCommand("python") ? "available" : "missing"}`,
-    `py: ${hasCommand("py") ? "available" : "missing"}`,
-    `uv: ${hasCommand("uv") ? "available" : "missing"}`,
-  ];
-  return `${lines.join("\n")}\n`;
+  if (platform === "macos") {
+    const availability = Object.fromEntries(
+      ["bash", "python3", "uv", "tar", "launchctl"].map((command) => [command, probe(command)]),
+    );
+    return {
+      platform,
+      ok: availability.bash && availability.tar && availability.launchctl && (availability.python3 || availability.uv),
+      lines: [
+        `Platform: ${platform}`,
+        ...Object.entries(availability).map(([command, available]) => `${command}: ${available ? "available" : "missing"}`),
+      ],
+    };
+  }
+  const requirements = {
+    windows: [
+      ["PowerShell", ["powershell.exe"]],
+      ["python|py|uv", ["python", "py", "uv"]],
+    ],
+    linux: [
+      ["bash", ["bash"]],
+      ["tar", ["tar"]],
+      ["python3|python|uv", ["python3", "python", "uv"]],
+    ],
+  };
+  const checks = requirements[platform].map(([label, commands]) => ({
+    label,
+    available: commands.some((command) => probe(command)),
+  }));
+  return {
+    platform,
+    ok: checks.every((check) => check.available),
+    lines: [`Platform: ${platform}`, ...checks.map((check) => `${check.label}: ${check.available ? "available" : "missing"}`)],
+  };
+}
+
+export function renderDoctor(options = {}, probe = hasCommand) {
+  const report = inspectDoctor(options, probe);
+  return `${report.lines.join("\n")}\n`;
 }

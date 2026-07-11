@@ -606,7 +606,7 @@ interface SecretDraft {
 interface WorkerInstallDraft {
   worker_id: string;
   label: string;
-  os: 'windows' | 'linux';
+  os: 'windows' | 'linux' | 'macos';
   connection_mode: ConnectionMode;
   workspace_roots: string;
   session_roots: string;
@@ -894,7 +894,11 @@ function trimTrailingSlash(value: string) {
 }
 
 function workerBundleUrl(apiUrl: string, os: WorkerInstallDraft['os']) {
-  const archive = os === 'windows' ? 'agenthub-worker-windows.zip' : 'agenthub-worker-linux.tar.gz';
+  const archive = {
+    windows: 'agenthub-worker-windows.zip',
+    linux: 'agenthub-worker-linux.tar.gz',
+    macos: 'agenthub-worker-macos.tar.gz',
+  }[os];
   return `${trimTrailingSlash(apiUrl.trim())}/downloads/workers/${archive}`;
 }
 
@@ -926,6 +930,22 @@ function workerInstallCommands(draft: WorkerInstallDraft, enrollment: WorkerEnro
       )} -HeartbeatSeconds ${Math.max(1, Number(draft.heartbeat_interval_seconds) || 1)} ${workspaceArg}${sessionArg ? ` ${sessionArg}` : ''} ${startArg}`,
       `Remove-Item -LiteralPath $bundleDir -Recurse -Force -ErrorAction SilentlyContinue`,
       `Remove-Item -LiteralPath $bundleZip -Force -ErrorAction SilentlyContinue`,
+    ].join('\n');
+  }
+  if (draft.os === 'macos') {
+    const safeWorkerId = draft.worker_id.trim().replace(/[^A-Za-z0-9._-]/g, '_') || 'worker';
+    const bundleUrl = `${workerBundleUrl(draft.api_url, 'macos')}?v=${encodeURIComponent(enrollment.enrollment_id)}`;
+    const workspaceArgs = workspaceRoots.map((item) => `--workspace-root ${quoteSingleShell(item)}`).join(' ');
+    const sessionArgs = sessionRoots.map((item) => `--session-root ${quoteSingleShell(item)}`).join(' ');
+    return [
+      `worker_root="$HOME/Library/Application Support/AgentHub/workers/${safeWorkerId}"`,
+      `bundle_url=${quoteSingleShell(bundleUrl)}`,
+      `bundle_tar="${'${TMPDIR:-/tmp}'}/agenthub-worker-${safeWorkerId}.tar.gz"`,
+      `bundle_dir="$(mktemp -d "${'${TMPDIR:-/tmp}'}/agenthub-worker.XXXXXX")"`,
+      `curl -fsSL "$bundle_url" -o "$bundle_tar"`,
+      `tar -xzf "$bundle_tar" -C "$bundle_dir"`,
+      `bash "$bundle_dir/agenthub-worker/scripts/install-macos-worker.sh" --api-url ${quoteSingleShell(draft.api_url.trim())} --enrollment-token ${quoteSingleShell(enrollment.enrollment_token)} --worker-id ${quoteSingleShell(draft.worker_id.trim())} --connection-mode ${draft.connection_mode} --install-root "$worker_root" --max-concurrent-jobs ${Math.max(1, Number(draft.max_concurrent_jobs) || 1)} --job-poll-seconds ${Math.max(1, Number(draft.job_poll_interval_seconds) || 1)} --heartbeat-seconds ${Math.max(1, Number(draft.heartbeat_interval_seconds) || 1)}${workspaceArgs ? ` ${workspaceArgs}` : ''}${sessionArgs ? ` ${sessionArgs}` : ''}`,
+      `rm -rf "$bundle_dir" "$bundle_tar"`,
     ].join('\n');
   }
   const bundleUrl = `${workerBundleUrl(draft.api_url, 'linux')}?v=${encodeURIComponent(enrollment.enrollment_id)}`;
@@ -9948,11 +9968,16 @@ function WorkerInstallDialog({
                 onChange((current) => ({
                   ...current,
                   os: event.target.value as WorkerInstallDraft['os'],
+                  workspace_roots:
+                    event.target.value === 'macos' && ['C:/Work', '/srv/work'].includes(current.workspace_roots.trim())
+                      ? ''
+                      : current.workspace_roots,
                 }))
               }
             >
               <option value="windows">Windows</option>
               <option value="linux">Linux</option>
+              <option value="macos">macOS</option>
             </select>
           </label>
           <label>
@@ -10045,7 +10070,13 @@ function WorkerInstallDialog({
           </button>
           <button
             type="submit"
-            disabled={!canSubmit || !draft.worker_id.trim() || !draft.api_url.trim() || workerInstallBackends(draft).length === 0}
+            disabled={
+              !canSubmit
+              || !draft.worker_id.trim()
+              || !draft.api_url.trim()
+              || splitMultiPathInput(draft.workspace_roots).length === 0
+              || workerInstallBackends(draft).length === 0
+            }
           >
             生成安装命令
           </button>

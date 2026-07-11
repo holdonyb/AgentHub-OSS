@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { buildInstallPlan, defaultInstallRoot } from "../src/install.mjs";
 import { parseCliArgs } from "../src/lib/args.mjs";
 import { prepareBundle, verifyBundlePayload } from "../src/lib/bundle.mjs";
+import { inspectDoctor } from "../src/doctor.mjs";
 import { normalizePlatform } from "../src/lib/platform.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,35 @@ describe("macOS CLI options", () => {
     const parsed = parseCliArgs(["install", "--launch-agent-label", "dev.myagenthub.worker.macbook"]);
 
     expect(parsed.options.serviceName).toBe("dev.myagenthub.worker.macbook");
+  });
+});
+
+describe("doctor", () => {
+  it("checks native macOS prerequisites without reporting PowerShell", () => {
+    const available = new Set(["bash", "python3", "tar", "launchctl"]);
+    const report = inspectDoctor({ platform: "macos" }, (command) => available.has(command));
+
+    expect(report.ok).toBe(true);
+    expect(report.lines).toContain("python3: available");
+    expect(report.lines).toContain("tar: available");
+    expect(report.lines).toContain("launchctl: available");
+    expect(report.lines.join("\n")).not.toContain("PowerShell");
+  });
+
+  it("fails when a required macOS prerequisite is missing", () => {
+    const report = inspectDoctor({ platform: "macos" }, (command) => command !== "launchctl");
+
+    expect(report.ok).toBe(false);
+    expect(report.lines).toContain("launchctl: missing");
+  });
+
+  it("accepts uv as the macOS Python bootstrap fallback", () => {
+    const available = new Set(["bash", "uv", "tar", "launchctl"]);
+    const report = inspectDoctor({ platform: "macos" }, (command) => available.has(command));
+
+    expect(report.ok).toBe(true);
+    expect(report.lines).toContain("python3: missing");
+    expect(report.lines).toContain("uv: available");
   });
 });
 

@@ -1952,6 +1952,51 @@ describe('AgentHub console', () => {
     expect(installCommand.value).toContain('-HeartbeatSeconds 30');
   });
 
+  it('generates a macOS LaunchAgent worker install command', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/worker-enrollments')) {
+        return jsonResponse({
+          enrollment_id: 'wen-mac',
+          space_id: 'space-1',
+          label: 'macbook-pro-01',
+          created_at: '2026-07-11T10:00:00Z',
+          expires_at: '2026-07-12T10:00:00Z',
+          enrollment_token: 'ahe_macos_token',
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '添加 Worker' }));
+    fireEvent.change(screen.getByLabelText('Worker ID'), { target: { value: 'macbook-pro-01' } });
+    fireEvent.change(screen.getByLabelText('Worker 标签'), { target: { value: 'macbook-pro-01' } });
+    fireEvent.change(screen.getByLabelText('Worker OS'), { target: { value: 'macos' } });
+    fireEvent.change(screen.getByLabelText('Worker API URL'), { target: { value: 'https://agenthub.example.com' } });
+    fireEvent.change(screen.getByLabelText('Workspace Roots'), { target: { value: '/Users/alice/Work' } });
+    fireEvent.click(screen.getByRole('button', { name: '生成安装命令' }));
+
+    const installCommand = (await screen.findByLabelText('安装命令')) as HTMLTextAreaElement;
+    expect(installCommand.value).toContain('/downloads/workers/agenthub-worker-macos.tar.gz');
+    expect(installCommand.value).toContain('scripts/install-macos-worker.sh');
+    expect(installCommand.value).toContain('--workspace-root \'/Users/alice/Work\'');
+    expect(installCommand.value).toContain('--enrollment-token \'ahe_macos_token\'');
+  });
+
   it('shows background refresh state without moving the active session after navigation', async () => {
     let sessionFetchCount = 0;
     let resolveRefreshSessions: (() => void) | undefined;

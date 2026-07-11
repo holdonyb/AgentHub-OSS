@@ -6,7 +6,9 @@ import os
 import secrets
 import socket
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 for extra_path in (
@@ -24,6 +26,21 @@ from agenthub_worker.codex_maintenance import promote_exec_sessions_for_desktop
 from agenthub_worker.paths import default_agent_session_roots
 from agenthub_worker.runtime import WorkerRuntime, run_forever
 
+AGENT_BACKENDS = ("codex", "claude", "kimi", "opencode")
+
+
+def _normalize_existing_root(value: str | Path, *, label: str) -> Path:
+    root = Path(value).expanduser()
+    if not root.is_absolute():
+        raise SystemExit(f"{label} must be an absolute path: {value}")
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"{label} does not exist: {value}") from exc
+    if not resolved.is_dir():
+        raise SystemExit(f"{label} must be a directory: {value}")
+    return resolved
+
 
 def _dedupe_roots(values: list[Path]) -> list[Path]:
     roots: list[Path] = []
@@ -39,9 +56,13 @@ def _dedupe_roots(values: list[Path]) -> list[Path]:
 
 def _workspace_roots(values: list[str] | None) -> list[Path]:
     if values:
-        return _dedupe_roots([Path(value).expanduser() for value in values])
+        return _dedupe_roots([_normalize_existing_root(value, label="Workspace root") for value in values])
     env_value = os.getenv("AGENTHUB_WORKSPACE_ROOTS", "")
-    roots = [Path(value).expanduser() for value in env_value.split(":") if value]
+    roots = [
+        _normalize_existing_root(value, label="Workspace root")
+        for value in env_value.split(os.pathsep)
+        if value
+    ]
     if not roots:
         raise SystemExit("At least one explicit workspace root is required on macOS")
     return _dedupe_roots(roots)
@@ -49,9 +70,36 @@ def _workspace_roots(values: list[str] | None) -> list[Path]:
 
 def _session_roots() -> list[Path]:
     env_value = os.getenv("AGENTHUB_SESSION_ROOTS", "")
-    roots = [Path(value).expanduser() for value in env_value.split(":") if value]
-    roots.extend(default_agent_session_roots())
+    roots = [
+        _normalize_existing_root(value, label="Session root")
+        for value in env_value.split(os.pathsep)
+        if value
+    ]
+    roots.extend(root.resolve() for root in default_agent_session_roots() if root.is_dir())
     return _dedupe_roots(roots)
+
+
+def _reachable_backends(capabilities: dict[str, bool]) -> list[str]:
+    return [backend for backend in AGENT_BACKENDS if capabilities.get(backend) is True]
+
+
+class _MacOSClientProxy:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        filtered = dict(payload)
+        capabilities = filtered.get("capabilities")
+        if isinstance(capabilities, dict):
+            filtered["reachable_backends"] = _reachable_backends(capabilities)
+        else:
+            filtered["reachable_backends"] = [
+                backend for backend in filtered.get("reachable_backends", []) if backend in AGENT_BACKENDS
+            ]
+        return self._client.heartbeat(filtered)
 
 
 def _default_worker_token_path(worker_id: str) -> Path:
@@ -78,11 +126,22 @@ def _load_worker_token(path: Path) -> str | None:
 
 def _persist_worker_token(path: Path, token: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{token.strip()}\n", encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+        os.chmod(temporary_path, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(f"{token.strip()}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _generate_worker_token() -> str:
@@ -138,13 +197,15 @@ def main() -> None:
     parser.add_argument("--all-exec", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--bootstrap-only", action="store_true")
     args = parser.parse_args()
     if args.maintenance_command:
         raise SystemExit(_run_maintenance(args))
 
     workspace_roots = _workspace_roots(args.workspace_roots)
+    session_roots = _session_roots()
     capabilities = discover_capabilities()
-    reachable_backends = [name for name, available in capabilities.items() if available]
+    reachable_backends = _reachable_backends(capabilities)
     worker_token_path_arg = args.worker_token_path if _argv_has_flag("--worker-token-path") else None
     token_path = _worker_token_path(args.worker_id, worker_token_path_arg)
     cli_worker_token = args.worker_token if _argv_has_flag("--worker-token") else None
@@ -180,8 +241,10 @@ def main() -> None:
         _persist_worker_token(token_path, worker_token)
     if not worker_token:
         raise SystemExit("AGENTHUB_WORKER_TOKEN is required after registration or enrollment")
+    if args.bootstrap_only:
+        return
 
-    client = AgentHubClient(args.api_url, args.worker_id, worker_token, mode=args.connection_mode)
+    client = _MacOSClientProxy(AgentHubClient(args.api_url, args.worker_id, worker_token, mode=args.connection_mode))
 
     def discover_worker_sessions(search_roots: list[Path]) -> list[dict]:
         return discover_sessions(search_roots, opencode_roots=workspace_roots)
@@ -190,7 +253,7 @@ def main() -> None:
         client=client,
         worker_id=args.worker_id,
         workspace_roots=workspace_roots,
-        session_roots=_session_roots(),
+        session_roots=session_roots,
         discover_capabilities=discover_capabilities,
         discover_sessions=discover_worker_sessions,
         background_jobs=not args.once,

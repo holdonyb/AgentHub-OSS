@@ -28,7 +28,7 @@ npx agenthub-worker@latest install \
   --workspace-root "$HOME/Work"
 ```
 
-Repeat `--workspace-root` when the worker may operate on more than one code root. The installer refuses to invent a default workspace root.
+Repeat `--workspace-root` when the worker may operate on more than one code root. Workspace and optional session roots must already exist and must be absolute paths; the installer stores their physical resolved paths. The installer refuses to invent a default workspace root.
 
 The npm wrapper first downloads `worker-bundles-manifest.json`, downloads `agenthub-worker-macos.tar.gz`, and verifies the archive's required SHA256 before extraction. It then copies the bundle out of the temporary download directory into a durable per-worker root.
 
@@ -41,7 +41,7 @@ The npm wrapper first downloads `worker-bundles-manifest.json`, downloads `agent
 ~/Library/Logs/AgentHub/<worker-id>.stderr.log
 ```
 
-The LaunchAgent PATH includes `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, and `/bin`, plus common user-local binary directories. Worker configuration and the cached worker token stay under the installed worker's `.runtime` directory. The environment file is mode `0600`.
+The LaunchAgent PATH includes `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, and `/bin`, plus common user-local binary directories. Worker configuration and the cached worker token stay under the installed worker's `.runtime` directory. The environment file and token cache are written atomically with mode `0600`. The one-time enrollment token is passed only to the bootstrap process and is not retained in the environment file.
 
 ## Inspect And Restart
 
@@ -52,7 +52,9 @@ plist="$HOME/Library/LaunchAgents/$label.plist"
 launchctl print "gui/$(id -u)/$label"
 tail -f "$HOME/Library/Logs/AgentHub/macbook-pro-01.stderr.log"
 
-launchctl bootout "gui/$(id -u)" "$plist" || true
+if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)/$label"
+fi
 launchctl bootstrap "gui/$(id -u)" "$plist"
 launchctl kickstart -k "gui/$(id -u)/$label"
 ```
@@ -60,11 +62,20 @@ launchctl kickstart -k "gui/$(id -u)/$label"
 For a foreground diagnostic run:
 
 ```bash
+label='dev.myagenthub.worker.macbook-pro-01'
+plist="$HOME/Library/LaunchAgents/$label.plist"
 worker_root="$HOME/Library/Application Support/AgentHub/workers/macbook-pro-01"
+
+# Stop the managed instance first. The start script also holds a single-instance lock.
+if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+  launchctl bootout "gui/$(id -u)/$label"
+fi
 bash "$worker_root/scripts/start-macos-worker.sh" --repo-root "$worker_root" --once
+launchctl bootstrap "gui/$(id -u)" "$plist"
+launchctl kickstart -k "gui/$(id -u)/$label"
 ```
 
-The normal LaunchAgent start path checks the published manifest and applies a verified worker update before starting. Pass `--disable-auto-update` during install to opt out.
+The normal LaunchAgent start path checks the published manifest, prepares the verified bundle and dependencies in staging, then switches the published paths with rollback protection. If preparation or switching fails, the start script refuses to run a potentially mixed version. Pass `--disable-auto-update` during install to opt out.
 
 ## Uninstall
 
