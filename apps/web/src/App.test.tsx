@@ -985,12 +985,27 @@ describe('AgentHub console', () => {
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Workbench/ }));
-    expect(await screen.findByRole('heading', { name: /Task Inbox/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建任务' })).toHaveAttribute('aria-label', '新建任务');
 
     fireEvent.click(screen.getByRole('button', { name: /Session/ }));
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+  });
+
+  it('opens a Workbench task as a dedicated mobile detail view and returns to the task list', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    const workbench = await screen.findByRole('region', { name: 'Agent Workbench' });
+    expect(workbench).not.toHaveClass('mobile-task-detail-open');
+
+    fireEvent.click(screen.getByRole('button', { name: /修复登录页移动端布局/ }));
+    expect(workbench).toHaveClass('mobile-task-detail-open');
+
+    fireEvent.click(screen.getByRole('button', { name: '返回任务列表' }));
+    expect(workbench).not.toHaveClass('mobile-task-detail-open');
   });
 
   it('creates a task brief from Workbench mode and reviews it', async () => {
@@ -1030,6 +1045,9 @@ describe('AgentHub console', () => {
         expect(body.success_criteria_markdown).toBe('- 390px no overlap');
         expect(body.target_worker_id).toBe('win-main');
         expect(body.workspace_root).toBe('E:/work/AgentHub-OSS');
+        expect(body.template_key).toBe('fix_bug');
+        expect(body.authority_preset).toBe('code_fix');
+        expect(body.relevant_paths).toEqual(['apps/web/src/App.tsx', 'apps/web/src/styles.css']);
         expect(body.submit).toBe(true);
         return jsonResponse({
           task: { ...taskPayload.items[0], title: body.title },
@@ -1052,11 +1070,20 @@ describe('AgentHub console', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /New Task Brief/ }));
-    fireEvent.change(screen.getByLabelText('Task title'), { target: { value: '修复登录页移动端布局' } });
-    fireEvent.change(screen.getByLabelText('Task brief'), { target: { value: '登录页移动端按钮遮挡。' } });
-    fireEvent.change(screen.getByLabelText('Success criteria'), { target: { value: '- 390px no overlap' } });
-    fireEvent.click(screen.getByRole('button', { name: /Submit Task/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /新建任务/ }));
+    const composer = await screen.findByRole('dialog', { name: '新建任务' });
+    expect(within(composer).getByLabelText('目标节点')).toHaveValue('win-main');
+    expect(within(composer).getByLabelText('Agent')).toHaveValue('codex');
+    expect(within(composer).getByLabelText('工作区')).toHaveValue('E:/work/AgentHub-OSS');
+    fireEvent.click(within(composer).getByRole('button', { name: '修复缺陷' }));
+    fireEvent.change(within(composer).getByLabelText('权限范围'), { target: { value: 'code_fix' } });
+    fireEvent.change(within(composer).getByLabelText('任务标题'), { target: { value: '修复登录页移动端布局' } });
+    fireEvent.change(within(composer).getByLabelText('任务说明'), { target: { value: '登录页移动端按钮遮挡。' } });
+    fireEvent.change(within(composer).getByLabelText('验收标准'), { target: { value: '- 390px no overlap' } });
+    fireEvent.change(within(composer).getByLabelText('相关路径'), {
+      target: { value: 'apps/web/src/App.tsx\napps/web/src/styles.css' },
+    });
+    fireEvent.click(within(composer).getByRole('button', { name: /提交任务/ }));
 
     expect(await screen.findByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Accept/ }));

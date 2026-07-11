@@ -2,6 +2,7 @@ import {
   Activity,
   Archive,
   ArrowDown,
+  ArrowLeft,
   Bell,
   Bot,
   CalendarClock,
@@ -109,7 +110,10 @@ type VoiceInputMode = 'standard' | 'streaming';
 type VoiceInteractionMode = 'dictation' | 'assistant';
 type InviteRole = Extract<Role, 'admin' | 'operator' | 'viewer'>;
 type CapacitorBackButtonEvent = { canGoBack?: boolean };
-type TaskReviewAction = 'accept' | 'reject' | 'archive' | 'request_changes';
+type TaskReviewAction = 'accept' | 'reject' | 'archive' | 'restore' | 'request_changes';
+type TaskTemplateKey = 'fix_bug' | 'implement_feature' | 'code_review' | 'release_assistant';
+type TaskAuthorityPreset = 'read_only' | 'code_fix' | 'feature' | 'review_only';
+type TaskInboxFilter = 'all' | 'ready' | 'working' | 'blocked';
 type TaskDetail = {
   task: AgentTask;
   artifacts: AgentArtifact[];
@@ -143,6 +147,47 @@ const NOTIFICATION_DELIVERED_STORAGE_KEY = 'agenthub.notifications.delivered';
 const MOBILE_HISTORY_STATE = 'agenthub-mobile';
 const MAX_FILE_EDITOR_CHARS = 1_000_000;
 const MAX_REMEMBERED_NOTIFICATION_IDS = 500;
+const TASK_TEMPLATES: Array<{
+  key: TaskTemplateKey;
+  labelZh: string;
+  labelEn: string;
+  authority: TaskAuthorityPreset;
+  criteriaZh: string;
+  criteriaEn: string;
+}> = [
+  {
+    key: 'fix_bug',
+    labelZh: '修复缺陷',
+    labelEn: 'Fix Bug',
+    authority: 'code_fix',
+    criteriaZh: '- 复现问题并定位根因\n- 添加回归测试\n- 相关测试全部通过',
+    criteriaEn: '- Reproduce and identify the root cause\n- Add a regression test\n- Pass relevant tests',
+  },
+  {
+    key: 'implement_feature',
+    labelZh: '实现功能',
+    labelEn: 'Implement Feature',
+    authority: 'feature',
+    criteriaZh: '- 功能按说明完成\n- 覆盖关键边界\n- 构建与测试通过',
+    criteriaEn: '- Complete the described behavior\n- Cover key edge cases\n- Pass build and tests',
+  },
+  {
+    key: 'code_review',
+    labelZh: '代码审查',
+    labelEn: 'Code Review',
+    authority: 'review_only',
+    criteriaZh: '- 按严重程度列出问题\n- 提供文件与行号\n- 不修改产品代码',
+    criteriaEn: '- List findings by severity\n- Cite files and lines\n- Do not modify product code',
+  },
+  {
+    key: 'release_assistant',
+    labelZh: '发布助手',
+    labelEn: 'Release Assistant',
+    authority: 'feature',
+    criteriaZh: '- 完成发布前验证\n- 生成版本与发布说明\n- 输出可回滚方案',
+    criteriaEn: '- Complete release checks\n- Prepare version and notes\n- Provide rollback steps',
+  },
+];
 
 declare global {
   interface Window {
@@ -1002,12 +1047,12 @@ function replyAttachmentContentKey(attachment: ReplyAttachment) {
 }
 
 function statusClass(status: string) {
-  if (['needs_reply'].includes(status)) return 'status-approval';
-  if (['running', 'queued'].includes(status)) return 'status-running';
-  if (['degraded'].includes(status)) return 'status-warning';
-  if (['online', 'succeeded'].includes(status)) return 'status-success';
-  if (['ready', 'terminated', 'archived'].includes(status)) return 'status-idle';
-  if (['offline', 'failed'].includes(status)) return 'status-failed';
+  if (['needs_reply', 'needs_approval', 'ready_to_review'].includes(status)) return 'status-approval';
+  if (['running', 'queued', 'working'].includes(status)) return 'status-running';
+  if (['degraded', 'blocked'].includes(status)) return 'status-warning';
+  if (['online', 'succeeded', 'accepted'].includes(status)) return 'status-success';
+  if (['ready', 'draft', 'terminated', 'archived', 'cancelled'].includes(status)) return 'status-idle';
+  if (['offline', 'failed', 'rejected'].includes(status)) return 'status-failed';
   return 'status-idle';
 }
 
@@ -2824,90 +2869,217 @@ function WorkbenchShell({
   tasks,
   selectedTaskId,
   taskDetail,
-  onNewTask,
+  locale,
   onSelectTask,
   onReviewTask,
 }: {
   tasks: AgentTask[];
   selectedTaskId: string | null;
   taskDetail: TaskDetail | null;
-  onNewTask: () => void;
+  locale: LocaleCode;
   onSelectTask: (taskId: string) => void;
-  onReviewTask: (action: TaskReviewAction) => void;
+  onReviewTask: (action: TaskReviewAction, note?: string) => void;
 }) {
+  const [filter, setFilter] = useState<TaskInboxFilter>('all');
+  const [reviewNote, setReviewNote] = useState('');
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const selectedTask = taskDetail?.task ?? tasks.find((task) => task.task_id === selectedTaskId) ?? tasks[0] ?? null;
   const ready = tasks.filter((task) => task.status === 'ready_to_review').length;
   const blocked = tasks.filter((task) => task.status === 'blocked' || task.status === 'needs_approval').length;
   const working = tasks.filter((task) => task.status === 'working' || task.status === 'queued').length;
+  const filteredTasks = tasks.filter((task) => {
+    if (filter === 'ready') return task.status === 'ready_to_review';
+    if (filter === 'blocked') return task.status === 'blocked' || task.status === 'needs_approval';
+    if (filter === 'working') return task.status === 'working' || task.status === 'queued';
+    return true;
+  });
+  const statusLabel = (status: string) => {
+    const labels: Record<string, [string, string]> = {
+      accepted: ['已验收', 'Accepted'],
+      archived: ['已归档', 'Archived'],
+      blocked: ['已阻塞', 'Blocked'],
+      draft: ['草稿', 'Draft'],
+      failed: ['失败', 'Failed'],
+      needs_approval: ['等待审批', 'Needs approval'],
+      queued: ['排队中', 'Queued'],
+      ready_to_review: ['待验收', 'Ready to review'],
+      rejected: ['已拒绝', 'Rejected'],
+      working: ['执行中', 'Working'],
+    };
+    const label = labels[status];
+    return label ? pickLocale(locale, label[0], label[1]) : status;
+  };
+  const filters: Array<{ key: TaskInboxFilter; label: string; count: number }> = [
+    { key: 'ready', label: pickLocale(locale, '待验收', 'Review'), count: ready },
+    { key: 'blocked', label: pickLocale(locale, '已阻塞', 'Blocked'), count: blocked },
+    { key: 'working', label: pickLocale(locale, '执行中', 'Working'), count: working },
+    { key: 'all', label: pickLocale(locale, '全部任务', 'All tasks'), count: tasks.length },
+  ];
+  const submitReview = (action: TaskReviewAction) => {
+    onReviewTask(action, action === 'request_changes' ? reviewNote.trim() : '');
+    if (action === 'request_changes') setReviewNote('');
+  };
   return (
-    <section className="workbench-layout" aria-label="Agent Workbench">
+    <section className={`workbench-layout ${mobileDetailOpen ? 'mobile-task-detail-open' : ''}`} aria-label="Agent Workbench">
       <aside className="task-inbox">
-        <div className="section-heading">
-          <h1>Task Inbox</h1>
+        <div className="task-inbox-head">
+          <div>
+            <span className="task-eyebrow">Workbench</span>
+            <h1>{pickLocale(locale, '任务收件箱', 'Task Inbox')}</h1>
+          </div>
         </div>
         <div className="task-status-stack" aria-label="Task status summary">
-          <span>Ready to Review · {ready}</span>
-          <span>Blocked · {blocked}</span>
-          <span>Working · {working}</span>
-          <span>All · {tasks.length}</span>
+          {filters.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={filter === item.key ? 'selected' : ''}
+              aria-pressed={filter === item.key}
+              onClick={() => {
+                setFilter(item.key);
+                setMobileDetailOpen(false);
+              }}
+            >
+              <span>{item.label}</span>
+              <strong>{item.count}</strong>
+            </button>
+          ))}
         </div>
       </aside>
       <section className="task-list" aria-label="Tasks">
-        <button type="button" className="icon-button primary-top-action task-new-button" onClick={onNewTask}>
-          <Plus size={17} />
-          New Task Brief
-        </button>
-        {tasks.length === 0 ? <p className="empty">暂无任务</p> : null}
-        {tasks.map((task) => (
+        <div className="task-list-head">
+          <div>
+            <strong>{filters.find((item) => item.key === filter)?.label}</strong>
+            <span>{filteredTasks.length}</span>
+          </div>
+        </div>
+        {filteredTasks.length === 0 ? (
+          <div className="task-empty-state">
+            <FileText size={22} />
+            <strong>{pickLocale(locale, '这里暂时没有任务', 'No tasks here yet')}</strong>
+            <span>{pickLocale(locale, '新建任务，或切换左侧状态查看。', 'Create a task or choose another status.')}</span>
+          </div>
+        ) : null}
+        {filteredTasks.map((task) => (
           <button
             key={task.task_id}
             type="button"
             className={`task-row ${task.task_id === selectedTask?.task_id ? 'selected' : ''}`}
-            onClick={() => onSelectTask(task.task_id)}
+            onClick={() => {
+              onSelectTask(task.task_id);
+              setMobileDetailOpen(true);
+            }}
           >
-            <strong>{task.title}</strong>
-            <small>
-              {task.status} · {task.backend ?? 'agent'} · {task.workspace_root ?? 'workspace'}
-            </small>
+            <span className={`task-status-dot ${statusClass(task.status)}`} aria-hidden="true" />
+            <span className="task-row-copy">
+              <strong>{task.title}</strong>
+              <small>{task.brief_markdown || pickLocale(locale, '暂无任务说明', 'No task brief')}</small>
+              <span className="task-row-meta">
+                {backendLabel(task.backend ?? 'agent')} · {statusLabel(task.status)} · {formatRelativeTime(locale, task.updated_at)}
+              </span>
+            </span>
+            <ChevronDown size={16} className="task-row-chevron" aria-hidden="true" />
           </button>
         ))}
       </section>
       <section className="task-detail" aria-label="Task Detail">
         {selectedTask ? (
           <>
-            <p>{selectedTask.backend ?? 'Agent'} · {selectedTask.namespace}</p>
-            <h2>{selectedTask.title}</h2>
-            <span className={`state-pill ${statusClass(selectedTask.status)}`}>{selectedTask.status}</span>
-            <h3>Brief</h3>
-            <p>{selectedTask.brief_markdown}</p>
-            <h3>Artifacts</h3>
-            {taskDetail?.artifacts.length ? (
-              taskDetail.artifacts.map((artifact) => (
-                <article key={artifact.artifact_id} className="artifact-card">
-                  <strong>{artifact.title}</strong>
-                  <small>
-                    {artifact.kind} · v{artifact.version}
-                  </small>
-                  {artifact.content_markdown ? <p>{artifact.content_markdown}</p> : null}
-                </article>
-              ))
-            ) : (
-              <p className="empty">暂无交付物</p>
-            )}
-            <div className="task-review-actions" role="group" aria-label="Task review actions">
-              <button type="button" onClick={() => onReviewTask('accept')}>
-                Accept
+            <header className="task-detail-head">
+              <button
+                type="button"
+                className="task-mobile-back"
+                aria-label={pickLocale(locale, '返回任务列表', 'Back to task list')}
+                onClick={() => setMobileDetailOpen(false)}
+              >
+                <ArrowLeft size={17} />
+                {pickLocale(locale, '返回任务列表', 'Tasks')}
               </button>
-              <button type="button" onClick={() => onReviewTask('request_changes')}>
-                Request Changes
-              </button>
-              <button type="button" onClick={() => onReviewTask('archive')}>
-                Archive
-              </button>
+              <div>
+                <span className="task-eyebrow">
+                  {backendLabel(selectedTask.backend ?? 'Agent')} · {selectedTask.target_worker_id ?? pickLocale(locale, '未指定节点', 'No worker')}
+                </span>
+                <h2>{selectedTask.title}</h2>
+                <p>{selectedTask.workspace_root ?? pickLocale(locale, '未指定工作区', 'No workspace')}</p>
+              </div>
+              <span className={`state-pill ${statusClass(selectedTask.status)}`}>{statusLabel(selectedTask.status)}</span>
+            </header>
+            <section className="task-detail-section">
+              <h3>{pickLocale(locale, '任务说明', 'Brief')}</h3>
+              <div className="rich-preview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(selectedTask.brief_markdown) }} />
+            </section>
+            {selectedTask.success_criteria_markdown ? (
+              <section className="task-detail-section">
+                <h3>{pickLocale(locale, '验收标准', 'Success criteria')}</h3>
+                <div className="rich-preview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(selectedTask.success_criteria_markdown) }} />
+              </section>
+            ) : null}
+            <section className="task-detail-section">
+              <div className="task-section-heading">
+                <h3>{pickLocale(locale, '交付物', 'Artifacts')}</h3>
+                <span>{taskDetail?.artifacts.length ?? selectedTask.artifact_count}</span>
+              </div>
+              {taskDetail?.artifacts.length ? (
+                taskDetail.artifacts.map((artifact) => (
+                  <article key={artifact.artifact_id} className="artifact-card">
+                    <div className="artifact-card-head">
+                      <FileText size={16} />
+                      <strong>{artifact.title}</strong>
+                    </div>
+                    <small>{artifact.kind} · v{artifact.version}</small>
+                    {artifact.content_markdown ? (
+                      <div className="rich-preview" dangerouslySetInnerHTML={{ __html: renderMarkdownPreview(artifact.content_markdown) }} />
+                    ) : null}
+                  </article>
+                ))
+              ) : (
+                <p className="empty">{pickLocale(locale, 'Agent 完成任务后，交付物会显示在这里。', 'Artifacts will appear when the agent finishes.')}</p>
+              )}
+            </section>
+            <div className="task-review-panel">
+              {selectedTask.status === 'ready_to_review' ? (
+                <label className="task-review-note">
+                  {pickLocale(locale, '返工说明', 'Change request')}
+                  <textarea
+                    aria-label={pickLocale(locale, '返工说明', 'Change request')}
+                    placeholder={pickLocale(locale, '说明需要修改的内容…', 'Describe what needs to change…')}
+                    value={reviewNote}
+                    onChange={(event) => setReviewNote(event.target.value)}
+                  />
+                </label>
+              ) : null}
+              <div className="task-review-actions" role="group" aria-label="Task review actions">
+                {selectedTask.status === 'ready_to_review' ? (
+                  <>
+                    <button type="button" className="task-action-primary" onClick={() => submitReview('accept')}>
+                      <Check size={16} />
+                      Accept
+                    </button>
+                    <button type="button" disabled={!reviewNote.trim()} onClick={() => submitReview('request_changes')}>
+                      <RotateCcw size={16} />
+                      {pickLocale(locale, '要求修改', 'Request changes')}
+                    </button>
+                  </>
+                ) : null}
+                {selectedTask.status === 'archived' ? (
+                  <button type="button" onClick={() => submitReview('restore')}>
+                    <RotateCcw size={16} />
+                    {pickLocale(locale, '恢复任务', 'Restore')}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => submitReview('archive')}>
+                    <Archive size={16} />
+                    {pickLocale(locale, '归档', 'Archive')}
+                  </button>
+                )}
+              </div>
             </div>
           </>
         ) : (
-          <p className="empty">暂无任务</p>
+          <div className="task-detail-empty">
+            <FileText size={26} />
+            <strong>{pickLocale(locale, '选择一个任务查看详情', 'Select a task to inspect')}</strong>
+          </div>
         )}
       </section>
     </section>
@@ -2932,6 +3104,9 @@ function App() {
     target_worker_id: '',
     backend: 'codex',
     workspace_root: '',
+    template_key: 'implement_feature' as TaskTemplateKey,
+    authority_preset: 'feature' as TaskAuthorityPreset,
+    relevant_paths: '',
   });
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -3173,6 +3348,9 @@ function App() {
   const launchProvider =
     providers.find((provider) => provider.worker_id === launchDraft.worker_id && provider.backend === launchDraft.backend) ??
     providers.find((provider) => provider.backend === launchDraft.backend);
+  const taskDraftWorker = workers.find((worker) => worker.worker_id === taskDraft.target_worker_id) ?? workers[0];
+  const taskBackendOptions = taskDraftWorker?.reachable_backends ?? [];
+  const taskWorkspaceOptions = taskDraftWorker?.workspace_roots ?? [];
   const replyBlockedReason =
     selectedSession && !workerSupportsBackend(selectedWorker, selectedSession)
       ? `当前 worker 不支持 ${backendLabel(selectedSession.backend)}`
@@ -3866,10 +4044,13 @@ function App() {
     setTaskDraft({
       title: '',
       brief_markdown: '',
-      success_criteria_markdown: '',
+      success_criteria_markdown: pickLocale(locale, TASK_TEMPLATES[1].criteriaZh, TASK_TEMPLATES[1].criteriaEn),
       target_worker_id: worker?.worker_id ?? '',
       backend: worker?.reachable_backends?.[0] ?? 'codex',
       workspace_root: worker?.workspace_roots?.[0] ?? '',
+      template_key: 'implement_feature',
+      authority_preset: 'feature',
+      relevant_paths: '',
     });
     setTaskComposerOpen(true);
   }
@@ -3904,7 +4085,18 @@ function App() {
     const payload = await apiPost<{ task: AgentTask; job?: Job }>(
       '/api/tasks',
       {
-        ...taskDraft,
+        title: taskDraft.title,
+        brief_markdown: taskDraft.brief_markdown,
+        success_criteria_markdown: taskDraft.success_criteria_markdown,
+        target_worker_id: taskDraft.target_worker_id,
+        backend: taskDraft.backend,
+        workspace_root: taskDraft.workspace_root,
+        template_key: taskDraft.template_key,
+        authority_preset: taskDraft.authority_preset,
+        relevant_paths: taskDraft.relevant_paths
+          .split(/\r?\n/)
+          .map((path) => path.trim())
+          .filter(Boolean),
         namespace: 'default',
         submit: true,
       },
@@ -3919,11 +4111,11 @@ function App() {
     setTaskDetail(detail);
   }
 
-  async function handleTaskReview(action: TaskReviewAction) {
+  async function handleTaskReview(action: TaskReviewAction, note = '') {
     if (!taskDetail || !canOperate(user)) return;
     const payload = await apiPost<{ task: AgentTask }>(
       `/api/tasks/${taskDetail.task.task_id}/review`,
-      { action, note_markdown: '' },
+      { action, note_markdown: note },
       csrfToken,
     );
     setTaskDetail((current) => (current ? { ...current, task: payload.task } : current));
@@ -6277,9 +6469,15 @@ function App() {
           </button>
         </div>
         <div className="topbar-actions">
-          <button className="icon-button primary-top-action" type="button" onClick={openStartSession} disabled={!canOperate(user)}>
+          <button
+            className="icon-button primary-top-action"
+            type="button"
+            aria-label={appMode === 'workbench' ? pickLocale(locale, '新建任务', 'New task') : text.newSession}
+            onClick={appMode === 'workbench' ? openTaskComposer : openStartSession}
+            disabled={!canOperate(user)}
+          >
             <Plus size={17} />
-            <span>{text.newSession}</span>
+            <span>{appMode === 'workbench' ? pickLocale(locale, '新建任务', 'New task') : text.newSession}</span>
           </button>
           <span className="sync-chip">
             {isRefreshing ? text.syncing : text.autosync}
@@ -6379,12 +6577,12 @@ function App() {
           tasks={tasks}
           selectedTaskId={selectedTaskId}
           taskDetail={taskDetail}
-          onNewTask={openTaskComposer}
+          locale={locale}
           onSelectTask={(taskId) => {
             void openTask(taskId).catch(() => setNotice('任务详情同步失败，稍后重试'));
           }}
-          onReviewTask={(action) => {
-            void handleTaskReview(action).catch(() => setNotice('任务状态更新失败，稍后重试'));
+          onReviewTask={(action, note) => {
+            void handleTaskReview(action, note).catch(() => setNotice('任务状态更新失败，稍后重试'));
           }}
         />
       ) : (
@@ -7624,61 +7822,173 @@ function App() {
       )}
 
       {taskComposerOpen && (
-        <div className="dialog-backdrop" role="presentation">
-          <form className="launch-dialog task-composer" aria-label="New Task Brief" onSubmit={handleCreateTask}>
+        <div className="dialog-backdrop task-composer-backdrop" role="presentation">
+          <form
+            className="launch-dialog task-composer"
+            role="dialog"
+            aria-modal="true"
+            aria-label={pickLocale(locale, '新建任务', 'New task')}
+            onSubmit={handleCreateTask}
+          >
             <div className="dialog-head">
               <div>
                 <p>Workbench</p>
-                <h2>New Task Brief</h2>
+                <h2>{pickLocale(locale, '新建任务', 'New task')}</h2>
               </div>
               <button
                 type="button"
                 className="icon-button"
-                aria-label="Close task composer"
+                aria-label={pickLocale(locale, '关闭', 'Close')}
                 onClick={() => setTaskComposerOpen(false)}
               >
                 <X size={17} />
               </button>
             </div>
-            <label>
-              Task title
-              <input
-                aria-label="Task title"
-                value={taskDraft.title}
-                onChange={(event) => setTaskDraft((current) => ({ ...current, title: event.target.value }))}
-                required
-              />
-            </label>
-            <label>
-              Task brief
-              <textarea
-                aria-label="Task brief"
-                value={taskDraft.brief_markdown}
-                onChange={(event) => setTaskDraft((current) => ({ ...current, brief_markdown: event.target.value }))}
-                required
-              />
-            </label>
-            <label>
-              Success criteria
-              <textarea
-                aria-label="Success criteria"
-                value={taskDraft.success_criteria_markdown}
-                onChange={(event) =>
-                  setTaskDraft((current) => ({ ...current, success_criteria_markdown: event.target.value }))
+            <div className="task-template-picker" role="group" aria-label={pickLocale(locale, '任务模板', 'Task template')}>
+              {TASK_TEMPLATES.map((template) => (
+                <button
+                  key={template.key}
+                  type="button"
+                  className={taskDraft.template_key === template.key ? 'selected' : ''}
+                  aria-pressed={taskDraft.template_key === template.key}
+                  onClick={() =>
+                    setTaskDraft((current) => ({
+                      ...current,
+                      template_key: template.key,
+                      authority_preset: template.authority,
+                      success_criteria_markdown: pickLocale(locale, template.criteriaZh, template.criteriaEn),
+                    }))
+                  }
+                >
+                  {pickLocale(locale, template.labelZh, template.labelEn)}
+                </button>
+              ))}
+            </div>
+            <div className="task-composer-fields">
+              <label className="task-field-wide">
+                {pickLocale(locale, '任务标题', 'Task title')}
+                <input
+                  aria-label={pickLocale(locale, '任务标题', 'Task title')}
+                  value={taskDraft.title}
+                  placeholder={pickLocale(locale, '用一句话说明要完成的结果', 'Describe the outcome in one sentence')}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, title: event.target.value }))}
+                  required
+                />
+              </label>
+              <label className="task-field-wide">
+                {pickLocale(locale, '任务说明', 'Task brief')}
+                <textarea
+                  aria-label={pickLocale(locale, '任务说明', 'Task brief')}
+                  value={taskDraft.brief_markdown}
+                  placeholder={pickLocale(locale, '提供背景、范围和必要约束', 'Add context, scope, and constraints')}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, brief_markdown: event.target.value }))}
+                  required
+                />
+              </label>
+              <label className="task-field-wide">
+                {pickLocale(locale, '验收标准', 'Success criteria')}
+                <textarea
+                  aria-label={pickLocale(locale, '验收标准', 'Success criteria')}
+                  value={taskDraft.success_criteria_markdown}
+                  onChange={(event) =>
+                    setTaskDraft((current) => ({ ...current, success_criteria_markdown: event.target.value }))
+                  }
+                />
+              </label>
+              <label>
+                {pickLocale(locale, '目标节点', 'Worker')}
+                <select
+                  aria-label={pickLocale(locale, '目标节点', 'Worker')}
+                  value={taskDraft.target_worker_id}
+                  onChange={(event) => {
+                    const worker = workers.find((item) => item.worker_id === event.target.value);
+                    setTaskDraft((current) => ({
+                      ...current,
+                      target_worker_id: event.target.value,
+                      backend: worker?.reachable_backends?.[0] ?? '',
+                      workspace_root: worker?.workspace_roots?.[0] ?? '',
+                    }));
+                  }}
+                  required
+                >
+                  {workers.length === 0 ? <option value="">{pickLocale(locale, '暂无可用节点', 'No workers available')}</option> : null}
+                  {workers.map((worker) => (
+                    <option key={worker.worker_id} value={worker.worker_id}>
+                      {worker.machine_name || worker.worker_id} · {worker.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Agent
+                <select
+                  aria-label="Agent"
+                  value={taskDraft.backend}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, backend: event.target.value }))}
+                  required
+                >
+                  {taskBackendOptions.map((backend) => (
+                    <option key={backend} value={backend}>{backendLabel(backend)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {pickLocale(locale, '工作区', 'Workspace')}
+                <select
+                  aria-label={pickLocale(locale, '工作区', 'Workspace')}
+                  value={taskDraft.workspace_root}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, workspace_root: event.target.value }))}
+                  required
+                >
+                  {taskWorkspaceOptions.map((workspace) => (
+                    <option key={workspace} value={workspace}>{workspace}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {pickLocale(locale, '权限范围', 'Authority')}
+                <select
+                  aria-label={pickLocale(locale, '权限范围', 'Authority')}
+                  value={taskDraft.authority_preset}
+                  onChange={(event) =>
+                    setTaskDraft((current) => ({ ...current, authority_preset: event.target.value as TaskAuthorityPreset }))
+                  }
+                >
+                  <option value="read_only">{pickLocale(locale, '只读分析', 'Read only')}</option>
+                  <option value="code_fix">{pickLocale(locale, '修复代码', 'Code fix')}</option>
+                  <option value="feature">{pickLocale(locale, '实现功能', 'Feature work')}</option>
+                  <option value="review_only">{pickLocale(locale, '仅审查', 'Review only')}</option>
+                </select>
+              </label>
+              <label className="task-field-wide">
+                {pickLocale(locale, '相关路径', 'Relevant paths')}
+                <textarea
+                  className="task-paths-field"
+                  aria-label={pickLocale(locale, '相关路径', 'Relevant paths')}
+                  value={taskDraft.relevant_paths}
+                  placeholder={pickLocale(locale, '每行一个文件或目录，可留空', 'One file or directory per line, optional')}
+                  onChange={(event) => setTaskDraft((current) => ({ ...current, relevant_paths: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="task-composer-actions">
+              <button type="button" className="secondary-action" onClick={() => setTaskComposerOpen(false)}>
+                {pickLocale(locale, '取消', 'Cancel')}
+              </button>
+              <button
+                type="submit"
+                className="primary-top-action"
+                disabled={
+                  !taskDraft.title.trim() ||
+                  !taskDraft.brief_markdown.trim() ||
+                  !taskDraft.target_worker_id ||
+                  !taskDraft.backend ||
+                  !taskDraft.workspace_root
                 }
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={
-                !taskDraft.title.trim() ||
-                !taskDraft.brief_markdown.trim() ||
-                !taskDraft.target_worker_id ||
-                !taskDraft.workspace_root
-              }
-            >
-              Submit Task
-            </button>
+              >
+                {pickLocale(locale, '提交任务', 'Submit task')}
+              </button>
+            </div>
           </form>
         </div>
       )}

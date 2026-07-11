@@ -83,6 +83,19 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark \.timeline-tabs button,\s*\n\.app-shell\.theme-dark \.native-icon-button,\s*\n\.app-shell\.theme-dark \.secondary-action,\s*\n\.app-shell\.theme-dark \.message-action-button/s);
   });
 
+  it('keeps Workbench and its task composer on the shared tonal theme', () => {
+    expect(styles).toMatch(/\.workbench-layout\s*{[^}]*height:\s*calc\(100dvh - 60px\)[^}]*overflow:\s*hidden/s);
+    expect(styles).toMatch(/\.task-composer\s*{[^}]*background:\s*var\(--ah-surface\)[^}]*color:\s*var\(--ah-text\)/s);
+    expect(styles).toMatch(/\.task-composer-fields\s*{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+    expect(styles).toMatch(/\.task-composer input,\s*\n\.task-composer select,\s*\n\.task-composer textarea\s*{[^}]*background:\s*var\(--ah-surface-soft\)[^}]*color:\s*var\(--ah-text\)/s);
+    expect(styles).toMatch(/\.app-shell\.theme-dark \.task-composer\s*{[^}]*box-shadow:\s*0 28px 80px rgba\(0,\s*0,\s*0,\s*0\.46\)/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)\s*{[\s\S]*?\.task-composer\s*{[^}]*width:\s*100%[^}]*max-height:\s*calc\(100dvh/s);
+    expect(styles).toMatch(/\.artifact-card-head\s*{[^}]*display:\s*flex/s);
+    expect(styles).not.toMatch(/\.artifact-card > div\s*{[^}]*display:\s*flex/s);
+    expect(styles).toMatch(/\.task-composer \.dialog-head \.icon-button\s*{[^}]*background:\s*var\(--ah-surface-soft\)[^}]*color:\s*var\(--ah-text\)/s);
+    expect(styles).toMatch(/\.task-composer-actions button\s*{[^}]*min-height:\s*38px[^}]*padding:\s*0 14px/s);
+  });
+
   it('keeps desktop dark chrome from mixing in light topbar and filter controls', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*color-scheme:\s*dark/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar\s*{[^}]*background:\s*rgba\(15,\s*23,\s*34,\s*0\.96\)[^}]*border-bottom-color:\s*rgba\(91,\s*141,\s*184,\s*0\.18\)/s);
