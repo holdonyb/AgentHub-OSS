@@ -19,6 +19,7 @@ router = APIRouter()
 
 REWORKABLE_TASK_STATUSES = frozenset({"ready_to_review", "failed", "blocked", "rejected"})
 READ_ONLY_AUTHORITY_PRESETS = frozenset({"read_only", "review_only"})
+ACTIVE_TASK_STATUSES = frozenset({"queued", "working"})
 
 
 def _authority_controls(
@@ -373,6 +374,8 @@ def review_task(
     if payload.action == "request_changes" and task.status not in REWORKABLE_TASK_STATUSES:
         raise _review_state_conflict(task, payload.action)
     if payload.action == "restore" and task.archived_at is None and task.status != "archived":
+        raise _review_state_conflict(task, payload.action)
+    if payload.action == "archive" and task.status in ACTIVE_TASK_STATUSES:
         raise _review_state_conflict(task, payload.action)
     if payload.action == "request_changes" and not note:
         raise HTTPException(

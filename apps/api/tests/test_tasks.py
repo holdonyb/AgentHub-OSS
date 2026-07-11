@@ -600,6 +600,36 @@ def test_task_archive_is_idempotent_and_restore_uses_report_history(client: Test
     )
 
 
+def test_task_archive_rejects_active_execution(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    created = client.post(
+        "/api/tasks",
+        headers=headers,
+        json={
+            "title": "仍在执行的任务",
+            "brief_markdown": "活跃任务不能在后台继续运行时被隐藏。",
+            "target_worker_id": worker["worker"]["worker_id"],
+            "backend": "codex",
+            "workspace_root": "E:/work/AgentHub-OSS",
+            "submit": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.post(
+        f"/api/tasks/{created.json()['task']['task_id']}/review",
+        headers=headers,
+        json={"action": "archive"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "TASK_REVIEW_STATE_INVALID"
+    assert response.json()["detail"]["status"] == "queued"
+
+
 def test_task_rework_preserves_rbac_and_space_isolation(client: TestClient) -> None:
     from app.models import Space, SpaceMembership, User
 
