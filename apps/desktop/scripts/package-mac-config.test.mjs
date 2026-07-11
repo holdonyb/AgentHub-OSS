@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { macArtifactName, macBuilderArgs } from './package-mac-config.mjs';
+import { hasNotarizationCredentials, macArtifactName, macBuilderArgs } from './package-mac-config.mjs';
 
 describe('package-mac-config', () => {
   it('builds unsigned dmg and zip artifacts for both supported architectures', () => {
@@ -13,12 +13,28 @@ describe('package-mac-config', () => {
       '--publish',
       'never',
       '--config.mac.identity=null',
+      '--config.mac.hardenedRuntime=false',
+      '--config.mac.notarize=false',
     ]);
     expect(macArtifactName('0.1.4', 'arm64', 'dmg')).toBe('AgentHub-0.1.4-macos-arm64.dmg');
   });
 
   it('does not disable signing when Apple credentials are supplied', () => {
-    expect(macBuilderArgs({ signed: true })).not.toContain('--config.mac.identity=null');
+    expect(macBuilderArgs({ signed: true, notarized: false })).not.toContain('--config.mac.identity=null');
+    expect(macBuilderArgs({ signed: true, notarized: false })).toContain('--config.mac.notarize=false');
+  });
+
+  it('enables notarization only with a signed build and complete Apple credentials', () => {
+    expect(
+      hasNotarizationCredentials({
+        APPLE_ID: 'release@example.com',
+        APPLE_APP_SPECIFIC_PASSWORD: 'app-password',
+        APPLE_TEAM_ID: 'TEAM123456',
+      }),
+    ).toBe(true);
+    expect(hasNotarizationCredentials({ APPLE_ID: 'release@example.com' })).toBe(false);
+    expect(macBuilderArgs({ signed: true, notarized: true })).toContain('--config.mac.notarize=true');
+    expect(() => macBuilderArgs({ signed: false, notarized: true })).toThrow(/signed build/i);
   });
 
   it('declares macOS packaging metadata and scripts', () => {
