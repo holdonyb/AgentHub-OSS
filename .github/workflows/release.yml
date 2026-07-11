@@ -92,6 +92,9 @@ jobs:
 
   build-windows-desktop:
     runs-on: windows-latest
+    env:
+      CSC_LINK: ${{ secrets.AGENTHUB_WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_WINDOWS_CSC_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

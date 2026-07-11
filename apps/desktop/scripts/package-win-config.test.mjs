@@ -46,4 +46,11 @@ describe('package-win-config', () => {
     expect(packageJson.build.files).toContain('assets/icon.ico');
     expect(packageJson.build.win.icon).toBe('assets/icon.ico');
   });
+
+  it('passes optional Windows signing credentials to the release runner', () => {
+    const workflow = readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8');
+
+    expect(workflow).toContain('CSC_LINK: ${{ secrets.AGENTHUB_WINDOWS_CSC_LINK }}');
+    expect(workflow).toContain('CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_WINDOWS_CSC_KEY_PASSWORD }}');
+  });
 });
