@@ -787,6 +787,45 @@ def test_offline_worker_task_recovery_projects_failure_once(client: TestClient) 
     assert "heartbeat expired" in logs[0]["content_markdown"]
 
 
+def test_offline_and_stale_task_recovery_projects_failure_once(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    headers = auth_headers(owner_login)
+    worker_id = worker["worker"]["worker_id"]
+    created = _create_submitted_task(
+        client,
+        headers=headers,
+        worker_id=worker_id,
+        title="Offline and stale task",
+    )
+    task_id = created["task"]["task_id"]
+    job_id = created["job"]["job_id"]
+    _claim_task_job(client, worker["worker_token"], worker_id)
+    with client.app.state.SessionLocal() as db:
+        db_worker = db.query(Worker).filter(Worker.worker_id == worker_id).one()
+        db_worker.status = "online"
+        db_worker.last_heartbeat_at = utcnow() - timedelta(seconds=240)
+        job = db.query(Job).filter(Job.job_id == job_id).one()
+        job.claimed_at = utcnow() - timedelta(seconds=3700)
+        job.updated_at = job.claimed_at
+        db.commit()
+
+    first_recovery = client.get("/api/jobs", headers=headers)
+    second_recovery = client.get("/api/jobs", headers=headers)
+
+    assert first_recovery.status_code == 200, first_recovery.text
+    assert second_recovery.status_code == 200, second_recovery.text
+    recovered_job = next(item for item in first_recovery.json()["items"] if item["job_id"] == job_id)
+    assert recovered_job["status"] == "failed"
+    detail = client.get(f"/api/tasks/{task_id}", headers=headers).json()
+    assert detail["task"]["status"] == "failed"
+    assert detail["executions"][0]["status"] == "failed"
+    logs = [artifact for artifact in detail["artifacts"] if artifact["kind"] == "log"]
+    assert len(logs) == 1
+    assert "heartbeat expired" in logs[0]["content_markdown"]
+
+
 def test_late_attempt_completion_does_not_overwrite_newer_task_projection(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

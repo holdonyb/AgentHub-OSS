@@ -291,6 +291,9 @@ def recover_disconnected_workers_for_space(db: Session, space_id: str | None) ->
 
 def recover_stale_running_jobs_for_space(db: Session, space_id: str | None) -> int:
     recovered = recover_disconnected_workers_for_space(db, space_id)
+    if recovered:
+        # SessionLocal disables autoflush, so persist offline recovery before the stale-job query.
+        db.flush()
     worker_ids = [
         row[0]
         for row in db.query(Worker.worker_id)
