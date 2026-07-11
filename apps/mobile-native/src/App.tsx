@@ -74,6 +74,16 @@ export default function App() {
     }
   }
 
+  function handleRequestError(error: unknown) {
+    if (!(error instanceof AgentHubApiError) || error.status !== 401) return;
+    setRuntime((current) => current.config ? {
+      route: 'login',
+      config: current.config,
+      auth: null,
+      error: '登录已过期，请重新登录',
+    } : current);
+  }
+
   async function handleLogout() {
     if (!api || !runtime.config || !runtime.auth) return;
     setBusy(true);
@@ -81,7 +91,11 @@ export default function App() {
       await api.logout(runtime.auth.csrf_token);
       setRuntime({ route: 'login', config: runtime.config, auth: null, error: null });
     } catch (error) {
-      setRuntime((current) => ({ ...current, error: loginErrorMessage(error) }));
+      if (error instanceof AgentHubApiError && error.status === 401) {
+        handleRequestError(error);
+      } else {
+        setRuntime((current) => ({ ...current, error: loginErrorMessage(error) }));
+      }
     } finally {
       setBusy(false);
     }
@@ -112,13 +126,15 @@ export default function App() {
         serverUrl={runtime.config.serverUrl}
       />
     );
-  } else if (runtime.route === 'main' && runtime.config && runtime.auth) {
+  } else if (runtime.route === 'main' && runtime.config && runtime.auth && api) {
     content = (
       <MainTabs
+        api={api}
         busy={busy}
         error={runtime.error}
         onChangeServer={handleChangeServer}
         onLogout={handleLogout}
+        onRequestError={handleRequestError}
         serverUrl={runtime.config.serverUrl}
         user={runtime.auth.user}
       />

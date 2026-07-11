@@ -9,8 +9,13 @@ Current supported scope:
 - server configuration stored through `expo-secure-store`
 - cookie-session login, restore check, logout, and server switching through `@agenthub/client-core`
 - authenticated tab shell for Sessions, Tasks, Files, Workers, and Profile
+- API-backed session inbox with status, worker/backend metadata, last activity, selection, and refresh
+- API-backed task inbox with status filters and task detail for briefs, criteria, artifacts, and executions
+- API-backed worker list with online state, heartbeat, and reported capabilities
+- loading, empty, error, retry, and refresh states across the API-backed lists
 
 The existing Capacitor app under `apps/mobile` remains the production Android client until native feature parity is verified.
+The Files tab remains a connected placeholder in this first parity slice.
 
 The generated Android manifest allows cleartext transport so runtime-configured Tailscale addresses can work; application validation still rejects public HTTP origins. iOS limits its transport exception to local networking and `*.ts.net`.
 

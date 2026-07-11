@@ -57,4 +57,54 @@ describe('mobile API', () => {
       }),
     );
   });
+
+  it('loads sessions and workers through client-core', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ items: [{ session_id: 'session-1' }] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ worker_id: 'worker-1' }] }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await expect(api.listSessions()).resolves.toEqual({ items: [{ session_id: 'session-1' }] });
+    await expect(api.listWorkers()).resolves.toEqual({ items: [{ worker_id: 'worker-1' }] });
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/sessions',
+      { credentials: 'include' },
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/workers',
+      { credentials: 'include' },
+    );
+  });
+
+  it('filters tasks by status and loads the selected task detail', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ items: [{ task_id: 'task-1', status: 'working' }] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          task: { task_id: 'task-1', status: 'working' },
+          artifacts: [],
+          executions: [],
+        }),
+      );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.listTasks('working');
+    await api.getTask('task-1');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/tasks?status=working',
+      { credentials: 'include' },
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/tasks/task-1',
+      { credentials: 'include' },
+    );
+  });
 });

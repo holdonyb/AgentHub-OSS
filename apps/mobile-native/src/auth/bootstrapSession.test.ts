@@ -13,12 +13,8 @@ const authPayload: NativeAuthPayload = {
   csrf_token: 'csrf',
 };
 
-function apiWithMe(me: MobileApi['me']): MobileApi {
-  return {
-    me,
-    login: jest.fn(),
-    logout: jest.fn(),
-  };
+function apiWithMe(me: MobileApi['me']): Pick<MobileApi, 'me'> {
+  return { me };
 }
 
 describe('bootstrapSession', () => {

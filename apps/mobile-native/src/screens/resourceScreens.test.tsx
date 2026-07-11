@@ -1,0 +1,273 @@
+import type { ReactElement } from 'react';
+import { AgentHubApiError } from '@agenthub/client-core';
+import type {
+  NativeSessionSummary,
+  NativeTaskDetail,
+  NativeTaskSummary,
+  NativeWorkerSummary,
+} from '../api/mobileApi';
+import { SessionsScreen } from './SessionsScreen';
+import { TasksScreen } from './TasksScreen';
+import { WorkersScreen } from './WorkersScreen';
+
+jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+
+interface TestInstance {
+  props: Record<string, unknown>;
+  findByProps(props: Record<string, unknown>): TestInstance;
+}
+
+interface TestRenderer {
+  root: TestInstance;
+  toJSON(): unknown;
+  unmount(): void;
+}
+
+interface TestRendererApi {
+  act(callback: () => void | Promise<void>): void | Promise<void>;
+  create(element: ReactElement): TestRenderer;
+}
+
+const { act, create } = jest.requireActual('react-test-renderer') as TestRendererApi;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const mountedRenderers: TestRenderer[] = [];
+
+afterEach(async () => {
+  await act(async () => {
+    for (const renderer of mountedRenderers.splice(0)) renderer.unmount();
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+async function render(element: ReactElement): Promise<TestRenderer> {
+  let renderer!: TestRenderer;
+  await act(async () => {
+    renderer = create(element);
+  });
+  mountedRenderers.push(renderer);
+  return renderer;
+}
+
+function renderPending(element: ReactElement): TestRenderer {
+  let renderer!: TestRenderer;
+  void act(() => {
+    renderer = create(element);
+  });
+  mountedRenderers.push(renderer);
+  return renderer;
+}
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function renderedText(renderer: TestRenderer): string {
+  function collect(value: unknown): string[] {
+    if (typeof value === 'string' || typeof value === 'number') return [String(value)];
+    if (Array.isArray(value)) return value.flatMap(collect);
+    if (typeof value !== 'object' || value === null) return [];
+    return collect((value as { children?: unknown }).children);
+  }
+  return collect(renderer.toJSON()).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function press(instance: TestInstance): void {
+  const onPress = instance.props.onPress;
+  if (typeof onPress !== 'function') throw new Error('Expected a pressable test instance');
+  onPress();
+}
+
+const session: NativeSessionSummary = {
+  session_id: 'session-1',
+  title: '修复登录问题',
+  backend: 'codex',
+  worker_id: 'worker-main',
+  status: 'needs_reply',
+  last_activity_at: '2026-07-11T11:58:00.000Z',
+};
+
+const task: NativeTaskSummary = {
+  task_id: 'task-1',
+  title: '实现原生列表',
+  brief_markdown: '接入真实 API 数据。',
+  success_criteria_markdown: '- 列表可刷新\n- 错误可重试',
+  status: 'working',
+  priority: 50,
+  target_worker_id: 'worker-main',
+  backend: 'codex',
+  workspace_root: 'E:/Work/AgentHub-OSS',
+  artifact_count: 1,
+  updated_at: '2026-07-11T11:55:00.000Z',
+  created_at: '2026-07-11T10:00:00.000Z',
+};
+
+const taskDetail: NativeTaskDetail = {
+  task,
+  artifacts: [
+    {
+      artifact_id: 'artifact-1',
+      kind: 'test_result',
+      title: '测试结果',
+      path: 'reports/mobile-native.txt',
+      content_markdown: '全部通过',
+      created_at: '2026-07-11T11:56:00.000Z',
+    },
+  ],
+  executions: [
+    {
+      execution_id: 'execution-1',
+      attempt_number: 1,
+      kind: 'dispatch',
+      status: 'running',
+      updated_at: '2026-07-11T11:55:00.000Z',
+    },
+  ],
+};
+
+const worker: NativeWorkerSummary = {
+  worker_id: 'worker-main',
+  machine_name: '开发工作站',
+  os: 'windows',
+  status: 'online',
+  reachable_backends: ['codex', 'claude'],
+  capabilities: { codex: true, claude: true, psmux: true },
+  last_heartbeat_at: '2026-07-11T11:59:00.000Z',
+};
+
+describe('native resource screens', () => {
+  it('loads, selects, and refreshes sessions without hiding current data', async () => {
+    const initialRequest = deferred<{ items: NativeSessionSummary[] }>();
+    const refreshRequest = deferred<{ items: NativeSessionSummary[] }>();
+    const listSessions = jest
+      .fn()
+      .mockImplementationOnce(() => initialRequest.promise)
+      .mockImplementationOnce(() => refreshRequest.promise);
+    const renderer = renderPending(<SessionsScreen api={{ listSessions }} />);
+
+    expect(renderedText(renderer)).toContain('正在加载会话');
+
+    await act(async () => {
+      initialRequest.resolve({ items: [session] });
+      await initialRequest.promise;
+    });
+    expect(renderedText(renderer)).toContain('修复登录问题');
+    expect(renderedText(renderer)).toContain('codex');
+    expect(renderedText(renderer)).toContain('worker-main');
+    expect(renderedText(renderer)).toContain('待回复');
+
+    const sessionButton = renderer.root.findByProps({ accessibilityLabel: '选择会话 修复登录问题' });
+    await act(async () => press(sessionButton));
+    expect(
+      renderer.root.findByProps({ accessibilityLabel: '选择会话 修复登录问题' }).props.accessibilityState,
+    ).toEqual({ selected: true });
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '刷新会话' })));
+    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(renderedText(renderer)).toContain('修复登录问题');
+
+    await act(async () => {
+      refreshRequest.resolve({ items: [{ ...session, title: '登录问题已定位' }] });
+      await refreshRequest.promise;
+    });
+    expect(renderedText(renderer)).toContain('登录问题已定位');
+  });
+
+  it('shows session errors, retries, and then renders an empty state', async () => {
+    const listSessions = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('网络不可用'))
+      .mockResolvedValueOnce({ items: [] });
+    const renderer = await render(<SessionsScreen api={{ listSessions }} />);
+    await settle();
+
+    expect(renderedText(renderer)).toContain('会话加载失败');
+    expect(renderedText(renderer)).toContain('网络不可用');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '重试加载会话' })));
+    await settle();
+
+    expect(listSessions).toHaveBeenCalledTimes(2);
+    expect(renderedText(renderer)).toContain('暂无会话');
+  });
+
+  it('reports an expired API session to the auth route owner', async () => {
+    const unauthorized = new AgentHubApiError({
+      status: 401,
+      code: 'AUTH_REQUIRED',
+      message: 'Authentication required',
+    });
+    const listSessions = jest.fn().mockRejectedValue(unauthorized);
+    const onRequestError = jest.fn();
+    await render(<SessionsScreen api={{ listSessions }} onRequestError={onRequestError} />);
+    await settle();
+
+    expect(onRequestError).toHaveBeenCalledWith(unauthorized);
+  });
+
+  it('filters tasks and retries the selected task detail', async () => {
+    const listTasks = jest.fn(async () => ({ items: [task] }));
+    const getTask = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('详情暂不可用'))
+      .mockResolvedValueOnce(taskDetail);
+    const renderer = await render(<TasksScreen api={{ getTask, listTasks }} />);
+    await settle();
+
+    expect(listTasks).toHaveBeenCalledWith(undefined);
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选任务：执行中' })));
+    await settle();
+    expect(listTasks).toHaveBeenLastCalledWith('working');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看任务 实现原生列表' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('任务详情加载失败');
+    expect(renderedText(renderer)).toContain('详情暂不可用');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '重试加载任务详情' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('接入真实 API 数据。');
+    expect(renderedText(renderer)).toContain('测试结果');
+    expect(renderedText(renderer)).toContain('第 1 次执行');
+  });
+
+  it('clears tasks from the previous status when the new filter fails', async () => {
+    const listTasks = jest
+      .fn()
+      .mockResolvedValueOnce({ items: [task] })
+      .mockRejectedValueOnce(new Error('筛选请求失败'));
+    const getTask = jest.fn();
+    const renderer = await render(<TasksScreen api={{ getTask, listTasks }} />);
+    await settle();
+    expect(renderedText(renderer)).toContain('实现原生列表');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选任务：受阻' })));
+    await settle();
+
+    expect(renderedText(renderer)).toContain('任务加载失败');
+    expect(renderedText(renderer)).not.toContain('实现原生列表');
+  });
+
+  it('shows worker online state and enabled capabilities', async () => {
+    const listWorkers = jest.fn(async () => ({ items: [worker] }));
+    const renderer = await render(<WorkersScreen api={{ listWorkers }} />);
+    await settle();
+
+    expect(renderedText(renderer)).toContain('开发工作站');
+    expect(renderedText(renderer)).toContain('在线');
+    expect(renderedText(renderer)).toContain('codex');
+    expect(renderedText(renderer)).toContain('claude');
+    expect(renderedText(renderer)).toContain('psmux');
+  });
+});

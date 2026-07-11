@@ -2,27 +2,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { NativeUser } from '../api/mobileApi';
+import type { MobileApi, NativeUser } from '../api/mobileApi';
+import { SessionsScreen } from '../screens/SessionsScreen';
+import { TasksScreen } from '../screens/TasksScreen';
+import { WorkersScreen } from '../screens/WorkersScreen';
 import { colors } from '../ui/theme';
 import { nativeTabs, type NativeTabKey } from './tabDefinitions';
 
 type RootTabParamList = Record<NativeTabKey, undefined>;
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
-const screenCopy: Record<Exclude<NativeTabKey, 'me'>, { title: string; detail: string }> = {
-  sessions: { title: '会话', detail: '服务器连接已验证' },
-  tasks: { title: '任务', detail: '服务器连接已验证' },
-  files: { title: '文件', detail: '服务器连接已验证' },
-  workers: { title: '节点', detail: '服务器连接已验证' },
-};
-
-function ConnectedScreen({ tab, serverUrl }: { tab: Exclude<NativeTabKey, 'me'>; serverUrl: string }) {
-  const copy = screenCopy[tab];
+function ConnectedScreen({ serverUrl }: { serverUrl: string }) {
   return (
     <View style={styles.screen}>
       <Text style={styles.eyebrow}>AGENTHUB</Text>
-      <Text style={styles.title}>{copy.title}</Text>
-      <Text style={styles.detail}>{copy.detail}</Text>
+      <Text style={styles.title}>文件</Text>
+      <Text style={styles.detail}>服务器连接已验证</Text>
       <Text numberOfLines={2} style={styles.serverUrl}>{serverUrl}</Text>
     </View>
   );
@@ -74,15 +69,26 @@ function ProfileScreen({
 }
 
 interface MainTabsProps {
+  api: MobileApi;
   user: NativeUser;
   serverUrl: string;
   busy: boolean;
   error: string | null;
+  onRequestError(error: unknown): void;
   onLogout(): Promise<void>;
   onChangeServer(): Promise<void>;
 }
 
-export function MainTabs({ user, serverUrl, busy, error, onLogout, onChangeServer }: MainTabsProps) {
+export function MainTabs({
+  api,
+  user,
+  serverUrl,
+  busy,
+  error,
+  onRequestError,
+  onLogout,
+  onChangeServer,
+}: MainTabsProps) {
   return (
     <NavigationContainer>
       <Tab.Navigator
@@ -104,18 +110,30 @@ export function MainTabs({ user, serverUrl, busy, error, onLogout, onChangeServe
       >
         {nativeTabs.map((tab) => (
           <Tab.Screen key={tab.key} name={tab.key} options={{ title: tab.label }}>
-            {() => tab.key === 'me' ? (
-              <ProfileScreen
-                busy={busy}
-                error={error}
-                onChangeServer={onChangeServer}
-                onLogout={onLogout}
-                serverUrl={serverUrl}
-                user={user}
-              />
-            ) : (
-              <ConnectedScreen serverUrl={serverUrl} tab={tab.key} />
-            )}
+            {() => {
+              if (tab.key === 'sessions') {
+                return <SessionsScreen api={api} onRequestError={onRequestError} />;
+              }
+              if (tab.key === 'tasks') {
+                return <TasksScreen api={api} onRequestError={onRequestError} />;
+              }
+              if (tab.key === 'workers') {
+                return <WorkersScreen api={api} onRequestError={onRequestError} />;
+              }
+              if (tab.key === 'me') {
+                return (
+                  <ProfileScreen
+                    busy={busy}
+                    error={error}
+                    onChangeServer={onChangeServer}
+                    onLogout={onLogout}
+                    serverUrl={serverUrl}
+                    user={user}
+                  />
+                );
+              }
+              return <ConnectedScreen serverUrl={serverUrl} />;
+            }}
           </Tab.Screen>
         ))}
       </Tab.Navigator>

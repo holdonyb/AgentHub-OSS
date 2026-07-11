@@ -14,7 +14,7 @@ export interface BootstrapSessionResult {
   error: string | null;
 }
 
-export type MobileApiFactory = (serverUrl: string) => MobileApi;
+export type MobileApiFactory = (serverUrl: string) => Pick<MobileApi, 'me'>;
 
 export async function bootstrapSession(
   repository: ServerConfigLoader,
