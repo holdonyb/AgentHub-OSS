@@ -20,6 +20,7 @@
     "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
     "mobile:build:release": "npm --workspace @agenthub/mobile run build:release",
     "worker:cli:test": "npm --workspace agenthub-worker run test -- --run",
+    "client:core:test": "npm --workspace @agenthub/client-core run test -- --run",
     "worker:version:check": "node scripts/check-worker-package-version.mjs"
   },
   "workspaces": [
@@ -27,6 +28,7 @@
     "apps/mobile",
     "apps/desktop",
     "packages/protocol",
+    "packages/client-core",
     "packages/worker-cli"
   ]
 }
