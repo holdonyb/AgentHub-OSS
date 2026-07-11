@@ -54,6 +54,9 @@ describe('package-mac-config', () => {
     expect(workflow).toContain('npm run desktop:package:mac');
     expect(workflow).toContain('name: agenthub-desktop-macos');
     expect(workflow).toContain('- build-macos-desktop');
+    expect(workflow).toContain('CSC_LINK: ${{ secrets.AGENTHUB_MACOS_CSC_LINK }}');
+    expect(workflow).toContain('CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_MACOS_CSC_KEY_PASSWORD }}');
+    expect(workflow).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.AGENTHUB_APPLE_APP_SPECIFIC_PASSWORD }}');
     expect(workflow).not.toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
   });
 });

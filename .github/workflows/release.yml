@@ -117,6 +117,12 @@ jobs:
 
   build-macos-desktop:
     runs-on: macos-latest
+    env:
+      CSC_LINK: ${{ secrets.AGENTHUB_MACOS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_MACOS_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.AGENTHUB_APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.AGENTHUB_APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.AGENTHUB_APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
