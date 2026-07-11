@@ -12,6 +12,9 @@ from typing import Any
 TASK_ID_PATTERN = re.compile(r"^tsk_[0-9a-f]{32}$")
 CREATED_SESSION_MARKER = re.compile(r"\Acreated_session_id=[^\s\r\n]+(?:\r?\n|\Z)")
 MAX_REPORT_BYTES = 2_000_000
+TASK_TEMPLATE_KEYS = frozenset({"fix_bug", "implement_feature", "code_review", "release_assistant"})
+TASK_AUTHORITY_PRESETS = frozenset({"read_only", "code_fix", "feature", "review_only"})
+READ_ONLY_AUTHORITY_PRESETS = frozenset({"read_only", "review_only"})
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,24 @@ def _atomic_write_text(path: Path, content: str) -> None:
         os.replace(temporary_name, path)
     finally:
         Path(temporary_name).unlink(missing_ok=True)
+
+
+def _safe_task_subdirectory(directory: Path, name: str) -> Path:
+    path = directory / name
+    path.mkdir(exist_ok=True)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        raise ValueError(f"Task {name} directory is not available") from None
+    if not resolved.is_dir() or os.path.normcase(os.path.normpath(str(resolved))) != os.path.normcase(
+        os.path.normpath(str(path))
+    ):
+        raise ValueError(f"Task {name} directory must stay inside the task workspace")
+    try:
+        resolved.relative_to(directory)
+    except ValueError:
+        raise ValueError(f"Task {name} directory must stay inside the task workspace") from None
+    return resolved
 
 
 def _read_existing_metadata(path: Path) -> dict[str, Any]:
@@ -161,8 +182,8 @@ def prepare_task_workspace(job: dict[str, Any]) -> PreparedTaskWorkspace | None:
     except ValueError:
         raise ValueError("Task workspace resolves outside the workspace root") from None
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "artifacts").mkdir(exist_ok=True)
-    (directory / "logs").mkdir(exist_ok=True)
+    artifacts_directory = _safe_task_subdirectory(directory, "artifacts")
+    _safe_task_subdirectory(directory, "logs")
 
     try:
         attempt_number = int(config.get("attempt_number") or 1)
@@ -172,11 +193,21 @@ def prepare_task_workspace(job: dict[str, Any]) -> PreparedTaskWorkspace | None:
         raise ValueError("Task workspace attempt_number must be a positive integer")
     review_note = str(config.get("review_note") or "").strip()
     relevant_paths = _normalized_paths(config.get("relevant_paths"))
+    template_key = str(config.get("template_key") or "implement_feature")
+    if template_key not in TASK_TEMPLATE_KEYS:
+        raise ValueError("Task workspace template_key is not supported")
+    authority_preset = str(config.get("authority_preset") or "feature")
+    if authority_preset not in TASK_AUTHORITY_PRESETS:
+        raise ValueError("Task workspace authority_preset is not supported")
     authority_value = config.get("authority")
     authority = dict(authority_value) if isinstance(authority_value, dict) else {}
     authority["read_paths"] = _normalized_paths(authority.get("read_paths")) or relevant_paths or ["."]
-    authority["write_paths"] = _normalized_paths(authority.get("write_paths"))
-    runtime_controls = authority.get("runtime_controls")
+    authority["write_paths"] = (
+        []
+        if authority_preset in READ_ONLY_AUTHORITY_PRESETS
+        else _normalized_paths(authority.get("write_paths")) or relevant_paths or ["."]
+    )
+    runtime_controls = payload.get("controls")
     authority["runtime_controls"] = dict(runtime_controls) if isinstance(runtime_controls, dict) else {}
     authority["enforcement"] = {
         "runtime_controls": "mapped",
@@ -190,12 +221,19 @@ def prepare_task_workspace(job: dict[str, Any]) -> PreparedTaskWorkspace | None:
     metadata_file = directory / "agenthub.task.json"
     report_file = directory / "report.md"
     existing_metadata = _read_existing_metadata(metadata_file)
+    if report_file.is_symlink():
+        raise ValueError("Task report must stay inside the task workspace")
     if report_file.exists():
+        try:
+            report_file.resolve(strict=True).relative_to(directory)
+        except (OSError, ValueError):
+            raise ValueError("Task report must stay inside the task workspace") from None
         try:
             previous_attempt = max(1, int(existing_metadata.get("attempt_number") or attempt_number - 1 or 1))
         except (TypeError, ValueError):
             previous_attempt = max(1, attempt_number - 1)
-        report_file.replace(directory / "artifacts" / f"report-attempt-{previous_attempt}.md")
+        artifacts_directory = _safe_task_subdirectory(directory, "artifacts")
+        report_file.replace(artifacts_directory / f"report-attempt-{previous_attempt}.md")
 
     normalized_config = {
         "schema_version": 1,
@@ -204,8 +242,8 @@ def prepare_task_workspace(job: dict[str, Any]) -> PreparedTaskWorkspace | None:
         "title": str(config.get("title") or payload.get("title") or "AgentHub Task").strip(),
         "brief_markdown": str(config.get("brief_markdown") or payload.get("prompt") or "").strip(),
         "success_criteria_markdown": str(config.get("success_criteria_markdown") or "").strip(),
-        "template_key": str(config.get("template_key") or "implement_feature"),
-        "authority_preset": str(config.get("authority_preset") or "feature"),
+        "template_key": template_key,
+        "authority_preset": authority_preset,
         "relevant_paths": relevant_paths,
         "attempt_number": attempt_number,
         "review_note": review_note,

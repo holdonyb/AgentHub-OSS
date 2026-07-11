@@ -118,6 +118,74 @@ def test_prepare_task_workspace_canonicalizes_enforcement_claims(tmp_path: Path)
     }
 
 
+def test_prepare_task_workspace_uses_actual_controls_and_preset_boundaries(tmp_path: Path) -> None:
+    job = task_job(tmp_path)
+    workspace = job["payload"]["task_workspace"]  # type: ignore[index]
+    workspace["authority_preset"] = "read_only"
+    workspace["authority"]["write_paths"] = ["."]
+    workspace["authority"]["runtime_controls"] = {"yolo": True, "sandbox_mode": "danger-full-access"}
+
+    prepared = prepare_task_workspace(job)
+
+    assert prepared is not None
+    metadata = json.loads(prepared.metadata_file.read_text(encoding="utf-8"))
+    assert metadata["authority"]["write_paths"] == []
+    assert metadata["authority"]["runtime_controls"] == job["payload"]["controls"]  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("template_key", "shell_task"), ("authority_preset", "full_access")],
+)
+def test_prepare_task_workspace_rejects_unknown_contract_values(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    job = task_job(tmp_path)
+    job["payload"]["task_workspace"][field] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError, match=field):
+        prepare_task_workspace(job)
+
+
+def test_prepare_task_workspace_rejects_redirected_artifacts_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = "tsk_0123456789abcdef0123456789abcdef"
+    artifacts = tmp_path / ".agenthub" / "tasks" / task_id / "artifacts"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_resolve = Path.resolve
+
+    def fake_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path == artifacts:
+            return outside
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    with pytest.raises(ValueError, match="artifacts"):
+        prepare_task_workspace(task_job(tmp_path))
+
+
+def test_prepare_task_workspace_rejects_dangling_report_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = tmp_path / ".agenthub" / "tasks" / "tsk_0123456789abcdef0123456789abcdef" / "report.md"
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == report or original_is_symlink(path),
+    )
+
+    with pytest.raises(ValueError, match="report"):
+        prepare_task_workspace(task_job(tmp_path))
+
+
 def test_prepare_task_workspace_rejects_non_positive_attempt(tmp_path: Path) -> None:
     job = task_job(tmp_path)
     job["payload"]["task_workspace"]["attempt_number"] = -1  # type: ignore[index]
