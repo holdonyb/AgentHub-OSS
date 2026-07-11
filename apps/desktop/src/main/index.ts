@@ -6,7 +6,12 @@ import {
   resolveStartupConsoleTarget,
   writeStoredServerUrl,
 } from './clientConfig.js';
-import { buildConsoleUrl, createWindowOptions, resolveConsoleUrl } from './windowConfig.js';
+import {
+  buildConsoleUrl,
+  createWindowOptions,
+  isTrustedConsoleNavigation,
+  resolveConsoleUrl,
+} from './windowConfig.js';
 
 let mainWindow: BrowserWindow | null = null;
 let islandWindow: BrowserWindow | null = null;
@@ -52,6 +57,29 @@ function loadConsole(window: BrowserWindow, view: 'main' | 'island'): void {
     return;
   }
   void window.loadURL(buildConsoleUrl(consoleUrl, view));
+}
+
+function openExternalUrl(url: string): void {
+  try {
+    const target = new URL(url);
+    if (target.protocol === 'http:' || target.protocol === 'https:') {
+      void shell.openExternal(target.toString());
+    }
+  } catch {
+    // Invalid navigation targets are ignored.
+  }
+}
+
+function protectConsoleNavigation(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (consoleUrl && isTrustedConsoleNavigation(url, consoleUrl)) return;
+    event.preventDefault();
+    openExternalUrl(url);
+  });
 }
 
 function setupHtml(): string {
@@ -101,6 +129,7 @@ function setupHtml(): string {
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow(createWindowOptions({ kind: 'main', preloadPath: preloadPath() }));
+  protectConsoleNavigation(window);
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null;
   });
@@ -116,6 +145,7 @@ function createMainWindow(): BrowserWindow {
 
 function createIslandWindow(): BrowserWindow {
   const window = new BrowserWindow(createWindowOptions({ kind: 'island', preloadPath: preloadPath() }));
+  protectConsoleNavigation(window);
   window.on('closed', () => {
     if (islandWindow === window) islandWindow = null;
   });

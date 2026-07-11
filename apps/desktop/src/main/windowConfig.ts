@@ -25,6 +25,19 @@ export function buildConsoleUrl(baseUrl: string, view: 'main' | 'island'): strin
   return url.toString().replace(/\/$/, '');
 }
 
+export function isTrustedConsoleNavigation(targetUrl: string, consoleUrl: string): boolean {
+  try {
+    const target = new URL(targetUrl);
+    const configured = new URL(consoleUrl);
+    return (
+      (target.protocol === 'http:' || target.protocol === 'https:') &&
+      target.origin === configured.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createWindowOptions({
   kind,
   preloadPath,
@@ -40,7 +53,7 @@ export function createWindowOptions({
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   };
 

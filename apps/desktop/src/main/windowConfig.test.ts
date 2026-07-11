@@ -3,6 +3,7 @@ import {
   buildConsoleUrl,
   createWindowOptions,
   DEFAULT_CONSOLE_URL,
+  isTrustedConsoleNavigation,
   resolveConsoleUrl,
 } from './windowConfig';
 
@@ -31,7 +32,17 @@ describe('AgentHub desktop window config', () => {
     expect(options.webPreferences?.preload).toContain('preload.cjs');
     expect(options.webPreferences?.contextIsolation).toBe(true);
     expect(options.webPreferences?.nodeIntegration).toBe(false);
-    expect(options.webPreferences?.sandbox).toBe(false);
+    expect(options.webPreferences?.sandbox).toBe(true);
+  });
+
+  it('keeps embedded navigation on the configured console origin', () => {
+    const consoleUrl = 'https://agenthub.example.com/console';
+
+    expect(isTrustedConsoleNavigation('https://agenthub.example.com/api/auth/login', consoleUrl)).toBe(true);
+    expect(isTrustedConsoleNavigation('https://agenthub.example.com.evil.test/phish', consoleUrl)).toBe(false);
+    expect(isTrustedConsoleNavigation('https://docs.example.com/', consoleUrl)).toBe(false);
+    expect(isTrustedConsoleNavigation('javascript:alert(1)', consoleUrl)).toBe(false);
+    expect(isTrustedConsoleNavigation('not a url', consoleUrl)).toBe(false);
   });
 
   it('creates a compact always-on-top island window', () => {
