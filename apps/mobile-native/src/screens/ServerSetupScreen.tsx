@@ -24,13 +24,14 @@ const validationMessages: Record<ServerUrlValidationReason, string> = {
 
 interface ServerSetupScreenProps {
   busy: boolean;
+  initialError?: string | null;
   onSave(config: ServerConfig): Promise<void>;
 }
 
-export function ServerSetupScreen({ busy, onSave }: ServerSetupScreenProps) {
+export function ServerSetupScreen({ busy, initialError = null, onSave }: ServerSetupScreenProps) {
   const [serverUrl, setServerUrl] = useState('');
   const [allowPrivateHttp, setAllowPrivateHttp] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
 
   async function handleSave() {
     const result = validateServerUrl(serverUrl, { allowPrivateHttp });

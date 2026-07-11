@@ -32,12 +32,14 @@ function ProfileScreen({
   user,
   serverUrl,
   busy,
+  error,
   onLogout,
   onChangeServer,
 }: {
   user: NativeUser;
   serverUrl: string;
   busy: boolean;
+  error: string | null;
   onLogout(): Promise<void>;
   onChangeServer(): Promise<void>;
 }) {
@@ -50,6 +52,7 @@ function ProfileScreen({
         <Text style={styles.detailLabel}>服务器</Text>
         <Text style={styles.serverUrl}>{serverUrl}</Text>
       </View>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable
         accessibilityRole="button"
         disabled={busy}
@@ -74,11 +77,12 @@ interface MainTabsProps {
   user: NativeUser;
   serverUrl: string;
   busy: boolean;
+  error: string | null;
   onLogout(): Promise<void>;
   onChangeServer(): Promise<void>;
 }
 
-export function MainTabs({ user, serverUrl, busy, onLogout, onChangeServer }: MainTabsProps) {
+export function MainTabs({ user, serverUrl, busy, error, onLogout, onChangeServer }: MainTabsProps) {
   return (
     <NavigationContainer>
       <Tab.Navigator
@@ -103,6 +107,7 @@ export function MainTabs({ user, serverUrl, busy, onLogout, onChangeServer }: Ma
             {() => tab.key === 'me' ? (
               <ProfileScreen
                 busy={busy}
+                error={error}
                 onChangeServer={onChangeServer}
                 onLogout={onLogout}
                 serverUrl={serverUrl}
@@ -132,6 +137,7 @@ const styles = StyleSheet.create({
   detailLabel: { color: colors.muted, fontSize: 12 },
   serverUrl: { color: colors.text, fontSize: 14, lineHeight: 20 },
   role: { color: colors.success, fontSize: 12, fontWeight: '800' },
+  error: { color: colors.danger, fontSize: 14, lineHeight: 20 },
   profileDetails: {
     borderBottomColor: colors.border,
     borderBottomWidth: 1,

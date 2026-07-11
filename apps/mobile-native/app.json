@@ -32,7 +32,7 @@
           "NSExceptionDomains": {
             "ts.net": {
               "NSIncludesSubdomains": true,
-              "NSTemporaryExceptionAllowsInsecureHTTPLoads": true
+              "NSExceptionAllowsInsecureHTTPLoads": true
             }
           }
         }

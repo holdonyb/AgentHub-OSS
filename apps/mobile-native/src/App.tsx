@@ -92,6 +92,8 @@ export default function App() {
     try {
       await repository.clear();
       setRuntime({ route: 'server-setup', config: null, auth: null, error: null });
+    } catch (error) {
+      setRuntime((current) => ({ ...current, error: loginErrorMessage(error) }));
     } finally {
       setBusy(false);
     }
@@ -99,7 +101,7 @@ export default function App() {
 
   let content;
   if (runtime.route === 'server-setup') {
-    content = <ServerSetupScreen busy={busy} onSave={handleServerSave} />;
+    content = <ServerSetupScreen busy={busy} initialError={runtime.error} onSave={handleServerSave} />;
   } else if (runtime.route === 'login' && runtime.config) {
     content = (
       <LoginScreen
@@ -114,6 +116,7 @@ export default function App() {
     content = (
       <MainTabs
         busy={busy}
+        error={runtime.error}
         onChangeServer={handleChangeServer}
         onLogout={handleLogout}
         serverUrl={runtime.config.serverUrl}

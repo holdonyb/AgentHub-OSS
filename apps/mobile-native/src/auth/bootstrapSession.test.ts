@@ -34,6 +34,23 @@ describe('bootstrapSession', () => {
     expect(createApi).not.toHaveBeenCalled();
   });
 
+  it('routes SecureStore failures to setup with a visible error', async () => {
+    const createApi = jest.fn();
+
+    await expect(
+      bootstrapSession(
+        { load: async () => Promise.reject(new Error('Secure storage unavailable')) },
+        createApi,
+      ),
+    ).resolves.toEqual({
+      route: 'server-setup',
+      config: null,
+      auth: null,
+      error: 'Secure storage unavailable',
+    });
+    expect(createApi).not.toHaveBeenCalled();
+  });
+
   it('restores an authenticated cookie session', async () => {
     const createApi = jest.fn(() => apiWithMe(async () => authPayload));
 

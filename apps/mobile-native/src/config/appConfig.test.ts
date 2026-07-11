@@ -19,4 +19,15 @@ describe('Expo native identifiers', () => {
   it('keeps system chrome readable while the foundation uses a light-only theme', () => {
     expect(appConfig.expo.userInterfaceStyle).toBe('light');
   });
+
+  it('limits the iOS insecure transport exception to Tailscale DNS', () => {
+    const ats = appConfig.expo.ios.infoPlist.NSAppTransportSecurity;
+    expect(ats.NSAllowsLocalNetworking).toBe(true);
+    expect(ats.NSExceptionDomains).toEqual({
+      'ts.net': {
+        NSIncludesSubdomains: true,
+        NSExceptionAllowsInsecureHTTPLoads: true,
+      },
+    });
+  });
 });
