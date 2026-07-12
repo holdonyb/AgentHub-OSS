@@ -2,7 +2,7 @@
 
 ## Goal
 
-Expose both Android clients through `agenthub.ifix.xin` without presenting the native client as an in-place update for the existing WebView client.
+Expose both Android clients through the configured AgentHub deployment without presenting the native client as an in-place update for the existing WebView client.
 
 ## Product Contract
 
