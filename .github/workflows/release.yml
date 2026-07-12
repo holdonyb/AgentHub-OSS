@@ -132,7 +132,7 @@ jobs:
           path: apps/desktop/release/AgentHub-*.exe
 
   build-macos-desktop:
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
       CSC_LINK: ${{ secrets.AGENTHUB_MACOS_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_MACOS_CSC_KEY_PASSWORD }}

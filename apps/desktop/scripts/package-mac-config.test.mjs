@@ -50,7 +50,8 @@ describe('package-mac-config', () => {
     const workflow = readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8');
 
     expect(workflow).toContain('build-macos-desktop:');
-    expect(workflow).toContain('runs-on: macos-latest');
+    expect(workflow).toContain('runs-on: macos-26');
+    expect(workflow).not.toContain('runs-on: macos-latest');
     expect(workflow).toContain('npm run desktop:package:mac');
     expect(workflow).toContain('npm run mobile:native:build:ios');
     expect(workflow).toContain('name: agenthub-desktop-macos');
@@ -61,6 +62,8 @@ describe('package-mac-config', () => {
     expect(workflow).not.toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
 
     const ciWorkflow = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    expect(ciWorkflow).toContain('runs-on: macos-26');
+    expect(ciWorkflow).not.toContain('runs-on: macos-latest');
     expect(ciWorkflow).toContain('npm run mobile:native:build:ios');
   });
 });
