@@ -89,6 +89,12 @@ function press(instance: TestInstance): void {
   onPress();
 }
 
+function changeText(instance: TestInstance, value: string): void {
+  const onChangeText = instance.props.onChangeText;
+  if (typeof onChangeText !== 'function') throw new Error('Expected a text input test instance');
+  onChangeText(value);
+}
+
 const session: NativeSessionSummary = {
   session_id: 'session-1',
   title: '修复登录问题',
@@ -263,7 +269,9 @@ describe('native resource screens', () => {
       .fn()
       .mockRejectedValueOnce(new Error('详情暂不可用'))
       .mockResolvedValueOnce(taskDetail);
-    const renderer = await render(<TasksScreen api={{ getTask, listTasks }} />);
+    const renderer = await render(
+      <TasksScreen api={{ createTask: jest.fn(), getTask, listTasks, reviewTask: jest.fn() }} />,
+    );
     await settle();
 
     expect(listTasks).toHaveBeenCalledWith(undefined);
@@ -289,7 +297,9 @@ describe('native resource screens', () => {
       .mockResolvedValueOnce({ items: [task] })
       .mockRejectedValueOnce(new Error('筛选请求失败'));
     const getTask = jest.fn();
-    const renderer = await render(<TasksScreen api={{ getTask, listTasks }} />);
+    const renderer = await render(
+      <TasksScreen api={{ createTask: jest.fn(), getTask, listTasks, reviewTask: jest.fn() }} />,
+    );
     await settle();
     expect(renderedText(renderer)).toContain('实现原生列表');
 
@@ -298,6 +308,88 @@ describe('native resource screens', () => {
 
     expect(renderedText(renderer)).toContain('任务加载失败');
     expect(renderedText(renderer)).not.toContain('实现原生列表');
+  });
+
+  it('creates and dispatches a task from a mobile-first composer', async () => {
+    const createdTask = {
+      ...task,
+      task_id: 'task-created',
+      title: '修复消息同步',
+      brief_markdown: '详情页应自动同步最终消息。',
+      success_criteria_markdown: '- 无需退出详情页',
+      status: 'queued' as const,
+    };
+    const listTasks = jest.fn(async () => ({ items: [] }));
+    const createTask = jest.fn(async () => ({ task: createdTask }));
+    const getTask = jest.fn(async () => ({ ...taskDetail, task: createdTask }));
+    const reviewTask = jest.fn();
+    const renderer = await render(
+      <TasksScreen
+        api={{ createTask, getTask, listTasks, reviewTask }}
+        canOperate
+        csrfToken="csrf-token"
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '新建任务' })));
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '任务标题' }), '修复消息同步');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '任务说明' }), '详情页应自动同步最终消息。');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '验收标准' }), '- 无需退出详情页');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '目标节点' }), 'worker-main');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '工作目录' }), 'E:/Work/AgentHub-OSS');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '相关路径' }), 'apps/mobile-native\napps/api');
+    });
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '创建并派发任务' })));
+    await settle();
+
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '修复消息同步',
+        brief_markdown: '详情页应自动同步最终消息。',
+        success_criteria_markdown: '- 无需退出详情页',
+        target_worker_id: 'worker-main',
+        backend: 'codex',
+        workspace_root: 'E:/Work/AgentHub-OSS',
+        relevant_paths: ['apps/mobile-native', 'apps/api'],
+        submit: true,
+      }),
+      'csrf-token',
+    );
+    expect(renderedText(renderer)).toContain('修复消息同步');
+    expect(renderedText(renderer)).toContain('详情页应自动同步最终消息。');
+  });
+
+  it('accepts or requests changes from a ready-to-review task detail', async () => {
+    const reviewableTask = { ...task, status: 'ready_to_review' as const };
+    const listTasks = jest.fn(async () => ({ items: [reviewableTask] }));
+    const getTask = jest.fn(async () => ({ ...taskDetail, task: reviewableTask }));
+    const reviewTask = jest.fn(async () => ({ task: { ...reviewableTask, status: 'accepted' as const } }));
+    const createTask = jest.fn();
+    const renderer = await render(
+      <TasksScreen
+        api={{ createTask, getTask, listTasks, reviewTask }}
+        canOperate
+        csrfToken="csrf-token"
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看任务 实现原生列表' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('通过验收');
+    expect(renderedText(renderer)).toContain('退回修改');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '通过验收' })));
+    await settle();
+
+    expect(reviewTask).toHaveBeenCalledWith(
+      'task-1',
+      { action: 'accept', note_markdown: '' },
+      'csrf-token',
+    );
+    expect(renderedText(renderer)).toContain('已完成');
   });
 
   it('shows worker online state and enabled capabilities', async () => {

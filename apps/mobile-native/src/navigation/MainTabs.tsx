@@ -125,7 +125,14 @@ export function MainTabs({
                 );
               }
               if (tab.key === 'tasks') {
-                return <TasksScreen api={api} onRequestError={onRequestError} />;
+                return (
+                  <TasksScreen
+                    api={api}
+                    canOperate={user.role !== 'viewer'}
+                    csrfToken={csrfToken}
+                    onRequestError={onRequestError}
+                  />
+                );
               }
               if (tab.key === 'workers') {
                 return <WorkersScreen api={api} onRequestError={onRequestError} />;

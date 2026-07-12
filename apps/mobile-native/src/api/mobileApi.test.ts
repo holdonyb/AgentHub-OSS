@@ -108,6 +108,52 @@ describe('mobile API', () => {
     );
   });
 
+  it('creates and reviews tasks with CSRF protection', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(
+        jsonResponse({ task: { task_id: 'task-1', status: 'queued' }, job: { job_id: 'job-1' } }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ task: { task_id: 'task-1', status: 'accepted' } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+    const createPayload = {
+      title: '修复同步',
+      brief_markdown: '修复详情页消息同步。',
+      success_criteria_markdown: '- 无需退出详情页即可看到最终消息',
+      target_worker_id: 'worker-main',
+      backend: 'codex',
+      workspace_root: 'E:/Work/AgentHub-OSS',
+      namespace: 'default',
+      priority: 100,
+      template_key: 'fix_bug' as const,
+      authority_preset: 'code_fix' as const,
+      relevant_paths: ['apps/mobile-native'],
+      submit: true,
+    };
+
+    await api.createTask(createPayload, 'csrf-token');
+    await api.reviewTask('task/1', { action: 'accept', note_markdown: '' }, 'csrf-token');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/tasks',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(createPayload),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/tasks/task%2F1/review',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ action: 'accept', note_markdown: '' }),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
+
   it('loads a session thread and its pending interactions through encoded paths', async () => {
     const fetcher = jest
       .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()

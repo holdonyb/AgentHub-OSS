@@ -168,6 +168,46 @@ export interface NativeTaskDetail {
   executions: NativeTaskExecution[];
 }
 
+export type NativeTaskTemplateKey =
+  | 'fix_bug'
+  | 'implement_feature'
+  | 'code_review'
+  | 'release_assistant';
+
+export type NativeTaskAuthorityPreset = 'read_only' | 'code_fix' | 'feature' | 'review_only';
+
+export type NativeTaskReviewAction =
+  | 'accept'
+  | 'reject'
+  | 'archive'
+  | 'restore'
+  | 'request_changes';
+
+export interface NativeTaskCreateInput {
+  title: string;
+  brief_markdown: string;
+  success_criteria_markdown: string;
+  target_worker_id: string | null;
+  backend: string | null;
+  workspace_root: string | null;
+  namespace: string;
+  priority: number;
+  template_key: NativeTaskTemplateKey;
+  authority_preset: NativeTaskAuthorityPreset;
+  relevant_paths: string[];
+  submit: boolean;
+}
+
+export interface NativeTaskReviewInput {
+  action: NativeTaskReviewAction;
+  note_markdown: string;
+}
+
+export interface NativeTaskMutationPayload {
+  task: NativeTaskSummary;
+  job?: NativeJob;
+}
+
 export type NativeWorkerStatus = 'registered' | 'online' | 'degraded' | 'offline';
 
 export interface NativeWorkerSummary {
@@ -216,6 +256,15 @@ export interface MobileApi {
   ): Promise<{ session: NativeSessionSummary }>;
   listTasks(status?: NativeTaskStatus): Promise<NativeListPayload<NativeTaskSummary>>;
   getTask(taskId: string): Promise<NativeTaskDetail>;
+  createTask(
+    payload: NativeTaskCreateInput,
+    csrfToken: string,
+  ): Promise<NativeTaskMutationPayload>;
+  reviewTask(
+    taskId: string,
+    payload: NativeTaskReviewInput,
+    csrfToken: string,
+  ): Promise<NativeTaskMutationPayload>;
   listWorkers(): Promise<NativeListPayload<NativeWorkerSummary>>;
 }
 
@@ -268,6 +317,14 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       ),
     getTask: (taskId) =>
       client.get<NativeTaskDetail>(`/api/tasks/${encodeURIComponent(taskId)}`),
+    createTask: (payload, csrfToken) =>
+      client.post<NativeTaskMutationPayload>('/api/tasks', payload, { csrfToken }),
+    reviewTask: (taskId, payload, csrfToken) =>
+      client.post<NativeTaskMutationPayload>(
+        `/api/tasks/${encodeURIComponent(taskId)}/review`,
+        payload,
+        { csrfToken },
+      ),
     listWorkers: () => client.get<NativeListPayload<NativeWorkerSummary>>('/api/workers'),
   };
 }
