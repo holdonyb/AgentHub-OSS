@@ -60,6 +60,9 @@ describe('package-mac-config', () => {
     expect(workflow).toContain('CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_MACOS_CSC_KEY_PASSWORD }}');
     expect(workflow).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.AGENTHUB_APPLE_APP_SPECIFIC_PASSWORD }}');
     expect(workflow).not.toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
+    expect(workflow).toContain('name: Generate complete release checksums');
+    expect(workflow).toContain("find dist/upload -type f -name SHA256SUMS -delete");
+    expect(workflow).toContain("find dist/upload -type f ! -name SHA256SUMS -print0");
 
     const ciWorkflow = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
     expect(ciWorkflow).toContain('runs-on: macos-26');

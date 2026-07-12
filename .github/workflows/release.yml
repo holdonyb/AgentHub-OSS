@@ -89,7 +89,6 @@ jobs:
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk dist/release/android/agenthub-android-release.apk
           cp apps/mobile-native/android/app/build/outputs/apk/release/app-release.apk dist/release/android/agenthub-native-android-release.apk
           cp apps/mobile-native/android/app/build/outputs/bundle/release/app-release.aab dist/release/android/agenthub-native-android-release.aab
-          (cd dist/release && sha256sum android/* workers/* > SHA256SUMS)
 
       - name: Upload Android and worker assets
         uses: actions/upload-artifact@v4
@@ -101,7 +100,6 @@ jobs:
             dist/release/android/agenthub-native-android-release.apk
             dist/release/android/agenthub-native-android-release.aab
             dist/release/workers/*
-            dist/release/SHA256SUMS
 
   build-windows-desktop:
     runs-on: windows-latest
@@ -182,6 +180,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist/upload
+
+      - name: Generate complete release checksums
+        shell: bash
+        run: |
+          find dist/upload -type f -name SHA256SUMS -delete
+          while IFS= read -r -d '' file; do
+            printf '%s  %s\n' "$(sha256sum "$file" | cut -d ' ' -f 1)" "$(basename "$file")"
+          done < <(find dist/upload -type f ! -name SHA256SUMS -print0 | sort -z) > dist/upload/SHA256SUMS
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
