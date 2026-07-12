@@ -86,6 +86,33 @@ server {
         proxy_pass http://__AGENTHUB_API_UPSTREAM__;
     }
 
+    location = /downloads/agenthub-android-release.apk {
+        root /opt/agenthub/data;
+        try_files /downloads/agenthub-android-release.apk =404;
+        types { }
+        default_type application/vnd.android.package-archive;
+        add_header Content-Disposition 'attachment; filename="agenthub-android-release.apk"' always;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location = /downloads/agenthub-native-android-release.apk {
+        root /opt/agenthub/data;
+        try_files /downloads/agenthub-native-android-release.apk =404;
+        types { }
+        default_type application/vnd.android.package-archive;
+        add_header Content-Disposition 'attachment; filename="agenthub-native-android-release.apk"' always;
+        add_header Cache-Control "no-store" always;
+    }
+
+    location = /downloads/SHA256SUMS {
+        root /opt/agenthub/data;
+        try_files /downloads/SHA256SUMS =404;
+        types { }
+        default_type text/plain;
+        add_header Content-Disposition 'attachment; filename="SHA256SUMS"' always;
+        add_header Cache-Control "no-store" always;
+    }
+
     location /downloads/ {
         try_files $uri =404;
     }
