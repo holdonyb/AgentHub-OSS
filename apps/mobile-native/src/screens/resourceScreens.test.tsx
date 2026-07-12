@@ -13,6 +13,14 @@ import { TasksScreen } from './TasksScreen';
 import { WorkersScreen } from './WorkersScreen';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('./useNativeVoiceRecorder', () => ({
+  useNativeVoiceRecorder: () => ({
+    durationMillis: 0,
+    isRecording: false,
+    startRecording: jest.fn(async () => undefined),
+    stopRecording: jest.fn(async () => null),
+  }),
+}));
 
 interface TestInstance {
   props: Record<string, unknown>;
@@ -175,6 +183,7 @@ function createSessionsApi(listSessions: jest.Mock) {
     listSessions,
     respondPermission: jest.fn(),
     sendSessionInput: jest.fn(),
+    transcribeVoice: jest.fn(),
     terminateSession: jest.fn(),
   };
 }
@@ -220,6 +229,7 @@ describe('native resource screens', () => {
       listSessions: jest.fn(async () => ({ items: [session] })),
       respondPermission: jest.fn(),
       sendSessionInput: jest.fn(),
+      transcribeVoice: jest.fn(),
       terminateSession: jest.fn(),
     };
     const renderer = await render(

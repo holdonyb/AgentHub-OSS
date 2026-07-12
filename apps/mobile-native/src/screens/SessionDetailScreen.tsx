@@ -35,6 +35,7 @@ import {
   type NativePermissionChoice,
 } from './sessionDetailPresentation';
 import { pickSessionImage, type NativePendingImage } from './nativeImagePicker';
+import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 type SessionDetailApi = Pick<
   MobileApi,
@@ -44,6 +45,7 @@ type SessionDetailApi = Pick<
   | 'listPermissions'
   | 'respondPermission'
   | 'sendSessionInput'
+  | 'transcribeVoice'
   | 'terminateSession'
 >;
 
@@ -57,6 +59,13 @@ interface SessionThreadData {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '请求失败，请稍后重试';
+}
+
+function recordingDuration(durationMillis: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMillis / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }
 
 function timelineLabel(item: NativeTimelineItem): string {
@@ -315,6 +324,7 @@ export function SessionDetailScreen({
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<NativePendingImage[]>([]);
+  const [transcribing, setTranscribing] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentJob, setSentJob] = useState<NativeJob | null>(null);
   const [sessionOverride, setSessionOverride] = useState<NativeSessionSummary | null>(null);
@@ -330,6 +340,7 @@ export function SessionDetailScreen({
   const [olderError, setOlderError] = useState<string | null>(null);
   const permissionSubmitting = useRef(new Set<string>());
   const listRef = useRef<FlatList<NativeTimelineItem>>(null);
+  const voiceRecorder = useNativeVoiceRecorder();
 
   const loadThread = useCallback(async (): Promise<SessionThreadData> => {
     const [sessionPayload, timelinePayload, permissionPayload, jobsPayload] = await Promise.all([
@@ -445,6 +456,32 @@ export function SessionDetailScreen({
     } catch (error) {
       onRequestError?.(error);
       setSendError(errorMessage(error));
+    }
+  }
+
+  async function toggleVoiceRecording() {
+    if (transcribing || sending || currentSession.status === 'terminated') return;
+    setSendError(null);
+    try {
+      if (!voiceRecorder.isRecording) {
+        await voiceRecorder.startRecording();
+        return;
+      }
+      setTranscribing(true);
+      const recording = await voiceRecorder.stopRecording();
+      if (!recording) throw new Error('没有录到有效声音');
+      const result = await api.transcribeVoice(
+        { ...recording, language: 'zh-CN' },
+        csrfToken,
+      );
+      const text = result.text.trim();
+      if (!text) throw new Error('没有识别到文字');
+      setReply((current) => current ? `${current}${current.endsWith('\n') ? '' : '\n'}${text}` : text);
+    } catch (error) {
+      onRequestError?.(error);
+      setSendError(errorMessage(error));
+    } finally {
+      setTranscribing(false);
     }
   }
 
@@ -772,6 +809,14 @@ export function SessionDetailScreen({
               ))}
             </View>
           ) : null}
+          {voiceRecorder.isRecording ? (
+            <View accessibilityLiveRegion="polite" style={styles.recordingState}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingText}>
+                录音中 {recordingDuration(voiceRecorder.durationMillis)} · 点击停止并识别
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.composerRow}>
             <Pressable
               accessibilityLabel="添加图片"
@@ -781,6 +826,27 @@ export function SessionDetailScreen({
               style={({ pressed }) => [styles.attachButton, pressed && styles.pressed]}
             >
               <Ionicons color={colors.accent} name="image-outline" size={21} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel={voiceRecorder.isRecording ? '停止录音并识别' : '开始语音输入'}
+              accessibilityRole="button"
+              disabled={transcribing || sending || currentSession.status === 'terminated'}
+              onPress={() => void toggleVoiceRecording()}
+              style={({ pressed }) => [
+                styles.attachButton,
+                voiceRecorder.isRecording && styles.recordingButton,
+                pressed && styles.pressed,
+              ]}
+            >
+              {transcribing ? (
+                <ActivityIndicator color={colors.accent} size="small" />
+              ) : (
+                <Ionicons
+                  color={voiceRecorder.isRecording ? colors.surface : colors.accent}
+                  name={voiceRecorder.isRecording ? 'stop' : 'mic-outline'}
+                  size={21}
+                />
+              )}
             </Pressable>
             <TextInput
               accessibilityLabel="回复内容"
@@ -995,6 +1061,9 @@ const styles = StyleSheet.create({
   attachmentImage: { borderRadius: 4, height: 32, width: 32 },
   attachmentName: { color: colors.text, flexShrink: 1, fontSize: 12, fontWeight: '600' },
   attachmentRemove: { alignItems: 'center', height: 28, justifyContent: 'center', width: 28 },
+  recordingState: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 24 },
+  recordingDot: { backgroundColor: colors.danger, borderRadius: 4, height: 8, width: 8 },
+  recordingText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
   composerRow: { alignItems: 'flex-end', flexDirection: 'row', gap: 9 },
   attachButton: {
     alignItems: 'center',
@@ -1005,6 +1074,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 48,
   },
+  recordingButton: { backgroundColor: colors.danger, borderColor: colors.danger },
   replyInput: {
     backgroundColor: colors.canvas,
     borderColor: colors.border,

@@ -7,9 +7,11 @@ import type {
 } from '../api/mobileApi';
 import { SessionDetailScreen } from './SessionDetailScreen';
 import { pickSessionImage } from './nativeImagePicker';
+import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('./nativeImagePicker', () => ({ pickSessionImage: jest.fn() }));
+jest.mock('./useNativeVoiceRecorder', () => ({ useNativeVoiceRecorder: jest.fn() }));
 
 interface TestInstance {
   props: Record<string, unknown>;
@@ -34,6 +36,15 @@ const mountedRenderers: TestRenderer[] = [];
 afterEach(async () => {
   await act(async () => {
     for (const renderer of mountedRenderers.splice(0)) renderer.unmount();
+  });
+});
+
+beforeEach(() => {
+  jest.mocked(useNativeVoiceRecorder).mockReturnValue({
+    durationMillis: 0,
+    isRecording: false,
+    startRecording: jest.fn(async () => undefined),
+    stopRecording: jest.fn(async () => null),
   });
 });
 
@@ -157,6 +168,7 @@ function createDetailApi(overrides: Record<string, unknown> = {}) {
     listPermissions: jest.fn(async () => ({ items: [] as NativePermission[] })),
     respondPermission: jest.fn(),
     sendSessionInput: jest.fn(),
+    transcribeVoice: jest.fn(),
     terminateSession: jest.fn(),
     ...overrides,
   };
@@ -335,6 +347,47 @@ describe('native session detail', () => {
       },
       'csrf-token',
     );
+  });
+
+  it('stops a native recording, transcribes it, and appends the text to the composer', async () => {
+    const stopRecording = jest.fn(async () => ({
+      filename: 'voice.m4a',
+      content_type: 'audio/mp4',
+      data_base64: 'YXVkaW8=',
+      duration_ms: 1600,
+      chunk_count: 1,
+    }));
+    jest.mocked(useNativeVoiceRecorder).mockReturnValue({
+      durationMillis: 1600,
+      isRecording: true,
+      startRecording: jest.fn(async () => undefined),
+      stopRecording,
+    });
+    const transcribeVoice = jest.fn(async () => ({
+      text: '识别后的文字',
+      diagnostics: { input_bytes: 5 },
+    }));
+    const api = createDetailApi({ transcribeVoice });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '停止录音并识别' })));
+    await settle();
+
+    expect(stopRecording).toHaveBeenCalled();
+    expect(transcribeVoice).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'voice.m4a', language: 'zh-CN' }),
+      'csrf-token',
+    );
+    expect(renderer.root.findByProps({ accessibilityLabel: '回复内容' }).props.value).toBe('识别后的文字');
   });
 
   it('recovers the latest reply status when a detail screen is reopened', async () => {

@@ -27,6 +27,14 @@
             "usesCleartextTraffic": true
           }
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许 AgentHub 录制语音并转换为文字。",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
       ]
     ],
     "ios": {

@@ -110,6 +110,20 @@ export interface NativeSessionAttachmentInput {
   data_base64: string;
 }
 
+export interface NativeVoiceTranscribeInput {
+  filename: string;
+  content_type: string;
+  data_base64: string;
+  language?: string;
+  duration_ms?: number;
+  chunk_count?: number;
+}
+
+export interface NativeVoiceTranscribePayload {
+  text: string;
+  diagnostics: Record<string, unknown>;
+}
+
 export interface NativeTimelinePayload {
   items: NativeTimelineItem[];
   has_more: boolean;
@@ -305,6 +319,10 @@ export interface MobileApi {
     },
     csrfToken: string,
   ): Promise<{ job: NativeJob }>;
+  transcribeVoice(
+    payload: NativeVoiceTranscribeInput,
+    csrfToken: string,
+  ): Promise<NativeVoiceTranscribePayload>;
   respondPermission(
     permissionId: string,
     action: NativePermissionAction,
@@ -379,6 +397,8 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
     listJobs: () => client.get<NativeListPayload<NativeJob>>('/api/jobs?limit=200'),
     sendSessionInput: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/input`, payload, { csrfToken }),
+    transcribeVoice: (payload, csrfToken) =>
+      client.post<NativeVoiceTranscribePayload>('/api/voice/transcribe', payload, { csrfToken }),
     respondPermission: (permissionId, action, response, csrfToken) =>
       client.post<{ permission: NativePermission }>(
         `/api/permissions/${encodeURIComponent(permissionId)}/respond`,

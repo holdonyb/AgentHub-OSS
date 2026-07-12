@@ -18,6 +18,7 @@ type SessionsApi = Pick<
   | 'listSessions'
   | 'respondPermission'
   | 'sendSessionInput'
+  | 'transcribeVoice'
   | 'terminateSession'
 >;
 

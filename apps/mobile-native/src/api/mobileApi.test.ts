@@ -311,4 +311,30 @@ describe('mobile API', () => {
       }),
     );
   });
+
+  it('submits native audio for server-side transcription', async () => {
+    const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
+      jsonResponse({ text: '识别后的文字', diagnostics: { input_bytes: 12 } }),
+    );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+    const payload = {
+      filename: 'voice.m4a',
+      content_type: 'audio/mp4',
+      data_base64: 'YXVkaW8=',
+      duration_ms: 1600,
+      chunk_count: 1,
+      language: 'zh-CN',
+    };
+
+    await api.transcribeVoice(payload, 'csrf-token');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://agenthub.example.com/api/voice/transcribe',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
 });
