@@ -4303,7 +4303,7 @@ describe('AgentHub console', () => {
     expect(screen.getByText(/节点：1\/1 在线/)).toBeInTheDocument();
   });
 
-  it('checks and downloads the production APK from the mobile Me update center', async () => {
+  it('separates the WebView update from the native Android install', async () => {
     const downloadLatestApk = vi.fn().mockReturnValue('enqueued:42');
     vi.stubGlobal('AgentHubAndroid', {
       appVersionName: () => '1.4',
@@ -4349,6 +4349,12 @@ describe('AgentHub console', () => {
           'last-modified': 'Sun, 10 May 2026 06:23:42 GMT',
         });
       }
+      if (url.endsWith('/downloads/agenthub-native-android-release.apk') && init?.method === 'HEAD') {
+        return headResponse({
+          'content-length': '88604672',
+          'last-modified': 'Sun, 10 May 2026 06:25:42 GMT',
+        });
+      }
       if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
       return jsonResponse({}, 404);
     });
@@ -4359,13 +4365,21 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: /我的/ }));
     expect(await screen.findByRole('heading', { name: '设备与更新' })).toBeInTheDocument();
     expect(screen.getByText(/当前 APK：1\.4 \(5\)/)).toBeInTheDocument();
+    expect(screen.getByText('当前 WebView 客户端')).toBeInTheDocument();
+    expect(screen.getByText('原生 Workbench 客户端')).toBeInTheDocument();
+    expect(screen.getByText('会作为独立 App 安装，可与当前版共存')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '检查更新' }));
-    expect(await within(screen.getByLabelText('我的')).findByText(/线上 APK：4\.0 MB/)).toBeInTheDocument();
+    expect(await within(screen.getByLabelText('我的')).findByText(/线上 APK：85 MB/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '下载最新 APK' }));
+    fireEvent.click(screen.getByRole('button', { name: '更新当前版' }));
     await waitFor(() => {
       expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), 'agenthub-android-release.apk');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '安装原生版' }));
+    await waitFor(() => {
+      expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-native-android-release\.apk$/), 'agenthub-native-android-release.apk');
     });
     expect(await screen.findByText(/APK 下载已开始/)).toBeInTheDocument();
   });
@@ -4432,13 +4446,13 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: /我的/ }));
     expect(await screen.findByRole('heading', { name: '设备与更新' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '下载最新 APK' }));
+    fireEvent.click(screen.getByRole('button', { name: '更新当前版' }));
 
     await waitFor(() => {
       expect(downloadLatestApk).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), 'agenthub-android-release.apk');
       expect(open).toHaveBeenCalledWith(expect.stringMatching(/\/downloads\/agenthub-android-release\.apk$/), '_blank', 'noopener,noreferrer');
     });
-    expect(await screen.findByText(/原生下载启动失败，已打开 APK 下载地址/)).toBeInTheDocument();
+    expect(await screen.findByText(/系统下载启动失败，已打开 APK 下载地址/)).toBeInTheDocument();
   });
 
   it('lets users switch the mobile appearance from the Me pane', async () => {

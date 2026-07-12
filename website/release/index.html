@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AgentHub v0.1.1 | Release Notes</title>
+    <title>AgentHub v1.0.0 | Release Notes</title>
     <meta
       name="description"
-      content="AgentHub v0.1.1 release notes: self-hosted AI agent control plane with Local / Docker / VM install paths, Android APK, Windows Desktop, and Windows/Linux worker bundles."
+      content="AgentHub v1.0.0 release notes: self-hosted AI agent control plane with Workbench, WebView and native Android clients, desktop clients, and cross-platform workers."
     />
     <link rel="icon" type="image/svg+xml" href="/assets/agenthub-mark.svg" />
     <link rel="stylesheet" href="/styles.css" />
@@ -18,17 +18,17 @@
           <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
           <div>
             <div class="eyebrow">Public Release Notes</div>
-            <h1>AgentHub v0.1.1</h1>
+            <h1>AgentHub v1.0.0</h1>
           </div>
         </div>
         <p class="lead">
-          这是第一轮公开可用版本。重点不是再加一层概念，而是把 self-host 控制面、worker 接入、Android、Windows Desktop、Docker 和 VM 这几条真实链路收口到能下载、能安装、能 smoke、能复现。
+          AgentHub 1.0 保留 Session 控制台并加入 Workbench，统一发布 Web、两条 Android 渠道、Windows / macOS Desktop，以及 Windows / Linux / macOS worker。
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="/download/">下载当前版本</a>
           <a class="button" href="/install/">安装模式选择页</a>
           <a class="button" href="/press/">分享文案</a>
-          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/tag/v0.1.1">GitHub Release</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/tag/v1.0.0">GitHub Release</a>
         </div>
       </header>
 
@@ -44,7 +44,7 @@
             </article>
             <article class="card">
               <h3>多端入口</h3>
-              <p>Web、Android APK、Windows Desktop 都能接入同一个 self-host server，worker 继续跑在你自己的机器上。</p>
+              <p>Web、Android、Windows / macOS Desktop 都能接入同一个 self-host server，worker 继续跑在你自己的机器上。</p>
             </article>
             <article class="card">
               <h3>公开下载面</h3>
@@ -52,7 +52,7 @@
             </article>
             <article class="card">
               <h3>worker 安装收敛</h3>
-              <p>优先走 `npx agenthub-worker`，手工 bundle 路径继续保留，Windows / Linux 都覆盖。</p>
+              <p>优先走 `npx agenthub-worker`，手工 bundle 路径继续保留，Windows / Linux / macOS 都覆盖。</p>
             </article>
           </div>
         </section>
@@ -73,29 +73,34 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-android-release.apk"><code>agenthub-android-release.apk</code></a></td>
-                  <td>Android 客户端</td>
-                  <td><code>cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-android-release.apk"><code>agenthub-android-release.apk</code></a></td>
+                  <td>WebView 覆盖更新（<code>xin.ifix.agenthub</code>）</td>
+                  <td><code>bd77640e9cffc38cf5ce4728c0ddbe74b06c65d4c6155c793abfe4638137dc50</code></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/AgentHub-0.1.1-x64.exe"><code>AgentHub-0.1.1-x64.exe</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-native-android-release.apk"><code>agenthub-native-android-release.apk</code></a></td>
+                  <td>原生 Workbench（<code>dev.myagenthub.mobile</code>），可与当前版共存</td>
+                  <td><code>4ff07d1e2172c1589b610238669e67216efb9cfdfc0ed0adad328b154b3495f7</code></td>
+                </tr>
+                <tr>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/AgentHub-1.0.0-x64.exe"><code>AgentHub-1.0.0-x64.exe</code></a></td>
                   <td>Windows Desktop</td>
-                  <td><code>1ae212f4f43d2348287d369ec1c219e69dfb663205e12003d34e26347f16c140</code></td>
+                  <td><code>a198c4358f989d93841b98db90af7d8cd1bb23646b6ac4f85784d6e1cb077604</code></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-worker-windows.zip"><code>agenthub-worker-windows.zip</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-worker-windows.zip"><code>agenthub-worker-windows.zip</code></a></td>
                   <td>Windows worker bundle</td>
-                  <td><code>4d87b3348aa456386405c28813da2c2d7aa9338257b8f0835a14ce05df2facfb</code></td>
+                  <td><code>b0697922aa81819779dba15763a6dc452c80dfd7d4ddd8d2d7276448e62b664a</code></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/agenthub-worker-linux.tar.gz"><code>agenthub-worker-linux.tar.gz</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-worker-linux.tar.gz"><code>agenthub-worker-linux.tar.gz</code></a></td>
                   <td>Linux worker bundle</td>
-                  <td><code>c99952260556cb40b3277629818ec88600d7f03ba564c9e14ce195f29070c433</code></td>
+                  <td><code>03f11cd54e19bd688dc27be06bef3d9a28ae41ffe3f478e10eb4a0432d3b2297</code></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/SHA256SUMS"><code>SHA256SUMS</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                   <td>全量校验文件</td>
-                  <td><code>937fd0de76ea1cd5f5c31a1bf5542f9f11c5cafed67011d63870e93c9a8490c1</code></td>
+                  <td>以 Release 中下载的文本内容为准</td>
                 </tr>
               </tbody>
             </table>

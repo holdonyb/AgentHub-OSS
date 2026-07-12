@@ -6,7 +6,7 @@
     <title>AgentHub 下载 | APK / Windows / Worker Bundles</title>
     <meta
       name="description"
-      content="从 AgentHub 官网下载 Android APK、Windows Desktop、Windows/Linux worker bundle 和 SHA256 校验文件。"
+      content="从 AgentHub 官网下载 WebView 与原生 Android APK、Windows Desktop、跨平台 worker bundle 和 SHA256 校验文件。"
     />
     <link rel="icon" type="image/svg+xml" href="/assets/agenthub-mark.svg" />
     <link rel="stylesheet" href="/styles.css" />
@@ -22,7 +22,7 @@
           </div>
         </div>
         <p class="lead">
-          这里提供公开 release 的稳定入口。Android、Windows Desktop、Windows/Linux worker bundle 和 SHA256
+          这里提供公开 release 的稳定入口。Android、Windows Desktop、跨平台 worker bundle 和 SHA256
           校验文件都从这里分发；真正的登录和数据仍然走你自己 self-host 的 AgentHub server。
         </p>
         <div class="hero-actions">
@@ -38,12 +38,12 @@
         <section class="band">
           <div class="section-copy">
             <h2>当前公开版本</h2>
-            <p>当前官网默认指向公开稳定版 <strong>v0.1.1</strong>。这个版本的重点不是“新功能炫技”，而是把 self-host、worker、Web/Android/Windows Desktop 这几条真实链路收口到能安装、能验证、能复现的状态。</p>
+            <p>当前官网默认指向公开稳定版 <strong>v1.0.0</strong>。这一版同时保留可覆盖更新的 WebView 客户端，并提供面向 Workbench 的原生 Android 客户端。</p>
           </div>
           <div class="hero-grid">
             <div class="stat">
               <div class="stat-label">当前版本</div>
-              <div class="stat-value">v0.1.1</div>
+              <div class="stat-value">v1.0.0</div>
             </div>
             <div class="stat">
               <div class="stat-label">推荐起点</div>
@@ -63,21 +63,30 @@
           </div>
           <div class="download-grid">
             <article class="download-card">
-              <div class="download-kicker">Android</div>
-              <h3>APK 客户端</h3>
-              <p>用于手机上查看 session、发回复、处理审批、收通知。首启先填写你自己的 AgentHub server URL。</p>
-              <div class="download-meta">文件：<code>agenthub-android-release.apk</code> · SHA256: <code>cced2a8713d1cd8fa3626e463077457747d6b6ec2f50c21d78c68b8ea78c4ca4</code></div>
+              <div class="download-kicker">Android · WebView</div>
+              <h3>当前 WebView 客户端</h3>
+              <p>包名 <code>xin.ifix.agenthub</code>。使用现有签名时可覆盖更新已经安装的 WebView 版，保留原有使用路径。</p>
+              <div class="download-meta">文件：<code>agenthub-android-release.apk</code> · SHA256: <code>bd77640e9cffc38cf5ce4728c0ddbe74b06c65d4c6155c793abfe4638137dc50</code></div>
               <div class="hero-actions">
-                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-android-release.apk">下载 APK</a>
+                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-android-release.apk">更新当前版</a>
+              </div>
+            </article>
+            <article class="download-card">
+              <div class="download-kicker">Android · Native</div>
+              <h3>原生 Workbench 客户端</h3>
+              <p>包名 <code>dev.myagenthub.mobile</code>。会作为独立 App 安装，可与当前版共存；首次启动需要配置自己的 server URL 并登录。</p>
+              <div class="download-meta">文件：<code>agenthub-native-android-release.apk</code> · SHA256: <code>4ff07d1e2172c1589b610238669e67216efb9cfdfc0ed0adad328b154b3495f7</code></div>
+              <div class="hero-actions">
+                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-native-android-release.apk">安装原生版</a>
               </div>
             </article>
             <article class="download-card">
               <div class="download-kicker">Windows Desktop</div>
               <h3>桌面客户端</h3>
-              <p>用于 Windows 原生桌面接入。同样首启先填写 server URL，再进入登录页。这里直接给当前版本的 EXE；下一个版本发布后会在官网 release 页面同步更新。</p>
-              <div class="download-meta">文件：<code>AgentHub-0.1.1-x64.exe</code> · SHA256: <code>1ae212f4f43d2348287d369ec1c219e69dfb663205e12003d34e26347f16c140</code></div>
+              <p>用于 Windows 原生桌面接入。同样首启先填写 server URL，再进入登录页。</p>
+              <div class="download-meta">文件：<code>AgentHub-1.0.0-x64.exe</code> · SHA256: <code>a198c4358f989d93841b98db90af7d8cd1bb23646b6ac4f85784d6e1cb077604</code></div>
               <div class="hero-actions">
-                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v0.1.1/AgentHub-0.1.1-x64.exe">下载 EXE</a>
+                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/AgentHub-1.0.0-x64.exe">下载 EXE</a>
               </div>
             </article>
           </div>
@@ -100,9 +109,9 @@ npx agenthub-worker install --api-url https://agenthub.example.com --enrollment-
               <div class="download-kicker">Manual bundles</div>
               <h3>Windows / Linux / macOS worker bundle</h3>
               <p>适合你要把 worker 资产单独留档、手工分发，或者在没有 npm 的环境里解压安装。</p>
-              <div class="download-meta">Windows SHA256: <code>4d87b3348aa456386405c28813da2c2d7aa9338257b8f0835a14ce05df2facfb</code></div>
-              <div class="download-meta">Linux SHA256: <code>c99952260556cb40b3277629818ec88600d7f03ba564c9e14ce195f29070c433</code></div>
-              <div class="download-meta">macOS SHA256：以同一 Release 的 <code>worker-bundles-manifest.json</code> 为准</div>
+              <div class="download-meta">Windows SHA256: <code>b0697922aa81819779dba15763a6dc452c80dfd7d4ddd8d2d7276448e62b664a</code></div>
+              <div class="download-meta">Linux SHA256: <code>03f11cd54e19bd688dc27be06bef3d9a28ae41ffe3f478e10eb4a0432d3b2297</code></div>
+              <div class="download-meta">macOS SHA256: <code>7107f9c27298da87351b86da01aeb530f97744975054b73a67fae2062b311226</code></div>
               <div class="stack-links">
                 <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-windows.zip">下载 Windows worker bundle</a>
                 <a class="link-card" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-linux.tar.gz">下载 Linux worker bundle</a>
