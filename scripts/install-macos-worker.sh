@@ -191,10 +191,15 @@ for root in "${workspace_roots[@]}"; do
 done
 workspace_roots=("${normalized_workspace_roots[@]}")
 normalized_session_roots=()
-for root in "${session_roots[@]}"; do
-  normalized_session_roots+=("$(normalize_existing_root "Session root" "$root")")
-done
-session_roots=("${normalized_session_roots[@]}")
+if [[ -n "${session_roots[0]+set}" ]]; then
+  for root in "${session_roots[@]}"; do
+    normalized_session_roots+=("$(normalize_existing_root "Session root" "$root")")
+  done
+fi
+session_roots=()
+if [[ -n "${normalized_session_roots[0]+set}" ]]; then
+  session_roots=("${normalized_session_roots[@]}")
+fi
 
 bundle_paths=(
   "packages/protocol/agenthub_protocol"
@@ -371,7 +376,10 @@ start_path="$resolved_repo_root/scripts/start-macos-worker.sh"
 chmod +x "$resolved_repo_root/scripts/"*"macos-worker.sh"
 
 workspace_root_value="$(join_by_pathsep "${workspace_roots[@]}")"
-session_root_value="$(join_by_pathsep "${session_roots[@]}")"
+session_root_value=""
+if [[ -n "${session_roots[0]+set}" ]]; then
+  session_root_value="$(join_by_pathsep "${session_roots[@]}")"
+fi
 env_temp_path="$runtime_root/.macos-worker.env.$$"
 {
   write_env AGENTHUB_API_URL "$api_url"

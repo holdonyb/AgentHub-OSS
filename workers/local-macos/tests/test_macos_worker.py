@@ -9,6 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MAIN_PATH = REPO_ROOT / "workers" / "local-macos" / "agenthub_macos_worker" / "main.py"
+INSTALL_SCRIPT_PATH = REPO_ROOT / "scripts" / "install-macos-worker.sh"
 
 
 def _load_main_module():
@@ -18,6 +19,14 @@ def _load_main_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_macos_installer_accepts_an_empty_session_root_list_under_nounset() -> None:
+    source = INSTALL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'if [[ -n "${session_roots[0]+set}" ]]; then' in source
+    assert 'if [[ -n "${normalized_session_roots[0]+set}" ]]; then' in source
+    assert 'if [[ -n "${session_roots[0]+set}" ]]; then\n  session_root_value=' in source
 
 
 def test_macos_worker_requires_explicit_workspace_roots(monkeypatch: pytest.MonkeyPatch) -> None:
