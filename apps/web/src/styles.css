@@ -4587,10 +4587,21 @@ textarea:disabled {
     max-height: calc(100dvh - env(safe-area-inset-top, 0px));
     border-radius: 8px 8px 0 0;
     padding: 14px;
+    overscroll-behavior: contain;
+  }
+
+  .task-composer .dialog-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: -14px -14px 0;
+    padding: 14px;
+    background: var(--ah-surface);
   }
 
   .task-composer-fields {
     grid-template-columns: 1fr;
+    padding-bottom: 8px;
   }
 
   .task-field-wide {
@@ -4599,7 +4610,8 @@ textarea:disabled {
 
   .task-composer-actions {
     position: sticky;
-    bottom: -14px;
+    bottom: 0;
+    z-index: 2;
     margin: 0 -14px -14px;
     border-top: 1px solid var(--ah-border-soft);
     background: var(--ah-surface);

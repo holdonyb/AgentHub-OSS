@@ -94,6 +94,9 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).not.toMatch(/\.artifact-card > div\s*{[^}]*display:\s*flex/s);
     expect(styles).toMatch(/\.task-composer \.dialog-head \.icon-button\s*{[^}]*background:\s*var\(--ah-surface-soft\)[^}]*color:\s*var\(--ah-text\)/s);
     expect(styles).toMatch(/\.task-composer-actions button\s*{[^}]*min-height:\s*38px[^}]*padding:\s*0 14px/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)\s*{[\s\S]*?\.task-composer \.dialog-head\s*{[^}]*position:\s*sticky[^}]*top:\s*0[^}]*z-index:\s*2/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)\s*{[\s\S]*?\.task-composer-actions\s*{[^}]*position:\s*sticky[^}]*bottom:\s*0[^}]*z-index:\s*2/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)\s*{[\s\S]*?\.task-composer-fields\s*{[^}]*padding-bottom:\s*8px/s);
   });
 
   it('keeps desktop dark chrome from mixing in light topbar and filter controls', () => {
