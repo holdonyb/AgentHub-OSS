@@ -40,10 +40,10 @@ export function resolveStartupConsoleTarget({
   storedUrl?: string | null;
 } = {}): StartupConsoleTarget {
   const candidates: Array<[StartupConsoleSource, string | null | undefined, boolean]> = [
-    ['stored', storedUrl, false],
     ['argv', argvUrl(argv), true],
     ['desktop_env', env.AGENTHUB_DESKTOP_URL, true],
     ['public_env', env.AGENTHUB_PUBLIC_BASE_URL, true],
+    ['stored', storedUrl, false],
   ];
 
   for (const [source, value, locked] of candidates) {
