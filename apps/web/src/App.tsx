@@ -135,8 +135,19 @@ const PROCESSED_BROWSER_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   autoGainControl: true,
 };
 const AGENTHUB_TRUNCATION_MARKER = '[AgentHub truncated this item]';
-const APK_DOWNLOAD_PATH = '/downloads/agenthub-android-release.apk';
-const APK_DOWNLOAD_FILENAME = 'agenthub-android-release.apk';
+const ANDROID_DOWNLOAD_CHANNELS = {
+  webview: {
+    path: '/downloads/agenthub-android-release.apk',
+    filename: 'agenthub-android-release.apk',
+    installMode: 'update',
+  },
+  native: {
+    path: '/downloads/agenthub-native-android-release.apk',
+    filename: 'agenthub-native-android-release.apk',
+    installMode: 'side-by-side',
+  },
+} as const;
+type AndroidDownloadChannelKey = keyof typeof ANDROID_DOWNLOAD_CHANNELS;
 const THEME_STORAGE_KEY = 'agenthub.theme';
 const APP_MODE_STORAGE_KEY = 'agenthub.appMode';
 const LOCALE_STORAGE_KEY = 'agenthub.locale';
@@ -304,6 +315,8 @@ interface VoiceTurnResponse {
   status: 'ok' | 'partial' | 'failed';
   actions: Array<Record<string, unknown>>;
 }
+
+type ApkUpdateStates = Record<AndroidDownloadChannelKey, ApkUpdateState>;
 
 function AgentHubBrandMark({ size = 22, className = '' }: { size?: number; className?: string }) {
   const gradientId = `agenthub-brand-mark-${useId().replace(/:/g, '')}`;
@@ -1632,9 +1645,10 @@ function nativeAppVersion(): NativeAppVersion | null {
   }
 }
 
-function apkDownloadUrl() {
-  if (typeof window === 'undefined') return APK_DOWNLOAD_PATH;
-  return new URL(APK_DOWNLOAD_PATH, window.location.origin).toString();
+function apkDownloadUrl(channel: AndroidDownloadChannelKey) {
+  const path = ANDROID_DOWNLOAD_CHANNELS[channel].path;
+  if (typeof window === 'undefined') return path;
+  return new URL(path, window.location.origin).toString();
 }
 
 function apkSizeFromHeaders(headers: Headers) {
@@ -3172,7 +3186,10 @@ function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const [notificationPermission, setNotificationPermission] = useState<NotificationState>(() => notificationState());
   const [nativeVersion] = useState<NativeAppVersion | null>(() => nativeAppVersion());
-  const [apkUpdate, setApkUpdate] = useState<ApkUpdateState>({ status: 'idle' });
+  const [apkUpdates, setApkUpdates] = useState<ApkUpdateStates>({
+    webview: { status: 'idle' },
+    native: { status: 'idle' },
+  });
   const [notificationInboxOpen, setNotificationInboxOpen] = useState(false);
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(() => readStoredNotificationIds());
   const [dismissedPermissionToastIds, setDismissedPermissionToastIds] = useState<Set<string>>(() => new Set());
@@ -4980,28 +4997,34 @@ function App() {
   }
 
   async function handleCheckApkUpdate() {
-    setApkUpdate({ status: 'checking' });
-    try {
-      const url = apkDownloadUrl();
-      let response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-      if (!response.ok) {
-        response = await fetch(url, {
-          method: 'GET',
-          headers: { Range: 'bytes=0-0' },
-          cache: 'no-store',
-        });
-      }
-      if (!response.ok) throw new Error(String(response.status));
-      setApkUpdate({
-        status: 'ready',
-        sizeBytes: apkSizeFromHeaders(response.headers),
-        lastModified: response.headers.get('last-modified') ?? undefined,
-      });
-      setNotice('已检查最新 APK');
-    } catch (error) {
-      setApkUpdate({ status: 'failed', error: errorMessage(error) });
-      setNotice(`检查 APK 失败：${errorMessage(error)}`);
-    }
+    setApkUpdates({ webview: { status: 'checking' }, native: { status: 'checking' } });
+    const entries = await Promise.all(
+      (Object.keys(ANDROID_DOWNLOAD_CHANNELS) as AndroidDownloadChannelKey[]).map(async (channel) => {
+        try {
+          const url = apkDownloadUrl(channel);
+          let response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+          if (!response.ok) {
+            response = await fetch(url, {
+              method: 'GET',
+              headers: { Range: 'bytes=0-0' },
+              cache: 'no-store',
+            });
+          }
+          if (!response.ok) throw new Error(String(response.status));
+          return [channel, {
+            status: 'ready',
+            sizeBytes: apkSizeFromHeaders(response.headers),
+            lastModified: response.headers.get('last-modified') ?? undefined,
+          } satisfies ApkUpdateState] as const;
+        } catch (error) {
+          return [channel, { status: 'failed', error: errorMessage(error) } satisfies ApkUpdateState] as const;
+        }
+      }),
+    );
+    const nextUpdates = Object.fromEntries(entries) as unknown as ApkUpdateStates;
+    setApkUpdates(nextUpdates);
+    const failures = entries.filter(([, update]) => update.status === 'failed');
+    setNotice(failures.length === 0 ? '已检查 Android 安装包' : `部分安装包检查失败：${failures.map(([channel]) => channel).join(', ')}`);
   }
 
   async function patchPreferences(values: Partial<UserPreferences>) {
@@ -5029,16 +5052,17 @@ function App() {
     return payload.worker_runtime_defaults;
   }
 
-  function handleDownloadLatestApk() {
-    const url = apkDownloadUrl();
-    const result = nativeDownloadLatestApk(url, APK_DOWNLOAD_FILENAME);
+  function handleDownloadApk(channel: AndroidDownloadChannelKey) {
+    const descriptor = ANDROID_DOWNLOAD_CHANNELS[channel];
+    const url = apkDownloadUrl(channel);
+    const result = nativeDownloadLatestApk(url, descriptor.filename);
     if (result.startsWith('enqueued:')) {
       setNotice('APK 下载已开始，完成后点系统通知安装');
       return;
     }
     if (result.startsWith('failed:')) {
       window.open(url, '_blank', 'noopener,noreferrer');
-      setNotice(`原生下载启动失败，已打开 APK 下载地址：${result.replace(/^failed:/, '')}`);
+      setNotice(`系统下载启动失败，已打开 APK 下载地址：${result.replace(/^failed:/, '')}`);
       return;
     }
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -7818,8 +7842,8 @@ function App() {
             workers={workers}
             lastSyncedAt={lastSyncedAt}
             nativeVersion={nativeVersion}
-            apkUpdate={apkUpdate}
-            apkUrl={apkDownloadUrl()}
+            apkUpdates={apkUpdates}
+            apkUrls={{ webview: apkDownloadUrl('webview'), native: apkDownloadUrl('native') }}
             locale={locale}
             preferences={settings.preferences}
             options={settings.options}
@@ -7833,8 +7857,8 @@ function App() {
             onNotificationSetup={() => void handleNotificationSetup()}
             onRestartNotificationGuard={handleRestartNotificationGuard}
             onCheckApkUpdate={() => void handleCheckApkUpdate()}
-            onDownloadLatestApk={handleDownloadLatestApk}
-            onCopyApkUrl={() => void copyTextToClipboard(apkDownloadUrl(), 'APK 地址已复制')}
+            onDownloadApk={handleDownloadApk}
+            onCopyApkUrl={(channel) => void copyTextToClipboard(apkDownloadUrl(channel), 'APK 地址已复制')}
             onLogout={handleLogout}
           />
         )}
@@ -9051,8 +9075,8 @@ function MobileMePane({
   workers,
   lastSyncedAt,
   nativeVersion,
-  apkUpdate,
-  apkUrl,
+  apkUpdates,
+  apkUrls,
   locale,
   preferences,
   options,
@@ -9066,7 +9090,7 @@ function MobileMePane({
   onNotificationSetup,
   onRestartNotificationGuard,
   onCheckApkUpdate,
-  onDownloadLatestApk,
+  onDownloadApk,
   onCopyApkUrl,
   onLogout,
 }: {
@@ -9077,8 +9101,8 @@ function MobileMePane({
   workers: Worker[];
   lastSyncedAt: string;
   nativeVersion: NativeAppVersion | null;
-  apkUpdate: ApkUpdateState;
-  apkUrl: string;
+  apkUpdates: ApkUpdateStates;
+  apkUrls: Record<AndroidDownloadChannelKey, string>;
   locale: LocaleCode;
   preferences: UserPreferences;
   options: AgentHubSettings['options'];
@@ -9092,8 +9116,8 @@ function MobileMePane({
   onNotificationSetup: () => void;
   onRestartNotificationGuard: () => void;
   onCheckApkUpdate: () => void;
-  onDownloadLatestApk: () => void;
-  onCopyApkUrl: () => void;
+  onDownloadApk: (channel: AndroidDownloadChannelKey) => void;
+  onCopyApkUrl: (channel: AndroidDownloadChannelKey) => void;
   onLogout: () => void;
 }) {
   const onlineWorkers = workers.filter((worker) => worker.status === 'online').length;
@@ -9102,7 +9126,7 @@ function MobileMePane({
   const nativeVersionLabel = nativeVersion
     ? t(locale, 'nativeVersion', { version: `${nativeVersion.name}${nativeVersion.code ? ` (${nativeVersion.code})` : ''}` })
     : t(locale, 'webConsoleEnv');
-  const updateLabel =
+  const updateLabel = (apkUpdate: ApkUpdateState) =>
     apkUpdate.status === 'checking'
       ? t(locale, 'onlineApkChecking')
       : apkUpdate.status === 'ready'
@@ -9120,25 +9144,50 @@ function MobileMePane({
         <Smartphone size={22} />
       </div>
 
-      <div className="mobile-panel-card me-update-card">
-        <div>
-          <strong>{nativeVersionLabel}</strong>
-          <p>{updateLabel}</p>
-          <small>{apkUrl}</small>
+      <div className="me-download-channels">
+        <div className="mobile-panel-card me-update-card">
+          <div className="me-download-card-head">
+            <strong>{pickLocale(locale, '当前 WebView 客户端', 'Current WebView client')}</strong>
+            <span>{pickLocale(locale, '兼容更新', 'Compatible update')}</span>
+          </div>
+          <p>{nativeVersionLabel}</p>
+          <p>{updateLabel(apkUpdates.webview)}</p>
+          <small>{apkUrls.webview}</small>
+          <div className="me-action-row">
+            <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking'}>
+              <RefreshCw size={13} />
+              {apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
+            </button>
+            <button type="button" className="message-action-button primary-inline-action" onClick={() => onDownloadApk('webview')}>
+              <Download size={13} />
+              {pickLocale(locale, '更新当前版', 'Update current app')}
+            </button>
+            <button type="button" className="message-action-button" onClick={() => onCopyApkUrl('webview')}>
+              <Copy size={13} />
+              {t(locale, 'copyAddress')}
+            </button>
+          </div>
         </div>
-        <div className="me-action-row">
-          <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdate.status === 'checking'}>
-            <RefreshCw size={13} />
-            {apkUpdate.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
-          </button>
-          <button type="button" className="message-action-button primary-inline-action" onClick={onDownloadLatestApk}>
-            <Download size={13} />
-            {t(locale, 'downloadLatestApk')}
-          </button>
-          <button type="button" className="message-action-button" onClick={onCopyApkUrl}>
-            <Copy size={13} />
-            {t(locale, 'copyAddress')}
-          </button>
+
+        <div className="mobile-panel-card me-update-card me-native-download-card">
+          <div className="me-download-card-head">
+            <strong>{pickLocale(locale, '原生 Workbench 客户端', 'Native Workbench client')}</strong>
+            <span>{pickLocale(locale, '独立安装', 'Separate app')}</span>
+          </div>
+          <p>{pickLocale(locale, '面向任务、文件和移动 Workbench 的原生体验', 'Native tasks, files, and mobile Workbench experience')}</p>
+          <p>{updateLabel(apkUpdates.native)}</p>
+          <p className="me-install-note">{pickLocale(locale, '会作为独立 App 安装，可与当前版共存', 'Installs as a separate app and can coexist with the current app')}</p>
+          <small>{apkUrls.native}</small>
+          <div className="me-action-row">
+            <button type="button" className="message-action-button primary-inline-action" onClick={() => onDownloadApk('native')}>
+              <Download size={13} />
+              {pickLocale(locale, '安装原生版', 'Install native app')}
+            </button>
+            <button type="button" className="message-action-button" onClick={() => onCopyApkUrl('native')}>
+              <Copy size={13} />
+              {t(locale, 'copyAddress')}
+            </button>
+          </div>
         </div>
       </div>
 
