@@ -2,7 +2,7 @@
   "expo": {
     "name": "AgentHub",
     "slug": "agenthub-native",
-    "version": "0.1.4",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "agenthub-native",
@@ -13,6 +13,7 @@
       "ios"
     ],
     "plugins": [
+      "./plugins/withAgentHubAndroidSigning.cjs",
       "expo-secure-store",
       [
         "expo-image-picker",
@@ -40,6 +41,7 @@
     ],
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "1",
       "bundleIdentifier": "dev.myagenthub.mobile",
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -55,6 +57,7 @@
     },
     "android": {
       "package": "dev.myagenthub.mobile",
+      "versionCode": 1,
       "predictiveBackGestureEnabled": true
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/mobile-native",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -8,6 +8,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "prebuild": "expo prebuild --clean",
+    "build:android:debug": "node scripts/build-android-debug.mjs",
+    "build:android:release": "node scripts/build-android-release.mjs",
+    "build:ios:simulator": "node scripts/build-ios-simulator.mjs",
     "test": "jest --runInBand",
     "typecheck": "tsc --noEmit"
   },
@@ -15,7 +18,7 @@
     "node": ">=20.19.4"
   },
   "dependencies": {
-    "@agenthub/client-core": "0.1.4",
+    "@agenthub/client-core": "1.0.0",
     "@expo/vector-icons": "^15.0.2",
     "@react-navigation/bottom-tabs": "^7.18.8",
     "@react-navigation/native": "^7.3.8",
@@ -36,6 +39,7 @@
     "react-native-screens": "4.25.2"
   },
   "devDependencies": {
+    "@expo/config-plugins": "57.0.3",
     "@react-native/jest-preset": "0.86.0",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",

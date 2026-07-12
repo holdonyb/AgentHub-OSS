@@ -1,6 +1,6 @@
 {
   "name": "agenthub",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -26,9 +26,13 @@
     "mobile:native:test": "npm --workspace @agenthub/mobile-native run test",
     "mobile:native:typecheck": "npm --workspace @agenthub/mobile-native run typecheck",
     "mobile:native:prebuild": "npm --workspace @agenthub/mobile-native run prebuild",
+    "mobile:native:build:android:debug": "npm --workspace @agenthub/mobile-native run build:android:debug",
+    "mobile:native:build:android": "npm --workspace @agenthub/mobile-native run build:android:release",
+    "mobile:native:build:ios": "npm --workspace @agenthub/mobile-native run build:ios:simulator",
     "worker:cli:test": "npm --workspace agenthub-worker run test -- --run",
     "client:core:test": "npm --workspace @agenthub/client-core run test -- --run",
-    "worker:version:check": "node scripts/check-worker-package-version.mjs"
+    "worker:version:check": "node scripts/check-worker-package-version.mjs",
+    "release:version:check": "node scripts/check-release-version.mjs"
   },
   "workspaces": [
     "apps/web",

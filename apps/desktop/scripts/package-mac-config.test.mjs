@@ -16,7 +16,7 @@ describe('package-mac-config', () => {
       '--config.mac.hardenedRuntime=false',
       '--config.mac.notarize=false',
     ]);
-    expect(macArtifactName('0.1.4', 'arm64', 'dmg')).toBe('AgentHub-0.1.4-macos-arm64.dmg');
+    expect(macArtifactName('1.0.0', 'arm64', 'dmg')).toBe('AgentHub-1.0.0-macos-arm64.dmg');
   });
 
   it('does not disable signing when Apple credentials are supplied', () => {
@@ -52,11 +52,15 @@ describe('package-mac-config', () => {
     expect(workflow).toContain('build-macos-desktop:');
     expect(workflow).toContain('runs-on: macos-latest');
     expect(workflow).toContain('npm run desktop:package:mac');
+    expect(workflow).toContain('npm run mobile:native:build:ios');
     expect(workflow).toContain('name: agenthub-desktop-macos');
     expect(workflow).toContain('- build-macos-desktop');
     expect(workflow).toContain('CSC_LINK: ${{ secrets.AGENTHUB_MACOS_CSC_LINK }}');
     expect(workflow).toContain('CSC_KEY_PASSWORD: ${{ secrets.AGENTHUB_MACOS_CSC_KEY_PASSWORD }}');
     expect(workflow).toContain('APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.AGENTHUB_APPLE_APP_SPECIFIC_PASSWORD }}');
     expect(workflow).not.toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'");
+
+    const ciWorkflow = readFileSync(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+    expect(ciWorkflow).toContain('npm run mobile:native:build:ios');
   });
 });

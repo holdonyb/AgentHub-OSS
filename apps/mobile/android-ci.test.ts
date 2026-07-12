@@ -7,8 +7,14 @@ describe('Android APK GitHub Actions workflow', () => {
       new URL('../../.github/workflows/android-apk.yml', import.meta.url),
       'utf-8',
     );
+    const ciWorkflow = readFileSync(
+      new URL('../../.github/workflows/ci.yml', import.meta.url),
+      'utf-8',
+    );
 
     expect(workflow).toContain("java-version: '21'");
+    expect(ciWorkflow).toContain("java-version: '21'");
+    expect(ciWorkflow).toContain('npm run mobile:native:build:android:debug');
   });
 
   it('requires a persistent signing key for APK artifacts', () => {
@@ -30,15 +36,25 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(workflow).toContain('npm run mobile:build:release');
     expect(workflow).toContain('Build signed debug APK');
     expect(workflow).toContain('Upload signed APKs');
+    expect(workflow).toContain('npm run mobile:native:test');
+    expect(workflow).toContain('npm run mobile:native:typecheck');
+    expect(workflow).toContain('npm run mobile:native:build:android');
     expect(workflow).toContain('apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk');
+    expect(workflow).toContain('apps/mobile-native/android/app/build/outputs/apk/release/app-release.apk');
+    expect(workflow).toContain('apps/mobile-native/android/app/build/outputs/bundle/release/app-release.aab');
     expect(releaseWorkflow).toContain("name: Release");
     expect(releaseWorkflow).toContain('AGENTHUB_ANDROID_KEYSTORE_BASE64');
     expect(releaseWorkflow).toContain('Decode Android signing key');
     expect(releaseWorkflow).toContain('agenthub-android-release.apk');
+    expect(releaseWorkflow).toContain('npm run mobile:native:test');
+    expect(releaseWorkflow).toContain('npm run mobile:native:typecheck');
+    expect(releaseWorkflow).toContain('npm run mobile:native:build:android');
+    expect(releaseWorkflow).toContain('agenthub-native-android-release.apk');
+    expect(releaseWorkflow).toContain('agenthub-native-android-release.aab');
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
-    expect(buildGradle).toContain('versionCode 18');
-    expect(buildGradle).toContain('versionName "0.1.4"');
+    expect(buildGradle).toContain('versionCode 19');
+    expect(buildGradle).toContain('versionName "1.0.0"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);

@@ -13,6 +13,7 @@ jobs:
   build-web-mobile-workers:
     runs-on: ubuntu-latest
     env:
+      AGENTHUB_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
       AGENTHUB_ANDROID_KEYSTORE_BASE64: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_BASE64 }}
       AGENTHUB_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_PASSWORD }}
       AGENTHUB_ANDROID_KEY_ALIAS: ${{ secrets.AGENTHUB_ANDROID_KEY_ALIAS }}
@@ -47,12 +48,17 @@ jobs:
           python -m pip install -r apps/api/requirements.txt
           npm ci
 
+      - name: Verify release version and tag
+        run: npm run release:version:check
+
       - name: Verify public export
         run: |
           python scripts/audit-public-export.py
           python -m pytest apps/api/tests -q
           npm run web:test
           npm run mobile:test
+          npm run mobile:native:test
+          npm run mobile:native:typecheck
 
       - name: Build web console
         run: npm run web:build
@@ -70,6 +76,9 @@ jobs:
       - name: Build Android APK
         run: npm run mobile:build:release
 
+      - name: Build React Native Android APK and bundle
+        run: npm run mobile:native:build:android
+
       - name: Build worker bundles
         run: python scripts/build-worker-bundle.py --output-root dist/release/workers
 
@@ -78,7 +87,9 @@ jobs:
         run: |
           mkdir -p dist/release/android
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk dist/release/android/agenthub-android-release.apk
-          (cd dist/release && sha256sum android/agenthub-android-release.apk workers/* > SHA256SUMS)
+          cp apps/mobile-native/android/app/build/outputs/apk/release/app-release.apk dist/release/android/agenthub-native-android-release.apk
+          cp apps/mobile-native/android/app/build/outputs/bundle/release/app-release.aab dist/release/android/agenthub-native-android-release.aab
+          (cd dist/release && sha256sum android/* workers/* > SHA256SUMS)
 
       - name: Upload Android and worker assets
         uses: actions/upload-artifact@v4
@@ -87,6 +98,8 @@ jobs:
           if-no-files-found: error
           path: |
             dist/release/android/agenthub-android-release.apk
+            dist/release/android/agenthub-native-android-release.apk
+            dist/release/android/agenthub-native-android-release.aab
             dist/release/workers/*
             dist/release/SHA256SUMS
 
@@ -141,6 +154,9 @@ jobs:
 
       - name: Test desktop packaging
         run: npm run desktop:test
+
+      - name: Compile React Native iOS client
+        run: npm run mobile:native:build:ios
 
       - name: Build macOS packages
         run: npm run desktop:package:mac
