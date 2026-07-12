@@ -24,6 +24,7 @@ The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves 
 - Windows and macOS Electron packaging with runtime-configured self-host server selection
 - React Native Android/iOS client source with Sessions, Tasks, Files, Workers, Profile, approvals, image attachments, voice dictation, and native notification deduplication
 - Compatibility Capacitor Android client retained during the 1.0 transition
+- Separate in-product download channels for the compatibility APK (`xin.ifix.agenthub`) and the side-by-side React Native APK (`dev.myagenthub.mobile`)
 - Unified `1.0.0` version checks across root packages, clients, desktop packages, and release tags
 
 ## Verification Evidence
@@ -53,6 +54,13 @@ Fresh GitHub release checks on `2026-07-12`:
 - Windows x64 EXE and macOS arm64/x64 DMG/ZIP packaging: passed
 - GitHub Release: 13 assets published; complete 12-entry `SHA256SUMS` independently verified
 - npm dependency audit: 0 vulnerabilities
+
+Fresh production download checks on `2026-07-13`:
+
+- compatibility APK: HTTP `200`, Android APK MIME, SHA-256 matched the GitHub Release manifest
+- React Native APK: HTTP `200`, Android APK MIME, SHA-256 matched the GitHub Release manifest
+- self-host nginx serves both assets from the public Web build root; private runtime data permissions remain unchanged
+- mobile Web check at `390x844`: both download cards rendered without horizontal overflow
 
 ## Distribution Status
 

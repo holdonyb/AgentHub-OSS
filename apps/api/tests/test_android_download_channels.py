@@ -35,7 +35,7 @@ def test_nginx_serves_android_release_assets_from_fail_closed_exact_locations() 
 
     for filename in ASSETS:
         body = _exact_location(config, f"/downloads/{filename}")
-        assert "root /opt/agenthub/data;" in body
+        assert "root /opt/agenthub/data;" not in body
         assert f"try_files /downloads/{filename} =404;" in body
         assert "Cache-Control" in body
         assert "no-store" in body
@@ -48,6 +48,8 @@ def test_nginx_serves_android_release_assets_from_fail_closed_exact_locations() 
 
     checksum_body = _exact_location(config, "/downloads/SHA256SUMS")
     assert "text/plain" in checksum_body
+
+    assert "root __AGENTHUB_WEB_ROOT__;" in config
 
 
 def test_android_release_sync_script_has_versioned_verified_atomic_contract() -> None:
