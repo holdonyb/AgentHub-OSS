@@ -2,6 +2,7 @@ import path from 'node:path';
 import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, shell } from 'electron';
 import {
   clearStoredServerUrl,
+  normalizeServerUrl,
   readStoredServerUrl,
   resolveStartupConsoleTarget,
   writeStoredServerUrl,
@@ -12,6 +13,7 @@ import {
   isTrustedConsoleNavigation,
   resolveConsoleUrl,
 } from './windowConfig.js';
+import { probeAgentHubServer } from './serverConnection.js';
 
 let mainWindow: BrowserWindow | null = null;
 let islandWindow: BrowserWindow | null = null;
@@ -108,7 +110,7 @@ function setupHtml(): string {
     <form id="form">
       <label for="server">服务器地址</label>
       <input id="server" type="url" placeholder="https://agenthub.example.com" autocomplete="url" autofocus />
-      <button type="submit">继续</button>
+      <button id="submit" type="submit">继续</button>
       <div id="error" class="error"></div>
     </form>
   </main>
@@ -116,11 +118,19 @@ function setupHtml(): string {
     const form = document.getElementById('form');
     const input = document.getElementById('server');
     const error = document.getElementById('error');
+    const submit = document.getElementById('submit');
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       error.textContent = '';
-      const result = await window.agentHubDesktop.saveServerUrl(input.value);
-      if (!result.ok) error.textContent = result.error || '服务器地址不可用';
+      submit.disabled = true;
+      submit.textContent = '正在连接...';
+      try {
+        const result = await window.agentHubDesktop.saveServerUrl(input.value);
+        if (!result.ok) error.textContent = result.error || '服务器地址不可用';
+      } finally {
+        submit.disabled = false;
+        submit.textContent = '继续';
+      }
     });
   </script>
 </body>
@@ -302,10 +312,14 @@ ipcMain.handle('agenthub:getConfig', () => ({
   configLocked,
   requiresSetup: !consoleUrl,
 }));
-ipcMain.handle('agenthub:saveServerUrl', (_event, value: string) => {
+ipcMain.handle('agenthub:saveServerUrl', async (_event, value: string) => {
   try {
     if (configLocked) return { ok: false, error: '当前地址由启动参数或环境变量锁定' };
-    consoleUrl = writeStoredServerUrl(app.getPath('userData'), value);
+    const normalizedUrl = normalizeServerUrl(value);
+    if (!normalizedUrl) return { ok: false, error: '请输入有效的 HTTP 或 HTTPS 地址' };
+    const probe = await probeAgentHubServer(normalizedUrl);
+    if (!probe.ok) return probe;
+    consoleUrl = writeStoredServerUrl(app.getPath('userData'), normalizedUrl);
     configLocked = false;
     configSource = 'stored';
     setupWindow?.close();
