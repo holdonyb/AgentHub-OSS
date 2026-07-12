@@ -6,10 +6,11 @@ AgentHub is a public, self-hosted control plane and workbench for Codex, Claude,
 
 ## Current Release Line
 
-- Branch: `v1/agenthub-1.0`
-- Pull request: `#95`
+- Branch: `main`
+- Release: [`v1.0.0`](https://github.com/holdonyb/AgentHub-OSS/releases/tag/v1.0.0)
+- Release commit: `dd8ab44cbb969334357475811f7c4063eacd2324`
 - Repository version: `1.0.0`
-- Production: unchanged until the release candidate passes canary and upgrade smoke
+- Production: upgraded from merged OSS `main` with the existing SQLite database preserved; `/healthz` and self-host smoke pass
 
 The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves from a structured brief through worker dispatch, attempts, artifacts, review, approval, or rework without replacing the existing interactive session console.
 
@@ -40,7 +41,7 @@ Fresh local verification on `2026-07-12`:
 - macOS worker: `9 passed`
 - release version check and `git diff --check`: passed
 
-Fresh GitHub PR checks after the native release and macOS installer changes:
+Fresh GitHub release checks on `2026-07-12`:
 
 - public export audit: passed
 - secret scan: passed
@@ -48,28 +49,29 @@ Fresh GitHub PR checks after the native release and macOS installer changes:
 - React Native Android debug compile on Linux/JDK 21: passed
 - React Native iOS Simulator compile on macOS: passed
 - macOS worker installer/LaunchAgent validation: passed
+- signed Android APK/AAB build: passed
+- Windows x64 EXE and macOS arm64/x64 DMG/ZIP packaging: passed
+- GitHub Release: 13 assets published; complete 12-entry `SHA256SUMS` independently verified
+- npm dependency audit: 0 vulnerabilities
 
 ## Distribution Status
 
 | Surface | 1.0 status | Release condition |
 | --- | --- | --- |
-| Web/API | release candidate | canary migration and production upgrade smoke |
-| Compatibility Android APK | build supported | existing signing path |
-| React Native Android APK/AAB | build supported | Android signing secrets required |
-| Windows desktop | package supported | optional Windows code-signing credentials |
-| macOS desktop | package supported | public distribution requires Apple signing/notarization credentials |
+| Web/API | released and deployed | production data preserved; health and self-host smoke pass |
+| Compatibility Android APK | released | signed APK published |
+| React Native Android APK/AAB | released | signed APK/AAB published |
+| Windows desktop | released | x64 EXE published; public code signing still pending |
+| macOS desktop | released | arm64/x64 DMG/ZIP published; signing/notarization still pending |
 | React Native iOS | source + CI Simulator build | signed IPA, provisioning, and real-device smoke not complete |
-| Windows/Linux/macOS workers | bundle supported | upgrade smoke against a real self-host server |
+| Windows/Linux/macOS workers | released | versioned bundles and manifest published |
 
-## Remaining 1.0 Gates
+## Post-1.0 Follow-ups
 
-1. Finish documentation and release-copy alignment.
-2. Run the complete test matrix after the documentation commit.
-3. Confirm required Android signing secrets; confirm whether macOS signing/notarization credentials are available.
-4. Merge PR `#95` only after review and green CI.
-5. Deploy merged `main` to canary without replacing production data.
-6. Exercise upgrade, login, worker heartbeat, session reply, Workbench dispatch/review, file access, Android install/upgrade, and desktop connection smokes.
-7. Tag `v1.0.0`, verify all GitHub Release artifacts and checksums, then promote the tested build.
+1. Add public code-signing credentials for Windows desktop distribution.
+2. Add Apple signing/notarization credentials for macOS desktop distribution.
+3. Produce and validate a signed iOS IPA on a real device before claiming iOS distribution.
+4. Upgrade the production Node runtime to the repository-supported Node 22 line during a separate maintenance window.
 
 ## Run And Validate
 
