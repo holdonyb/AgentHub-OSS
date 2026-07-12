@@ -17,7 +17,7 @@ Supported local server hosts:
 - macOS
 - Linux
 
-This document is about the server role. It is separate from the currently published first-party client matrix. The public release still ships Web, Android, Windows desktop, and Windows/Linux worker bundles.
+This document is about the server role. It is separate from the client matrix. The 1.0 release pipeline builds Web, compatibility and React Native Android clients, Windows/macOS desktop packages, and Windows/Linux/macOS worker bundles. iOS is currently verified as a React Native Simulator build rather than a signed installable release.
 
 ## What local server mode looks like
 

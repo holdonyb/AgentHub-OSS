@@ -1,8 +1,11 @@
 {
   "name": "agenthub",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "api:test": ".\\.venv\\Scripts\\python.exe -m pytest apps/api/tests -q",
     "api:dev": ".\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --app-dir apps/api --host 127.0.0.1 --port 43080",
@@ -13,19 +16,60 @@
     "desktop:test": "npm --workspace @agenthub/desktop run test -- --run",
     "desktop:build": "npm --workspace @agenthub/desktop run build",
     "desktop:package:win": "npm --workspace @agenthub/desktop run package:win",
+    "desktop:package:mac": "npm --workspace @agenthub/desktop run package:mac",
     "desktop:start": "npm --workspace @agenthub/desktop run start",
     "mobile:test": "npm --workspace @agenthub/mobile run test -- --run",
     "mobile:sync": "npm --workspace @agenthub/mobile run sync",
     "mobile:build:debug": "npm --workspace @agenthub/mobile run build:debug",
     "mobile:build:release": "npm --workspace @agenthub/mobile run build:release",
+    "mobile:native:start": "npm --workspace @agenthub/mobile-native run start",
+    "mobile:native:test": "npm --workspace @agenthub/mobile-native run test",
+    "mobile:native:typecheck": "npm --workspace @agenthub/mobile-native run typecheck",
+    "mobile:native:prebuild": "npm --workspace @agenthub/mobile-native run prebuild",
+    "mobile:native:build:android:debug": "npm --workspace @agenthub/mobile-native run build:android:debug",
+    "mobile:native:build:android": "npm --workspace @agenthub/mobile-native run build:android:release",
+    "mobile:native:build:ios": "npm --workspace @agenthub/mobile-native run build:ios:simulator",
     "worker:cli:test": "npm --workspace agenthub-worker run test -- --run",
-    "worker:version:check": "node scripts/check-worker-package-version.mjs"
+    "client:core:test": "npm --workspace @agenthub/client-core run test -- --run",
+    "worker:version:check": "node scripts/check-worker-package-version.mjs",
+    "release:version:check": "node scripts/check-release-version.mjs"
   },
   "workspaces": [
     "apps/web",
     "apps/mobile",
+    "apps/mobile-native",
     "apps/desktop",
     "packages/protocol",
+    "packages/client-core",
     "packages/worker-cli"
-  ]
+  ],
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "form-data": "4.0.6",
+    "tmp": "0.2.7",
+    "vite": "6.4.3"
+  },
+  "overrides": {
+    "byted-ailab-speech-sdk@4.0.10": {
+      "lodash-es": "4.18.1",
+      "qs": "6.15.3",
+      "uuid": "11.1.1"
+    },
+    "ws@>=8.0.0 <9.0.0": "8.21.0",
+    "@vitejs/plugin-react": {
+      "@babel/core": "7.29.7"
+    },
+    "@expo/fingerprint": {
+      "brace-expansion": "5.0.7"
+    },
+    "@expo/cli": {
+      "js-yaml": "4.3.0"
+    },
+    "form-data": "4.0.6",
+    "tmp": "0.2.7",
+    "vite": "6.4.3"
+  }
 }

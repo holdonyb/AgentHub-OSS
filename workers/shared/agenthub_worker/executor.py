@@ -37,6 +37,7 @@ from agenthub_worker.paths import (
     normalize_workspace_root,
     project_name_from_root,
 )
+from agenthub_worker.task_workspace import finalize_task_result, prepare_task_workspace
 
 
 ALLOWED_SANDBOX = {"read-only", "workspace-write", "danger-full-access"}
@@ -921,11 +922,14 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
     backend = str(job.get("backend") or "").lower()
     workspace_root = str(job.get("workspace_root") or ".").strip() or "."
     payload = _payload(job)
+    prepared_task = prepare_task_workspace(job) if not payload.get("dry_run") else None
     output_file: str | None = None
     if backend == "codex" and not payload.get("dry_run"):
         fd, output_file = tempfile.mkstemp(prefix="agenthub-codex-start-", suffix=".txt")
         os.close(fd)
     prompt_override = _build_session_fork_prompt(job) if job.get("kind") == "session_fork" else None
+    if prepared_task is not None:
+        prompt_override = prepared_task.prompt
     try:
         bridge_mode = _resolve_claude_interactive_bridge(payload)
         if backend == "claude" and bridge_mode:
@@ -966,7 +970,10 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
                 cli_output=CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT,
             )
             created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
-            return f"created_session_id={created_session_id}\n{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）\n{result_text}".strip()
+            return finalize_task_result(
+                f"created_session_id={created_session_id}\n{CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT}（{bridge_mode}:{session_name}）\n{result_text}".strip(),
+                prepared_task,
+            )
         args = build_session_start_command(job, output_file=output_file, prompt_override=prompt_override)
         timeout_seconds = _job_timeout_seconds(payload)
         if payload.get("dry_run"):
@@ -1001,7 +1008,10 @@ def _execute_session_start(job: dict[str, Any], *, client: Any | None, worker_id
             cli_output=cli_output,
         )
         created_session_id = _finalize_created_session(job, created, client=client, worker_id=worker_id)
-        return f"created_session_id={created_session_id}\n{result_text}".strip()
+        return finalize_task_result(
+            f"created_session_id={created_session_id}\n{result_text}".strip(),
+            prepared_task,
+        )
     finally:
         if output_file:
             Path(output_file).unlink(missing_ok=True)

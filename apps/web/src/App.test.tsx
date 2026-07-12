@@ -64,6 +64,52 @@ const sessionPayload = {
   ],
 };
 
+const taskPayload = {
+  items: [
+    {
+      task_id: 'task-1',
+      space_id: 'spc_default',
+      title: '修复登录页移动端布局',
+      brief_markdown: '登录页在 390px 宽度下按钮遮挡。',
+      success_criteria_markdown: '- npm run web:test passes',
+      status: 'ready_to_review',
+      priority: 100,
+      target_worker_id: 'win-main',
+      backend: 'codex',
+      workspace_root: 'E:/work/AgentHub-OSS',
+      namespace: 'default',
+      latest_job_id: 'job-task-1',
+      latest_session_id: 'sess-1',
+      artifact_count: 1,
+      created_by: 'usr_1',
+      created_at: '2026-07-09T02:00:00Z',
+      updated_at: '2026-07-09T02:18:00Z',
+      due_at: null,
+      archived_at: null,
+      metadata: {},
+    },
+  ],
+};
+
+const taskDetailPayload = {
+  task: taskPayload.items[0],
+  artifacts: [
+    {
+      artifact_id: 'art-1',
+      task_id: 'task-1',
+      kind: 'report',
+      title: '交付报告',
+      path: null,
+      content_markdown: '测试通过，风险较低。',
+      mime_type: 'text/markdown',
+      created_by: 'agent',
+      created_at: '2026-07-09T02:18:00Z',
+      version: 1,
+    },
+  ],
+  executions: [],
+};
+
 const secondSession = {
   ...sessionPayload.items[0],
   session_id: 'sess-2',
@@ -739,6 +785,8 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -875,10 +923,13 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
       if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
@@ -923,6 +974,120 @@ describe('AgentHub console', () => {
       );
     });
     expect(within(screen.getByLabelText('Transcript')).getByText('继续执行')).toBeInTheDocument();
+  });
+
+  it('switches globally between Workbench and Session modes without hiding session mode', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: /Workbench/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Session/ })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Workbench/ }));
+    expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建任务' })).toHaveAttribute('aria-label', '新建任务');
+
+    fireEvent.click(screen.getByRole('button', { name: /Session/ }));
+    expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+  });
+
+  it('opens a Workbench task as a dedicated mobile detail view and returns to the task list', async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    const workbench = await screen.findByRole('region', { name: 'Agent Workbench' });
+    expect(workbench).not.toHaveClass('mobile-task-detail-open');
+
+    fireEvent.click(screen.getByRole('button', { name: /修复登录页移动端布局/ }));
+    expect(workbench).toHaveClass('mobile-task-detail-open');
+
+    fireEvent.click(screen.getByRole('button', { name: '返回任务列表' }));
+    expect(workbench).not.toHaveClass('mobile-task-detail-open');
+  });
+
+  it('creates a task brief from Workbench mode and reviews it', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) {
+        return jsonResponse({
+          items: [
+            {
+              worker_id: 'win-main',
+              machine_name: 'DevBox',
+              os: 'windows',
+              reachable_backends: ['codex'],
+              workspace_roots: ['E:/work/AgentHub-OSS'],
+              capabilities: {},
+              status: 'online',
+              last_heartbeat_at: null,
+              runtime_settings: { max_concurrent_jobs: 2, job_poll_interval_seconds: 5, heartbeat_interval_seconds: 30 },
+            },
+          ],
+        });
+      }
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse(permissionsPayload);
+      if (url.endsWith('/api/tasks') && init?.method === 'POST') {
+        expect(init.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        const body = JSON.parse(String(init.body ?? '{}'));
+        expect(body.title).toBe('修复登录页移动端布局');
+        expect(body.brief_markdown).toBe('登录页移动端按钮遮挡。');
+        expect(body.success_criteria_markdown).toBe('- 390px no overlap');
+        expect(body.target_worker_id).toBe('win-main');
+        expect(body.workspace_root).toBe('E:/work/AgentHub-OSS');
+        expect(body.template_key).toBe('fix_bug');
+        expect(body.authority_preset).toBe('code_fix');
+        expect(body.relevant_paths).toEqual(['apps/web/src/App.tsx', 'apps/web/src/styles.css']);
+        expect(body.submit).toBe(true);
+        return jsonResponse({
+          task: { ...taskPayload.items[0], title: body.title },
+          job: { job_id: 'job-task-1', status: 'queued' },
+        });
+      }
+      if (url.endsWith('/api/tasks')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/tasks/task-1/review')) {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        expect(body).toEqual({ action: 'accept', note_markdown: '' });
+        return jsonResponse({ task: { ...taskPayload.items[0], status: 'accepted' } });
+      }
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      return jsonResponse({});
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /新建任务/ }));
+    const composer = await screen.findByRole('dialog', { name: '新建任务' });
+    expect(within(composer).getByLabelText('目标节点')).toHaveValue('win-main');
+    expect(within(composer).getByLabelText('Agent')).toHaveValue('codex');
+    expect(within(composer).getByLabelText('工作区')).toHaveValue('E:/work/AgentHub-OSS');
+    fireEvent.click(within(composer).getByRole('button', { name: '修复缺陷' }));
+    fireEvent.change(within(composer).getByLabelText('权限范围'), { target: { value: 'code_fix' } });
+    fireEvent.change(within(composer).getByLabelText('任务标题'), { target: { value: '修复登录页移动端布局' } });
+    fireEvent.change(within(composer).getByLabelText('任务说明'), { target: { value: '登录页移动端按钮遮挡。' } });
+    fireEvent.change(within(composer).getByLabelText('验收标准'), { target: { value: '- 390px no overlap' } });
+    fireEvent.change(within(composer).getByLabelText('相关路径'), {
+      target: { value: 'apps/web/src/App.tsx\napps/web/src/styles.css' },
+    });
+    fireEvent.click(within(composer).getByRole('button', { name: /提交任务/ }));
+
+    expect(await screen.findByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Accept/ }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith('/api/tasks/task-1/review', expect.any(Object)));
   });
 
   it('does not keep the first screen loading while audit events are slow', async () => {
@@ -1785,6 +1950,51 @@ describe('AgentHub console', () => {
     expect(installCommand.value).toContain('-MaxConcurrentJobs 2');
     expect(installCommand.value).toContain('-JobPollSeconds 5');
     expect(installCommand.value).toContain('-HeartbeatSeconds 30');
+  });
+
+  it('generates a macOS LaunchAgent worker install command', async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/worker-enrollments')) {
+        return jsonResponse({
+          enrollment_id: 'wen-mac',
+          space_id: 'space-1',
+          label: 'macbook-pro-01',
+          created_at: '2026-07-11T10:00:00Z',
+          expires_at: '2026-07-12T10:00:00Z',
+          enrollment_token: 'ahe_macos_token',
+        });
+      }
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+    expect(await screen.findByText('会话收件箱')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '添加 Worker' }));
+    fireEvent.change(screen.getByLabelText('Worker ID'), { target: { value: 'macbook-pro-01' } });
+    fireEvent.change(screen.getByLabelText('Worker 标签'), { target: { value: 'macbook-pro-01' } });
+    fireEvent.change(screen.getByLabelText('Worker OS'), { target: { value: 'macos' } });
+    fireEvent.change(screen.getByLabelText('Worker API URL'), { target: { value: 'https://agenthub.example.com' } });
+    fireEvent.change(screen.getByLabelText('Workspace Roots'), { target: { value: '/Users/alice/Work' } });
+    fireEvent.click(screen.getByRole('button', { name: '生成安装命令' }));
+
+    const installCommand = (await screen.findByLabelText('安装命令')) as HTMLTextAreaElement;
+    expect(installCommand.value).toContain('/downloads/workers/agenthub-worker-macos.tar.gz');
+    expect(installCommand.value).toContain('scripts/install-macos-worker.sh');
+    expect(installCommand.value).toContain('--workspace-root \'/Users/alice/Work\'');
+    expect(installCommand.value).toContain('--enrollment-token \'ahe_macos_token\'');
   });
 
   it('shows background refresh state without moving the active session after navigation', async () => {
@@ -4307,6 +4517,8 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
       if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse(taskPayload);
+      if (url.endsWith('/api/tasks/task-1')) return jsonResponse(taskDetailPayload);
       if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
       if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
@@ -5452,7 +5664,7 @@ describe('AgentHub console', () => {
         expect.objectContaining({ method: 'POST' }),
       );
     });
-    expect(screen.getByLabelText('回复当前会话')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('回复当前会话')).toHaveValue(''));
   });
 
   it('does not enqueue native fast state refresh just by opening a codex session', async () => {

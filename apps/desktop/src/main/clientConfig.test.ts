@@ -14,7 +14,7 @@ describe('AgentHub desktop client config', () => {
     expect(normalizeServerUrl('not-a-url')).toBeNull();
   });
 
-  it('prefers stored server URL, then CLI, desktop env, and shared public env', () => {
+  it('prefers explicit CLI and environment configuration over the stored server URL', () => {
     expect(
       resolveStartupConsoleTarget({
         argv: ['electron', '.', '--url=https://cli.example.com/console/'],
@@ -24,18 +24,26 @@ describe('AgentHub desktop client config', () => {
         },
         storedUrl: 'https://stored.example.com',
       }),
-    ).toEqual({ source: 'stored', consoleUrl: 'https://stored.example.com', locked: false });
+    ).toEqual({ source: 'argv', consoleUrl: 'https://cli.example.com/console', locked: true });
 
     expect(
       resolveStartupConsoleTarget({
-        argv: ['electron', '.', '--url=https://cli.example.com/console/'],
+        argv: ['electron', '.'],
         env: {
           AGENTHUB_DESKTOP_URL: 'https://desktop.example.com',
           AGENTHUB_PUBLIC_BASE_URL: 'https://public.example.com',
         },
-        storedUrl: null,
+        storedUrl: 'https://stored.example.com',
       }),
-    ).toEqual({ source: 'argv', consoleUrl: 'https://cli.example.com/console', locked: true });
+    ).toEqual({ source: 'desktop_env', consoleUrl: 'https://desktop.example.com', locked: true });
+
+    expect(
+      resolveStartupConsoleTarget({
+        argv: ['electron', '.'],
+        env: {},
+        storedUrl: 'https://stored.example.com',
+      }),
+    ).toEqual({ source: 'stored', consoleUrl: 'https://stored.example.com', locked: false });
   });
 
   it('requires first-launch setup when no usable server URL exists', () => {

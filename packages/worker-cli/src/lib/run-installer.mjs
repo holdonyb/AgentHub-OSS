@@ -48,7 +48,7 @@ export async function runInstaller({ bundleRoot, plan, options }) {
     ];
     pushArg(args, "-WorkerId", options.workerId);
     pushArg(args, "-ConnectionMode", options.connectionMode);
-    pushArg(args, "-InstallRoot", options.installRoot);
+    pushArg(args, "-InstallRoot", plan.installRoot);
     pushRepeatable(args, "-WorkspaceRoot", options.workspaceRoot);
     pushRepeatable(args, "-SessionRoot", options.sessionRoot);
     pushArg(args, "-WorkerBundleUrl", plan.bundleUrl);
@@ -68,6 +68,37 @@ export async function runInstaller({ bundleRoot, plan, options }) {
     return run("powershell.exe", args);
   }
 
+  if (plan.platform === "macos") {
+    const scriptPath = path.join(bundleRoot, "scripts", "install-macos-worker.sh");
+    const args = [
+      scriptPath,
+      "--api-url",
+      options.apiUrl,
+      "--enrollment-token",
+      options.enrollmentToken,
+      "--repo-root",
+      bundleRoot,
+      "--install-root",
+      plan.installRoot,
+      "--worker-manifest-url",
+      plan.manifestUrl,
+      "--worker-bundle-url",
+      plan.bundleUrl,
+    ];
+    pushArg(args, "--worker-id", options.workerId);
+    pushArg(args, "--connection-mode", options.connectionMode);
+    pushArg(args, "--launch-agent-label", options.serviceName);
+    pushRepeatable(args, "--workspace-root", options.workspaceRoot);
+    pushRepeatable(args, "--session-root", options.sessionRoot);
+    if (options.disableAutoUpdate) {
+      args.push("--disable-auto-update");
+    }
+    if (options.skipBootstrap) {
+      args.push("--skip-bootstrap");
+    }
+    return run("bash", args);
+  }
+
   const scriptPath = path.join(bundleRoot, "scripts", "install-linux-worker.sh");
   const args = [
     scriptPath,
@@ -84,7 +115,7 @@ export async function runInstaller({ bundleRoot, plan, options }) {
   ];
   pushArg(args, "--worker-id", options.workerId);
   pushArg(args, "--connection-mode", options.connectionMode);
-  pushArg(args, "--install-root", options.installRoot);
+  pushArg(args, "--install-root", plan.installRoot);
   pushArg(args, "--service-name", options.serviceName);
   pushRepeatable(args, "--workspace-root", options.workspaceRoot);
   pushRepeatable(args, "--session-root", options.sessionRoot);

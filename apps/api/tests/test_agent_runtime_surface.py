@@ -540,7 +540,7 @@ def test_api_startup_does_not_globally_backfill_existing_codex_plan_timeline(tmp
 
     from app.core.config import Settings
     from app.core.database import create_db_engine, create_session_local, init_database
-    from app.main import create_app
+    from app.factory import create_app
     from app.models import AgentPermission, AgentSession, AgentTimeline, Space, Worker
 
     engine = create_db_engine(db_url)

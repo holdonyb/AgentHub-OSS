@@ -14,6 +14,7 @@ from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Schedu
 from app.routers.sessions import upsert_session
 from app.schemas import ClaimJobIn, CompleteJobIn, DiscoveredSessionsIn, FailJobIn
 from app.services import ALLOWED_JOB_KINDS, ensure_codex_plan_exit_permission, job_out, sync_session_from_timeline, upsert_timeline_items
+from app.task_lifecycle import project_task_job_lifecycle
 
 router = APIRouter()
 PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
@@ -370,6 +371,7 @@ def claim_job(
     now = utcnow()
     job.claimed_at = now
     job.updated_at = now
+    project_task_job_lifecycle(db, job, state="running", at=now)
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
@@ -433,6 +435,13 @@ def complete_job(
             )
             if not _create_plan_choice_permission(db, job, session, payload.result_text or ""):
                 session.status = "ready"
+    project_task_job_lifecycle(
+        db,
+        job,
+        state="succeeded",
+        at=now,
+        detail_text=payload.result_text or "",
+    )
     write_event(
         db,
         space_id=worker.space_id,
@@ -494,6 +503,13 @@ def fail_job(
                 role="system",
                 summary=payload.error_text or session.activity_summary,
             )
+    project_task_job_lifecycle(
+        db,
+        job,
+        state="failed",
+        at=now,
+        detail_text=payload.error_text or "",
+    )
     write_event(
         db,
         space_id=worker.space_id,

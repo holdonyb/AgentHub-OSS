@@ -11,7 +11,7 @@ from reporting import write_fault_report
 
 
 def _create_restartable_app():
-    from app.main import create_app
+    from app.factory import create_app
 
     return create_app()
 

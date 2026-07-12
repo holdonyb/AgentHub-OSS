@@ -9,14 +9,16 @@
 - **方案 A：本地笔记本 Self-Host**
   - 适合没有 VM、已经在用 Tailscale 的个人环境
   - 本机既可以跑 `AgentHub Server`，也可以同时跑 `Local Worker`
-  - 手机、Web、Windows 桌面端通过本机地址、Tailscale 地址或可选 HTTPS 入口接入
+  - 手机、Web、Windows/macOS 桌面端通过本机地址、Tailscale 地址或可选 HTTPS 入口接入
 - **方案 B：云端 VM Self-Host**
   - 适合固定域名、长期在线、多台机器协作
   - Linux VM 可以通过 HTTPS public relay 对外提供 Web/App 入口，也可以只放在 Tailscale private mode 里
-  - Windows / Linux worker 继续跑在各自机器上，通过 Tailscale private mode 或 public relay 接入
-- **社区贡献期待**
-  - iOS client 和 macOS desktop 当前不是 first-party 支持面
-  - `CONTRIBUTING.md` 里已有平台贡献提示词和配置化约束
+  - Windows / Linux / macOS worker 继续跑在各自机器上，通过 Tailscale private mode 或 public relay 接入
+- **跨平台客户端**
+  - Web 和 Windows desktop 是稳定控制面
+  - React Native Android 覆盖会话、任务、文件、语音、图片、审批和通知
+  - React Native iOS 已纳入源码与 CI Simulator 编译，真机签名和分发仍待完成
+  - macOS desktop 已纳入 DMG/ZIP 自动打包，公开分发需要签名与 notarization
 - **核心关系：Server / Worker / Agent Runtime**
   - `AgentHub Server` 负责认证、权限、会话索引、任务队列、事件审计、配置和 memory
   - `Worker` 负责发现本机 session、执行任务、回传状态

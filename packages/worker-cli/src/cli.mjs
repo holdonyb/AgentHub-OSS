@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { parseCliArgs } from "./lib/args.mjs";
 import { installWorker } from "./install.mjs";
-import { renderDoctor } from "./doctor.mjs";
+import { inspectDoctor } from "./doctor.mjs";
 
 function renderHelp() {
   return `Usage:
   agenthub-worker install --api-url URL --enrollment-token TOKEN [options]
-  agenthub-worker doctor [--platform windows|linux]
+  agenthub-worker doctor [--platform windows|linux|macos]
 
 Options:
   --worker-id VALUE
@@ -21,7 +21,8 @@ Options:
   --start-at-boot
   --start-at-logon
   --service-name VALUE
-  --platform windows|linux
+  --launch-agent-label VALUE
+  --platform windows|linux|macos
 `;
 }
 
@@ -33,8 +34,9 @@ async function main(argv) {
   }
 
   if (parsed.command === "doctor") {
-    process.stdout.write(renderDoctor(parsed.options));
-    return 0;
+    const report = inspectDoctor(parsed.options);
+    process.stdout.write(`${report.lines.join("\n")}\n`);
+    return report.ok ? 0 : 1;
   }
 
   if (parsed.command === "install") {

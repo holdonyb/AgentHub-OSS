@@ -10,6 +10,7 @@ from app.core.json import dumps_json
 from app.models import AgentPermission, AgentSession, Job, utcnow
 from app.schemas import JobCreateIn
 from app.services import ALLOWED_JOB_KINDS, job_out, job_summary_out
+from app.task_lifecycle import project_task_job_lifecycle
 
 router = APIRouter()
 JOB_LIST_LOAD_ONLY = (
@@ -122,6 +123,13 @@ def cancel_job(job_id: str, db: DbSession, actor: Actor = Depends(require_min_ro
     job.error_text = f"Cancelled by {actor.actor_id}"
     job.completed_at = now
     job.updated_at = now
+    project_task_job_lifecycle(
+        db,
+        job,
+        state="cancelled",
+        at=now,
+        detail_text=job.error_text or "",
+    )
     db.flush()
     if job.kind == "session_input" and job.target_session_id:
         session = (

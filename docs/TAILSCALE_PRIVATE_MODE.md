@@ -95,7 +95,7 @@ You can expose the Web console publicly while keeping workers private:
 - Workers use the Tailscale URL and `ConnectionMode private`.
 - Public relay workers use `/api/worker/*` only when you intentionally enable relay mode.
 
-This shape is useful when your phone uses the public domain but local Windows/Linux workers stay on Tailscale.
+This shape is useful when your phone uses the public domain but local Windows/Linux/macOS workers stay on Tailscale.
 
 ## 6. Verification
 

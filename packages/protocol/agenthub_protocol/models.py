@@ -110,3 +110,84 @@ class JobResult(BaseModel):
     ok: bool
     result_text: str = ""
     error_text: str = ""
+
+
+TaskStatus = Literal[
+    "draft",
+    "queued",
+    "working",
+    "blocked",
+    "needs_approval",
+    "ready_to_review",
+    "accepted",
+    "rejected",
+    "archived",
+    "cancelled",
+    "failed",
+]
+ArtifactKind = Literal[
+    "report",
+    "diff",
+    "test_result",
+    "screenshot",
+    "log",
+    "document",
+    "patch",
+    "build_output",
+    "review_note",
+]
+TaskTemplateKey = Literal["fix_bug", "implement_feature", "code_review", "release_assistant"]
+TaskAuthorityPreset = Literal["read_only", "code_fix", "feature", "review_only"]
+
+
+class TaskAuthorityBoundary(BaseModel):
+    read_paths: list[str] = Field(default_factory=list)
+    write_paths: list[str] = Field(default_factory=list)
+    runtime_controls: dict[str, Any] = Field(default_factory=dict)
+    enforcement: dict[str, Literal["mapped", "declared_only"]] = Field(default_factory=dict)
+
+
+class TaskWorkspaceConfig(BaseModel):
+    schema_version: int = 1
+    task_id: str
+    relative_path: str
+    title: str
+    brief_markdown: str
+    success_criteria_markdown: str = ""
+    template_key: TaskTemplateKey = "implement_feature"
+    authority_preset: TaskAuthorityPreset = "feature"
+    relevant_paths: list[str] = Field(default_factory=list)
+    attempt_number: int = Field(default=1, ge=1)
+    review_note: str = ""
+    authority: TaskAuthorityBoundary
+
+
+class AgentTask(BaseModel):
+    task_id: str
+    title: str
+    brief_markdown: str
+    success_criteria_markdown: str
+    status: TaskStatus
+    priority: int = 100
+    target_worker_id: str | None = None
+    backend: str | None = None
+    workspace_root: str | None = None
+    namespace: str = "default"
+    latest_job_id: str | None = None
+    latest_session_id: str | None = None
+    artifact_count: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentTaskExecution(BaseModel):
+    execution_id: str
+    task_id: str
+    job_id: str | None = None
+    session_id: str | None = None
+    attempt_number: int = Field(default=1, ge=1)
+    kind: str
+    status: str
+    created_at: datetime
+    updated_at: datetime

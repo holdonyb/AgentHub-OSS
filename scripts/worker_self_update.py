@@ -19,6 +19,7 @@ from typing import Any
 ARCHIVE_NAMES = {
     "windows": "agenthub-worker-windows.zip",
     "linux": "agenthub-worker-linux.tar.gz",
+    "macos": "agenthub-worker-macos.tar.gz",
 }
 MANIFEST_NAME = "worker-bundles-manifest.json"
 VERSION_FILE = Path(".runtime/worker-bundle-version.txt")
@@ -102,7 +103,27 @@ def current_version(repo_root: Path) -> str:
 def write_current_version(repo_root: Path, version: str) -> None:
     version_path = repo_root / VERSION_FILE
     version_path.parent.mkdir(parents=True, exist_ok=True)
-    version_path.write_text(version.strip() + "\n", encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{version_path.name}.", dir=version_path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(version.strip() + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, version_path)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def validate_archive_name(platform: str, archive_name: str) -> str:
+    expected = ARCHIVE_NAMES[platform]
+    if archive_name != expected or Path(archive_name).name != archive_name or "/" in archive_name or "\\" in archive_name:
+        raise RuntimeError(f"Worker manifest archive mismatch: expected {expected}, got {archive_name or '<missing>'}")
+    return archive_name
 
 
 def safe_relative_path(value: str) -> PurePosixPath:
@@ -196,13 +217,88 @@ def apply_bundle_paths(bundle_root: Path, repo_root: Path, paths: list[str]) -> 
         copy_path(source, target)
 
 
-def install_requirements(repo_root: Path) -> None:
+def stage_bundle_paths(bundle_root: Path, staging_root: Path, paths: list[str]) -> None:
+    for raw_path in paths:
+        relative = safe_relative_path(raw_path)
+        source = bundle_root.joinpath(*relative.parts)
+        if not source.exists():
+            raise RuntimeError(f"Bundle path is missing from archive: {raw_path}")
+        copy_path(source, staging_root.joinpath(*relative.parts))
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _apply_switch_operations(operations: list[tuple[Path, Path, Path]]) -> None:
+    switched: list[tuple[Path, Path, bool]] = []
+    try:
+        for staged, target, backup in operations:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            had_original = target.exists() or target.is_symlink()
+            if had_original:
+                os.replace(target, backup)
+            try:
+                os.replace(staged, target)
+            except BaseException:
+                if had_original and backup.exists():
+                    os.replace(backup, target)
+                raise
+            switched.append((target, backup, had_original))
+    except BaseException:
+        for target, backup, had_original in reversed(switched):
+            if target.exists() or target.is_symlink():
+                _remove_path(target)
+            if had_original and (backup.exists() or backup.is_symlink()):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(backup, target)
+        raise
+
+
+def apply_staged_paths_atomically(
+    staging_root: Path,
+    repo_root: Path,
+    backup_root: Path,
+    paths: list[str],
+    *,
+    staged_venv: Path | None = None,
+) -> None:
+    operations: list[tuple[Path, Path, Path]] = []
+    for raw_path in paths:
+        relative = safe_relative_path(raw_path)
+        operations.append(
+            (
+                staging_root.joinpath(*relative.parts),
+                repo_root.joinpath(*relative.parts),
+                backup_root.joinpath(*relative.parts),
+            )
+        )
+    if staged_venv is not None:
+        operations.append((staged_venv, repo_root / ".venv", backup_root / ".venv"))
+    _apply_switch_operations(operations)
+
+
+def install_requirements(repo_root: Path, python_executable: Path | None = None) -> None:
     if env_flag("AGENTHUB_WORKER_UPDATE_SKIP_PIP", default=False):
         return
     requirements = repo_root / "workers" / "requirements.txt"
     if not requirements.exists():
         return
-    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(requirements)], check=True)
+    subprocess.run([str(python_executable or sys.executable), "-m", "pip", "install", "-r", str(requirements)], check=True)
+
+
+def prepare_staged_venv(staging_root: Path, target_venv: Path) -> Path | None:
+    if env_flag("AGENTHUB_WORKER_UPDATE_SKIP_PIP", default=False):
+        return None
+    subprocess.run([sys.executable, "-m", "venv", str(target_venv)], check=True)
+    python_name = "python.exe" if os.name == "nt" else "python"
+    python_path = target_venv / ("Scripts" if os.name == "nt" else "bin") / python_name
+    install_requirements(staging_root, python_path)
+    return target_venv
 
 
 def update_worker(platform: str, repo_root: Path, dry_run: bool = False, force: bool = False) -> str:
@@ -220,12 +316,14 @@ def update_worker(platform: str, repo_root: Path, dry_run: bool = False, force: 
     if installed_version == bundle_version and not force:
         return f"worker bundle already at {bundle_version}"
 
-    archive_name = str(bundle.get("archive") or ARCHIVE_NAMES[platform])
+    archive_name = validate_archive_name(platform, str(bundle.get("archive") or ""))
     bundle_url = default_bundle_url(platform, manifest_url, archive_name)
     archive_payload = read_url(bundle_url)
     expected_sha = str(bundle.get("sha256") or "").strip().lower()
+    if len(expected_sha) != 64 or any(character not in "0123456789abcdef" for character in expected_sha):
+        raise RuntimeError(f"Worker manifest is missing a valid sha256 for {platform}")
     actual_sha = sha256_bytes(archive_payload)
-    if expected_sha and expected_sha != actual_sha:
+    if expected_sha != actual_sha:
         raise RuntimeError(f"Worker bundle sha256 mismatch: expected {expected_sha}, got {actual_sha}")
 
     paths = [str(path) for path in bundle.get("paths", [])]
@@ -235,14 +333,29 @@ def update_worker(platform: str, repo_root: Path, dry_run: bool = False, force: 
     if dry_run:
         return f"would update worker bundle from {installed_version or '<none>'} to {bundle_version}"
 
-    with tempfile.TemporaryDirectory(prefix=f"agenthub-worker-update-{platform}-") as temp_dir:
+    repo_root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{repo_root.name}.worker-update-{platform}-",
+        dir=repo_root.parent,
+    ) as temp_dir:
         temp_root = Path(temp_dir)
         archive_path = temp_root / archive_name
         archive_path.write_bytes(archive_payload)
         bundle_root = extract_archive(platform, archive_path, temp_root / "extract")
-        apply_bundle_paths(bundle_root, repo_root, paths)
+        staging_root = temp_root / "staged"
+        backup_root = temp_root / "backup"
+        stage_bundle_paths(bundle_root, staging_root, paths)
+        staged_venv = prepare_staged_venv(staging_root, temp_root / "staged-venv") if platform == "macos" else None
+        if platform != "macos":
+            install_requirements(staging_root)
+        apply_staged_paths_atomically(
+            staging_root,
+            repo_root,
+            backup_root,
+            paths,
+            staged_venv=staged_venv,
+        )
 
-    install_requirements(repo_root)
     write_current_version(repo_root, bundle_version)
     return f"updated worker bundle to {bundle_version}"
 

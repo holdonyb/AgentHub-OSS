@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "AgentHub",
+    "slug": "agenthub-native",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "agenthub-native",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "platforms": [
+      "android",
+      "ios"
+    ],
+    "plugins": [
+      "./plugins/withAgentHubAndroidSigning.cjs",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 AgentHub 选择要发送给 Agent 的图片。"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "允许 AgentHub 录制语音并转换为文字。",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-notifications"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "buildNumber": "1",
+      "bundleIdentifier": "dev.myagenthub.mobile",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "ts.net": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
+        }
+      }
+    },
+    "android": {
+      "package": "dev.myagenthub.mobile",
+      "versionCode": 1,
+      "predictiveBackGestureEnabled": true
+    }
+  }
+}

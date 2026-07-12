@@ -61,6 +61,9 @@ export function parseCliArgs(argv) {
       case "service-name":
         pushValueOption(args.options, "serviceName", rest[++index]);
         break;
+      case "launch-agent-label":
+        pushValueOption(args.options, "serviceName", rest[++index]);
+        break;
       case "platform":
         pushValueOption(args.options, "platform", rest[++index]);
         break;

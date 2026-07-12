@@ -21,14 +21,26 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.23.1'
           cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Install Python dependencies
         run: python -m pip install -r apps/api/requirements.txt
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Verify release versions
+        run: npm run release:version:check
 
       - name: Run API tests
         run: python -m pytest apps/api/tests -q
@@ -42,5 +54,59 @@ jobs:
       - name: Run Mobile tests
         run: npm run mobile:test
 
+      - name: Run React Native tests and typecheck
+        run: |
+          npm run mobile:native:test
+          npm run mobile:native:typecheck
+
+      - name: Compile React Native Android client
+        run: npm run mobile:native:build:android:debug
+
       - name: Run Desktop tests
         run: npm run desktop:test
+
+  macos-worker:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          python -m pip install pytest -r workers/requirements.txt
+          npm ci
+
+      - name: Test worker CLI and macOS worker
+        run: |
+          npm --workspace agenthub-worker test -- --run
+          python -m pytest workers/local-macos/tests -q
+          bash -n scripts/install-macos-worker.sh scripts/start-macos-worker.sh scripts/uninstall-macos-worker.sh
+
+      - name: Render and validate LaunchAgent
+        run: |
+          mkdir -p "$RUNNER_TEMP/workspace"
+          bash scripts/install-macos-worker.sh \
+            --api-url https://agenthub.example.invalid \
+            --enrollment-token ahe_ci_placeholder \
+            --worker-id ci-macos \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/agenthub-worker" \
+            --workspace-root "$RUNNER_TEMP/workspace" \
+            --skip-bootstrap \
+            --skip-launchctl
+          plutil -lint "$HOME/Library/LaunchAgents/dev.myagenthub.worker.ci-macos.plist"
+
+      - name: Compile React Native iOS client
+        run: npm run mobile:native:build:ios

@@ -6,7 +6,9 @@ on:
     branches: [main]
     paths:
       - 'apps/mobile/**'
+      - 'apps/mobile-native/**'
       - 'apps/web/**'
+      - 'packages/client-core/**'
       - 'packages/protocol/**'
       - 'package.json'
       - 'package-lock.json'
@@ -27,7 +29,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22.23.1'
           cache: npm
 
       - name: Setup Java
@@ -43,7 +45,10 @@ jobs:
         run: npm ci
 
       - name: Test mobile config
-        run: npm run mobile:test
+        run: |
+          npm run mobile:test
+          npm run mobile:native:test
+          npm run mobile:native:typecheck
 
       - name: Build web shell assets
         run: npm run web:build
@@ -64,6 +69,9 @@ jobs:
       - name: Build signed release APK
         run: npm run mobile:build:release
 
+      - name: Build signed React Native APK and bundle
+        run: npm run mobile:native:build:android
+
       - name: Upload signed APKs
         uses: actions/upload-artifact@v4
         with:
@@ -72,3 +80,5 @@ jobs:
           path: |
             apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
             apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+            apps/mobile-native/android/app/build/outputs/apk/release/app-release.apk
+            apps/mobile-native/android/app/build/outputs/bundle/release/app-release.aab

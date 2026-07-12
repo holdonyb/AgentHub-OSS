@@ -82,7 +82,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "Windows desktop" in readme
     assert "iOS client" in readme
     assert "macOS desktop" in readme
-    assert "欢迎社区贡献" in readme
+    assert "源码与 CI 支持" in readme
+    assert "签名 IPA/真机分发尚未完成" in readme
     assert "English README" in readme
 
     testing_doc = (REPO_ROOT / "docs" / "TESTING.md").read_text(encoding="utf-8")
@@ -112,7 +113,8 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "npm run local:dev" in readme_en
     assert "http://localhost:43073" in readme_en
     assert "Tailscale-first private mode" in readme_en
-    assert "Community welcome" in readme_en
+    assert "Source and CI supported" in readme_en
+    assert "signed IPA/device distribution is not complete" in readme_en
     assert "中文 README" in readme_en
 
     website_index = (REPO_ROOT / "website" / "index.html").read_text(encoding="utf-8")

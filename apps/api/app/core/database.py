@@ -71,6 +71,7 @@ def _ensure_compatible_columns(engine: Engine) -> None:
         "schedules": {"space_id": "VARCHAR(64)"},
         "invites": {"space_id": "VARCHAR(64)"},
         "access_tokens": {"space_id": "VARCHAR(64)"},
+        "agent_task_executions": {"attempt_number": "INTEGER NOT NULL DEFAULT 1"},
     }
     existing = {column["name"] for column in inspector.get_columns("agent_sessions")}
     session_columns = {
@@ -98,6 +99,27 @@ def _ensure_compatible_columns(engine: Engine) -> None:
             for name, ddl in session_columns.items():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE agent_sessions ADD COLUMN {name} {ddl}"))
+            execution_columns = (
+                {column["name"] for column in inspector.get_columns("agent_task_executions")}
+                if "agent_task_executions" in table_names
+                else set()
+            )
+            if "agent_task_executions" in table_names and "attempt_number" not in execution_columns:
+                execution_columns.add("attempt_number")
+            if {"id", "space_id", "task_id", "attempt_number", "created_at"}.issubset(execution_columns):
+                conn.execute(
+                    text(
+                        "WITH ranked AS ("
+                        "SELECT id, ROW_NUMBER() OVER ("
+                        "PARTITION BY COALESCE(space_id, ''), task_id ORDER BY created_at, id"
+                        ") AS next_attempt FROM agent_task_executions"
+                        ") "
+                        "UPDATE agent_task_executions "
+                        "SET attempt_number = ("
+                        "SELECT next_attempt FROM ranked WHERE ranked.id = agent_task_executions.id"
+                        ")"
+                    )
+                )
             if "agent_timeline" in table_names:
                 conn.execute(
                     text(
@@ -131,6 +153,17 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
             ("CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_created_seq ON agent_timeline (space_id, session_id, created_at DESC, seq DESC)", {"space_id", "session_id", "created_at", "seq"}),
             ("CREATE INDEX IF NOT EXISTS ix_agent_timeline_space_session_updated_id ON agent_timeline (space_id, session_id, updated_at ASC, seq ASC)", {"space_id", "session_id", "updated_at", "seq"}),
         ],
+        "agent_tasks": [
+            ("CREATE INDEX IF NOT EXISTS ix_agent_tasks_space_status_updated ON agent_tasks (space_id, status, updated_at DESC)", {"space_id", "status", "updated_at"}),
+        ],
+        "agent_artifacts": [
+            ("CREATE INDEX IF NOT EXISTS ix_agent_artifacts_space_task_created ON agent_artifacts (space_id, task_id, created_at DESC)", {"space_id", "task_id", "created_at"}),
+        ],
+        "agent_task_executions": [
+            ("CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_task_executions_space_task_attempt ON agent_task_executions (space_id, task_id, attempt_number)", {"space_id", "task_id", "attempt_number"}),
+            ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_task_updated ON agent_task_executions (space_id, task_id, updated_at DESC)", {"space_id", "task_id", "updated_at"}),
+            ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_job ON agent_task_executions (space_id, job_id)", {"space_id", "job_id"}),
+        ],
     }
     with engine.begin() as conn:
         for table_name, statements in index_statements.items():
@@ -144,7 +177,7 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
 
 
 def _bootstrap_default_space(engine: Engine) -> None:
-    from app.models import AccessToken, AgentPermission, AgentSession, AgentTimeline, Event, Invite, Job, Memory, ProviderSnapshot, Schedule, SettingEntry, Space, SpaceMembership, User, Worker, WorkerEnrollment
+    from app.models import AccessToken, AgentArtifact, AgentPermission, AgentSession, AgentTask, AgentTaskExecution, AgentTimeline, Event, Invite, Job, Memory, ProviderSnapshot, Schedule, SettingEntry, Space, SpaceMembership, User, Worker, WorkerEnrollment
 
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
     with SessionLocal() as db:
@@ -180,6 +213,9 @@ def _bootstrap_default_space(engine: Engine) -> None:
         business_tables = (
             Worker,
             AgentSession,
+            AgentTask,
+            AgentTaskExecution,
+            AgentArtifact,
             AgentTimeline,
             AgentPermission,
             ProviderSnapshot,

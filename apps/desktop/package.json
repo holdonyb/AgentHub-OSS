@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/desktop",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "AgentHub desktop client",
   "author": "AgentHub contributors",
   "private": true,
@@ -9,13 +9,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "package:win": "npm run build && node scripts/package-win.mjs",
+    "package:mac": "npm run build && node scripts/package-mac.mjs",
     "start": "electron .",
     "test": "vitest"
   },
   "build": {
     "appId": "xin.ifix.agenthub.desktop",
     "productName": "AgentHub",
-    "electronVersion": "36.2.1",
+    "electronVersion": "39.8.5",
     "asar": true,
     "directories": {
       "output": "release"
@@ -23,6 +24,7 @@
     "files": [
       "dist/**/*",
       "assets/icon.ico",
+      "assets/icon.png",
       "package.json"
     ],
     "extraMetadata": {
@@ -34,13 +36,22 @@
       "target": [
         "portable"
       ]
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.png",
+      "artifactName": "AgentHub-${version}-macos-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ]
     }
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
-    "electron": "^36.2.1",
-    "electron-builder": "24.13.3",
+    "electron": "39.8.5",
+    "electron-builder": "26.15.3",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "3.2.7"
   }
 }

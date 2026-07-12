@@ -16,7 +16,7 @@ Smoke-check an AgentHub self-host deployment.
 Options:
   --base-url URL          AgentHub public or Tailscale URL, for example https://agenthub.example.com
   --expect-public-relay   Also verify public worker relay rejects invalid enrollment
-  --expect-worker-bundles Also verify downloadable Windows/Linux worker bundles exist
+  --expect-worker-bundles Also verify downloadable Windows/Linux/macOS worker bundles exist
   --insecure              Pass -k to curl for temporary/self-signed certificate checks
   --json                  Emit a machine-readable success summary after checks
   -h, --help              Show this help
@@ -153,6 +153,7 @@ if [[ "$expect_worker_bundles" == "1" ]]; then
   expect_status GET /downloads/workers/worker-bundles-manifest.json 200
   expect_status GET /downloads/workers/agenthub-worker-windows.zip 200
   expect_status GET /downloads/workers/agenthub-worker-linux.tar.gz 200
+  expect_status GET /downloads/workers/agenthub-worker-macos.tar.gz 200
 fi
 
 log "self-host smoke checks passed"

@@ -185,6 +185,72 @@ class AgentSession(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 
+class AgentTask(Base):
+    __tablename__ = "agent_tasks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("atk"))
+    space_id: Mapped[str | None] = mapped_column(ForeignKey("spaces.space_id"), nullable=True, index=True)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: new_id("tsk"))
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    brief_markdown: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    success_criteria_markdown: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    target_worker_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    workspace_root: Mapped[str | None] = mapped_column(Text, nullable=True)
+    namespace: Mapped[str] = mapped_column(String(120), default="default", nullable=False)
+    latest_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    latest_session_id: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class AgentTaskExecution(Base):
+    __tablename__ = "agent_task_executions"
+    __table_args__ = (
+        UniqueConstraint(
+            "space_id",
+            "task_id",
+            "attempt_number",
+            name="uq_agent_task_executions_space_task_attempt",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ate"))
+    space_id: Mapped[str | None] = mapped_column(ForeignKey("spaces.space_id"), nullable=True, index=True)
+    execution_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: new_id("tex"))
+    task_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    kind: Mapped[str] = mapped_column(String(80), default="session_start", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class AgentArtifact(Base):
+    __tablename__ = "agent_artifacts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("art"))
+    space_id: Mapped[str | None] = mapped_column(ForeignKey("spaces.space_id"), nullable=True, index=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: new_id("art"))
+    task_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="report", index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(32), default="system", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
 class AgentTimeline(Base):
     __tablename__ = "agent_timeline"
     __table_args__ = (UniqueConstraint("session_id", "seq", name="uq_agent_timeline_session_seq"),)

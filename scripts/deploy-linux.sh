@@ -202,6 +202,7 @@ log "building worker bundles"
 .venv/bin/python scripts/build-worker-bundle.py --output-root "$worker_downloads_dir"
 test -f "$worker_downloads_dir/agenthub-worker-windows.zip"
 test -f "$worker_downloads_dir/agenthub-worker-linux.tar.gz"
+test -f "$worker_downloads_dir/agenthub-worker-macos.tar.gz"
 
 log "building Web console"
 rm -rf apps/web/dist

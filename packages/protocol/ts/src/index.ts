@@ -164,3 +164,103 @@ export interface Event {
   payload: Record<string, unknown>;
   created_at: string;
 }
+
+export type TaskStatus =
+  | 'draft'
+  | 'queued'
+  | 'working'
+  | 'blocked'
+  | 'needs_approval'
+  | 'ready_to_review'
+  | 'accepted'
+  | 'rejected'
+  | 'archived'
+  | 'cancelled'
+  | 'failed';
+
+export type ArtifactKind =
+  | 'report'
+  | 'diff'
+  | 'test_result'
+  | 'screenshot'
+  | 'log'
+  | 'document'
+  | 'patch'
+  | 'build_output'
+  | 'review_note';
+
+export type TaskTemplateKey = 'fix_bug' | 'implement_feature' | 'code_review' | 'release_assistant';
+export type TaskAuthorityPreset = 'read_only' | 'code_fix' | 'feature' | 'review_only';
+
+export interface TaskAuthorityBoundary {
+  read_paths: string[];
+  write_paths: string[];
+  runtime_controls: Record<string, unknown>;
+  enforcement: {
+    runtime_controls: 'mapped';
+    command_level: 'declared_only';
+  };
+}
+
+export interface TaskWorkspaceConfig {
+  schema_version: 1;
+  task_id: string;
+  relative_path: string;
+  title: string;
+  brief_markdown: string;
+  success_criteria_markdown: string;
+  template_key: TaskTemplateKey;
+  authority_preset: TaskAuthorityPreset;
+  relevant_paths: string[];
+  attempt_number: number;
+  review_note: string;
+  authority: TaskAuthorityBoundary;
+}
+
+export interface AgentTask {
+  task_id: string;
+  space_id: string | null;
+  title: string;
+  brief_markdown: string;
+  success_criteria_markdown: string;
+  status: TaskStatus;
+  priority: number;
+  target_worker_id: string | null;
+  backend: string | null;
+  workspace_root: string | null;
+  namespace: string;
+  latest_job_id: string | null;
+  latest_session_id: string | null;
+  artifact_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  due_at: string | null;
+  archived_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface AgentTaskExecution {
+  execution_id: string;
+  task_id: string;
+  job_id: string | null;
+  session_id: string | null;
+  attempt_number: number;
+  kind: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentArtifact {
+  artifact_id: string;
+  task_id: string;
+  kind: ArtifactKind;
+  title: string;
+  path: string | null;
+  content_markdown: string | null;
+  mime_type: string | null;
+  created_by: 'agent' | 'human' | 'system';
+  created_at: string;
+  version: number;
+}

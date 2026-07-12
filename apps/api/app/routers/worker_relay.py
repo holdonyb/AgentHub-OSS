@@ -22,11 +22,53 @@ router = APIRouter()
 
 @router.post("/api/worker/enroll")
 def enroll_worker(payload: WorkerEnrollIn, db: DbSession):
-    enrollment = db.query(WorkerEnrollment).filter(WorkerEnrollment.token_hash == hash_token(payload.enrollment_token)).one_or_none()
-    if enrollment is None or enrollment.revoked_at is not None or enrollment.expires_at <= utcnow():
+    now = utcnow()
+    enrollment_hash = hash_token(payload.enrollment_token)
+    enrollment = db.query(WorkerEnrollment).filter(WorkerEnrollment.token_hash == enrollment_hash).one_or_none()
+    if (
+        enrollment is None
+        or enrollment.used_at is not None
+        or enrollment.revoked_at is not None
+        or enrollment.expires_at <= now
+    ):
         raise HTTPException(status_code=403, detail={"message": "Enrollment token is invalid or expired", "code": "WORKER_ENROLLMENT_INVALID"})
-    worker, issued_token = _upsert_worker(db, space_id=enrollment.space_id, payload=payload, worker_token=payload.worker_token)
-    enrollment.used_at = utcnow()
+    existing_worker = (
+        db.query(Worker)
+        .filter(Worker.space_id == enrollment.space_id, Worker.worker_id == payload.worker_id)
+        .one_or_none()
+    )
+    if (
+        existing_worker is not None
+        and (
+            not payload.worker_token
+            or existing_worker.token_hash != hash_token(payload.worker_token)
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Worker is already enrolled", "code": "WORKER_ALREADY_ENROLLED"},
+        )
+
+    consumed = (
+        db.query(WorkerEnrollment)
+        .filter(
+            WorkerEnrollment.id == enrollment.id,
+            WorkerEnrollment.used_at.is_(None),
+            WorkerEnrollment.revoked_at.is_(None),
+            WorkerEnrollment.expires_at > now,
+        )
+        .update({WorkerEnrollment.used_at: now}, synchronize_session=False)
+    )
+    if consumed != 1:
+        db.rollback()
+        raise HTTPException(status_code=403, detail={"message": "Enrollment token is invalid or expired", "code": "WORKER_ENROLLMENT_INVALID"})
+
+    worker, issued_token = _upsert_worker(
+        db,
+        space_id=enrollment.space_id,
+        payload=payload,
+        worker_token=payload.worker_token if existing_worker is None else None,
+    )
     write_event(
         db,
         space_id=enrollment.space_id,

@@ -27,6 +27,15 @@ def _load_bundle_builder():
     return module
 
 
+def _load_worker_updater():
+    script_path = REPO_ROOT / "scripts" / "worker_self_update.py"
+    spec = importlib.util.spec_from_file_location("worker_self_update", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_worker_bundle_builder_emits_windows_and_linux_archives() -> None:
     module = _load_bundle_builder()
     with tempfile.TemporaryDirectory(prefix="agenthub-worker-bundle-test-") as temp_dir:
@@ -146,6 +155,99 @@ def test_worker_self_update_applies_bundle_without_nested_directories() -> None:
         assert not (installed_package / "agenthub_worker").exists()
         assert (repo_root / ".runtime" / "worker-bundle-version.txt").read_text(encoding="utf-8").strip() == "test-version"
         assert "updated worker bundle to test-version" in result.stdout
+
+
+def test_worker_self_update_rejects_manifest_archive_aliases() -> None:
+    module = _load_worker_updater()
+
+    with pytest.raises(RuntimeError, match="archive"):
+        module.validate_archive_name("macos", "../agenthub-worker-macos.tar.gz")
+    with pytest.raises(RuntimeError, match="archive"):
+        module.validate_archive_name("macos", "/tmp/agenthub-worker-macos.tar.gz")
+
+
+def test_worker_self_update_prepares_dependencies_before_replacing_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_worker_updater()
+    repo_root = tmp_path / "installed-worker"
+    source_root = tmp_path / "bundle-source" / "agenthub-worker"
+    archive_path = tmp_path / "agenthub-worker-macos.tar.gz"
+    manifest_path = tmp_path / "worker-bundles-manifest.json"
+    installed = repo_root / "workers" / "shared" / "agenthub_worker" / "runtime.py"
+    bundled = source_root / "workers" / "shared" / "agenthub_worker" / "runtime.py"
+    requirements = source_root / "workers" / "requirements.txt"
+    installed.parent.mkdir(parents=True)
+    bundled.parent.mkdir(parents=True)
+    requirements.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text("old-runtime\n", encoding="utf-8")
+    bundled.write_text("new-runtime\n", encoding="utf-8")
+    requirements.write_text("broken-dependency==0\n", encoding="utf-8")
+    with tarfile.open(archive_path, "w:gz") as archive:
+        archive.add(source_root, arcname="agenthub-worker")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "bundle_version": "failed-dependencies",
+                "bundles": [
+                    {
+                        "platform": "macos",
+                        "archive": archive_path.name,
+                        "sha256": sha256(archive_path.read_bytes()).hexdigest(),
+                        "paths": ["workers/shared/agenthub_worker", "workers/requirements.txt"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTHUB_WORKER_AUTO_UPDATE", "true")
+    monkeypatch.setenv("AGENTHUB_WORKER_MANIFEST_URL", manifest_path.as_uri())
+    monkeypatch.setenv("AGENTHUB_WORKER_BUNDLE_URL", archive_path.as_uri())
+    monkeypatch.setattr(
+        module,
+        "install_requirements",
+        lambda _root, *_args: (_ for _ in ()).throw(RuntimeError("pip failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="pip failed"):
+        module.update_worker("macos", repo_root)
+
+    assert installed.read_text(encoding="utf-8") == "old-runtime\n"
+    assert not (repo_root / ".runtime" / "worker-bundle-version.txt").exists()
+
+
+def test_worker_self_update_rolls_back_all_paths_when_switching_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_worker_updater()
+    repo_root = tmp_path / "installed"
+    staging_root = tmp_path / "staged"
+    backup_root = tmp_path / "backup"
+    paths = ["scripts/first.sh", "scripts/second.sh"]
+    for relative_path in paths:
+        installed = repo_root / relative_path
+        staged = staging_root / relative_path
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_text(f"old-{installed.name}\n", encoding="utf-8")
+        staged.write_text(f"new-{staged.name}\n", encoding="utf-8")
+
+    original_replace = module.os.replace
+    failing_source = staging_root / "scripts" / "second.sh"
+
+    def fail_second_switch(source, target):
+        if Path(source) == failing_source:
+            raise OSError("simulated switch failure")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(module.os, "replace", fail_second_switch)
+
+    with pytest.raises(OSError, match="simulated switch failure"):
+        module.apply_staged_paths_atomically(staging_root, repo_root, backup_root, paths)
+
+    assert (repo_root / "scripts" / "first.sh").read_text(encoding="utf-8") == "old-first.sh\n"
+    assert (repo_root / "scripts" / "second.sh").read_text(encoding="utf-8") == "old-second.sh\n"
 
 
 def test_worker_scripts_wire_auto_update_configuration() -> None:

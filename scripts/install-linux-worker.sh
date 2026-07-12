@@ -169,21 +169,21 @@ join_by_colon() {
   printf '%s' "$result"
 }
 
-resolve_python_bootstrap() {
+create_virtualenv() {
   if command -v python3 >/dev/null 2>&1; then
-    printf 'python3'
+    python3 -m venv "$venv_root"
     return 0
   fi
   if command -v python >/dev/null 2>&1; then
-    printf 'python'
+    python -m venv "$venv_root"
     return 0
   fi
   if command -v py >/dev/null 2>&1; then
-    printf 'py -3'
+    py -3 -m venv "$venv_root"
     return 0
   fi
   if command -v uv >/dev/null 2>&1; then
-    printf 'uv python'
+    uv venv "$venv_root" --python 3
     return 0
   fi
   echo "Python 3 launcher not found on PATH" >&2
@@ -250,9 +250,7 @@ mkdir -p "$service_dir"
 chmod +x "$resolved_repo_root/scripts/install-linux-worker.sh" "$updater_path" 2>/dev/null || true
 
 if [[ ! -x "$python_path" ]]; then
-  bootstrap_python="$(resolve_python_bootstrap)"
-  # shellcheck disable=SC2086
-  $bootstrap_python -m venv "$venv_root"
+  create_virtualenv
 fi
 
 if [[ ! -x "$python_path" && -x "$venv_root/Scripts/python.exe" ]]; then

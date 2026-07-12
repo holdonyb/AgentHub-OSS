@@ -13,7 +13,7 @@ import httpx
 from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.json import dumps_json, loads_json
-from app.models import AgentPermission, AgentSession, AgentTimeline, Event, Job, Memory, ProviderSnapshot, Schedule, User, Worker, utcnow
+from app.models import AgentArtifact, AgentPermission, AgentSession, AgentTask, AgentTaskExecution, AgentTimeline, Event, Job, Memory, ProviderSnapshot, Schedule, User, Worker, utcnow
 
 
 ALLOWED_JOB_KINDS = {
@@ -254,6 +254,60 @@ def permission_out(permission: AgentPermission) -> dict[str, Any]:
         "response": loads_json(permission.response_json, {}),
         "created_at": permission.created_at,
         "resolved_at": permission.resolved_at,
+    }
+
+
+def task_out(task: AgentTask, *, artifact_count: int = 0) -> dict[str, Any]:
+    return {
+        "space_id": task.space_id,
+        "task_id": task.task_id,
+        "title": strip_ansi(task.title),
+        "brief_markdown": strip_ansi(task.brief_markdown),
+        "success_criteria_markdown": strip_ansi(task.success_criteria_markdown),
+        "status": task.status,
+        "priority": task.priority,
+        "target_worker_id": task.target_worker_id,
+        "backend": task.backend,
+        "workspace_root": task.workspace_root,
+        "namespace": task.namespace,
+        "latest_job_id": task.latest_job_id,
+        "latest_session_id": task.latest_session_id,
+        "artifact_count": artifact_count,
+        "created_by": task.created_by,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "due_at": task.due_at,
+        "archived_at": task.archived_at,
+        "metadata": sanitize_text(loads_json(task.metadata_json, {})),
+    }
+
+
+def task_execution_out(execution: AgentTaskExecution) -> dict[str, Any]:
+    return {
+        "execution_id": execution.execution_id,
+        "task_id": execution.task_id,
+        "job_id": execution.job_id,
+        "session_id": execution.session_id,
+        "attempt_number": execution.attempt_number,
+        "kind": execution.kind,
+        "status": execution.status,
+        "created_at": execution.created_at,
+        "updated_at": execution.updated_at,
+    }
+
+
+def artifact_out(artifact: AgentArtifact) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact.artifact_id,
+        "task_id": artifact.task_id,
+        "kind": artifact.kind,
+        "title": strip_ansi(artifact.title),
+        "path": artifact.path,
+        "content_markdown": strip_ansi(artifact.content_markdown or "") if artifact.content_markdown is not None else None,
+        "mime_type": artifact.mime_type,
+        "created_by": artifact.created_by,
+        "created_at": artifact.created_at,
+        "version": artifact.version,
     }
 
 

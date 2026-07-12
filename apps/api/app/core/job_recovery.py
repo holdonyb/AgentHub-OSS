@@ -8,6 +8,7 @@ from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.json import loads_json
 from app.models import AgentPermission, AgentSession, Job, Worker, utcnow
+from app.task_lifecycle import project_task_job_lifecycle
 
 
 def _job_updates_target_session(job: Job) -> bool:
@@ -67,6 +68,13 @@ def _recover_job_rows(db: Session, jobs: list[Job], *, worker_id_for_event: str)
         job.error_text = f"Worker job timed out after {stale_after} seconds and was released to unblock queued input."
         job.completed_at = now
         job.updated_at = now
+        project_task_job_lifecycle(
+            db,
+            job,
+            state="failed",
+            at=now,
+            detail_text=job.error_text or "",
+        )
         recovered += 1
         if job.target_session_id and _job_updates_target_session(job):
             session = (
@@ -129,6 +137,13 @@ def recover_orphaned_running_jobs(
         )
         job.completed_at = now
         job.updated_at = now
+        project_task_job_lifecycle(
+            db,
+            job,
+            state="failed",
+            at=now,
+            detail_text=job.error_text or "",
+        )
         recovered += 1
         if job.target_session_id and _job_updates_target_session(job):
             session = (
@@ -200,6 +215,13 @@ def _recover_disconnected_worker_jobs(db: Session, worker: Worker, now: datetime
         )
         job.completed_at = now
         job.updated_at = now
+        project_task_job_lifecycle(
+            db,
+            job,
+            state="failed",
+            at=now,
+            detail_text=job.error_text or "",
+        )
         recovered += 1
         if job.target_session_id and _job_updates_target_session(job):
             session = (
@@ -269,6 +291,9 @@ def recover_disconnected_workers_for_space(db: Session, space_id: str | None) ->
 
 def recover_stale_running_jobs_for_space(db: Session, space_id: str | None) -> int:
     recovered = recover_disconnected_workers_for_space(db, space_id)
+    if recovered:
+        # SessionLocal disables autoflush, so persist offline recovery before the stale-job query.
+        db.flush()
     worker_ids = [
         row[0]
         for row in db.query(Worker.worker_id)
