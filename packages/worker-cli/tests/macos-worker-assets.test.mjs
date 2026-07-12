@@ -165,7 +165,8 @@ describe("macOS LaunchAgent contract", () => {
     const workflow = readRepoFile(".github/workflows/ci.yml");
 
     expect(workflow).toContain("macos-worker:");
-    expect(workflow).toContain("runs-on: macos-latest");
+    expect(workflow).toContain("runs-on: macos-26");
+    expect(workflow).not.toContain("runs-on: macos-latest");
     expect(workflow).toContain("install-macos-worker.sh");
     expect(workflow).toContain("plutil -lint");
   });
