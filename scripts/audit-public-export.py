@@ -54,13 +54,13 @@ def iter_candidate_files(root: Path, extra_excludes: set[str]) -> Iterable[Path]
         root / "scripts" / "export-oss.ps1",
     )
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.name == "audit-public-export.py":
-            continue
         if any(path.is_relative_to(prefix) for prefix in excluded_prefixes):
             continue
         if any(part in excluded for part in path.parts):
+            continue
+        if not path.is_file():
+            continue
+        if path.name == "audit-public-export.py":
             continue
         yield path
 
