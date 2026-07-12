@@ -171,6 +171,54 @@ def test_task_attempt_migration_renumbers_legacy_duplicates_and_enforces_uniquen
             )
 
 
+def test_task_attempt_migration_avoids_window_functions_for_sqlite_3_22(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core import database
+
+    db_path = tmp_path / "legacy-sqlite-322-task-attempts.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path.as_posix()}", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE agent_sessions (session_id VARCHAR(180), created_at DATETIME)"))
+        conn.execute(
+            text(
+                "CREATE TABLE agent_task_executions ("
+                "id VARCHAR(64), execution_id VARCHAR(64), space_id VARCHAR(64), task_id VARCHAR(64), "
+                "attempt_number INTEGER NOT NULL DEFAULT 1, status VARCHAR(32), created_at DATETIME"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agent_task_executions "
+                "(id, execution_id, space_id, task_id, attempt_number, status, created_at) VALUES "
+                "('ate_1', 'tex_1', 'spc_1', 'tsk_1', 1, 'completed', '2026-07-01 10:00:00'), "
+                "('ate_2', 'tex_2', 'spc_1', 'tsk_1', 1, 'queued', '2026-07-01 11:00:00')"
+            )
+        )
+
+    real_text = database.text
+
+    def sqlite_322_text(statement: str):
+        if "ROW_NUMBER" in statement.upper():
+            raise AssertionError("SQLite 3.22 does not support window functions")
+        return real_text(statement)
+
+    monkeypatch.setattr(database, "text", sqlite_322_text)
+    database._ensure_compatible_columns(engine)
+
+    with engine.connect() as conn:
+        attempts = conn.execute(
+            text(
+                "SELECT attempt_number FROM agent_task_executions "
+                "WHERE space_id = 'spc_1' AND task_id = 'tsk_1' ORDER BY created_at"
+            )
+        ).scalars().all()
+
+    assert attempts == [1, 2]
+
+
 def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: Path) -> None:
     from app.core.database import create_db_engine
 
