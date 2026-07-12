@@ -236,6 +236,20 @@ describe('mobile API', () => {
     );
   });
 
+  it('loads all pending interactions for the native notification guard', async () => {
+    const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
+      jsonResponse({ items: [] }),
+    );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.listPermissions(undefined, 'pending');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://agenthub.example.com/api/permissions?status=pending',
+      { credentials: 'include' },
+    );
+  });
+
   it('loads older timeline pages with a stable created-at and sequence cursor', async () => {
     const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
       jsonResponse({ items: [], has_more: false }),

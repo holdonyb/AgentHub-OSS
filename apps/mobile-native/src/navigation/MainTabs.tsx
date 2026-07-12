@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MobileApi, NativeUser } from '../api/mobileApi';
+import { useNativeNotificationGuard } from '../notifications/useNativeNotificationGuard';
 import { FilesScreen } from '../screens/FilesScreen';
 import { SessionsScreen } from '../screens/SessionsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
@@ -20,6 +21,11 @@ function ProfileScreen({
   error,
   onLogout,
   onChangeServer,
+  notificationEnabled,
+  notificationPendingCount,
+  notificationSyncing,
+  onEnableNotifications,
+  onRefreshNotifications,
 }: {
   user: NativeUser;
   serverUrl: string;
@@ -27,6 +33,11 @@ function ProfileScreen({
   error: string | null;
   onLogout(): Promise<void>;
   onChangeServer(): Promise<void>;
+  notificationEnabled: boolean;
+  notificationPendingCount: number;
+  notificationSyncing: boolean;
+  onEnableNotifications(): Promise<void>;
+  onRefreshNotifications(): Promise<void>;
 }) {
   return (
     <View style={styles.screen}>
@@ -36,6 +47,27 @@ function ProfileScreen({
       <View style={styles.profileDetails}>
         <Text style={styles.detailLabel}>服务器</Text>
         <Text style={styles.serverUrl}>{serverUrl}</Text>
+      </View>
+      <View style={styles.profileDetails}>
+        <View style={styles.settingHeader}>
+          <View style={styles.settingCopy}>
+            <Text style={styles.detailLabel}>通知</Text>
+            <Text style={styles.settingValue}>
+              {notificationEnabled ? '已开启' : '未开启'} · 待处理 {notificationPendingCount}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            disabled={notificationSyncing}
+            onPress={() => void (notificationEnabled ? onRefreshNotifications() : onEnableNotifications())}
+            style={({ pressed }) => [styles.settingButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.settingButtonText}>
+              {notificationSyncing ? '同步中' : notificationEnabled ? '同步' : '开启'}
+            </Text>
+          </Pressable>
+        </View>
+        <Text style={styles.settingHint}>审批、用户选择和失败任务会发送原生提醒。</Text>
       </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable
@@ -81,6 +113,7 @@ export function MainTabs({
   onLogout,
   onChangeServer,
 }: MainTabsProps) {
+  const notificationGuard = useNativeNotificationGuard(api, onRequestError);
   return (
     <NavigationContainer>
       <Tab.Navigator
@@ -143,7 +176,12 @@ export function MainTabs({
                     busy={busy}
                     error={error}
                     onChangeServer={onChangeServer}
+                    notificationEnabled={notificationGuard.enabled}
+                    notificationPendingCount={notificationGuard.pendingCount}
+                    notificationSyncing={notificationGuard.syncing}
+                    onEnableNotifications={notificationGuard.enable}
                     onLogout={onLogout}
+                    onRefreshNotifications={notificationGuard.refresh}
                     serverUrl={serverUrl}
                     user={user}
                   />
@@ -182,6 +220,21 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingVertical: 18,
   },
+  settingHeader: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  settingCopy: { flex: 1, gap: 4 },
+  settingValue: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  settingHint: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  settingButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 38,
+    minWidth: 68,
+    paddingHorizontal: 12,
+  },
+  settingButtonText: { color: colors.accent, fontSize: 13, fontWeight: '700' },
   secondaryButton: {
     alignItems: 'center',
     backgroundColor: colors.surface,

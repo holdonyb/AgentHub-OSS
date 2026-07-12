@@ -306,7 +306,7 @@ export interface MobileApi {
   ): Promise<NativeTimelinePayload>;
   getSessionSync(sessionId: string): Promise<NativeSessionSyncPayload>;
   listPermissions(
-    sessionId: string,
+    sessionId?: string,
     status?: NativePermission['status'],
   ): Promise<NativeListPayload<NativePermission>>;
   listJobs(): Promise<NativeListPayload<NativeJob>>;
@@ -392,7 +392,7 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       ),
     listPermissions: (sessionId, status = 'pending') =>
       client.get<NativeListPayload<NativePermission>>(
-        `/api/permissions?status=${encodeURIComponent(status)}&session_id=${encodeURIComponent(sessionId)}`,
+        `/api/permissions?status=${encodeURIComponent(status)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`,
       ),
     listJobs: () => client.get<NativeListPayload<NativeJob>>('/api/jobs?limit=200'),
     sendSessionInput: (sessionId, payload, csrfToken) =>
