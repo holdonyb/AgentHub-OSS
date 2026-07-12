@@ -109,14 +109,21 @@ def _ensure_compatible_columns(engine: Engine) -> None:
             if {"id", "space_id", "task_id", "attempt_number", "created_at"}.issubset(execution_columns):
                 conn.execute(
                     text(
-                        "WITH ranked AS ("
-                        "SELECT id, ROW_NUMBER() OVER ("
-                        "PARTITION BY COALESCE(space_id, ''), task_id ORDER BY created_at, id"
-                        ") AS next_attempt FROM agent_task_executions"
-                        ") "
                         "UPDATE agent_task_executions "
                         "SET attempt_number = ("
-                        "SELECT next_attempt FROM ranked WHERE ranked.id = agent_task_executions.id"
+                        "SELECT COUNT(*) FROM agent_task_executions AS earlier "
+                        "WHERE COALESCE(earlier.space_id, '') = "
+                        "COALESCE(agent_task_executions.space_id, '') "
+                        "AND earlier.task_id = agent_task_executions.task_id "
+                        "AND ("
+                        "COALESCE(earlier.created_at, '') < "
+                        "COALESCE(agent_task_executions.created_at, '') "
+                        "OR ("
+                        "COALESCE(earlier.created_at, '') = "
+                        "COALESCE(agent_task_executions.created_at, '') "
+                        "AND earlier.id <= agent_task_executions.id"
+                        ")"
+                        ")"
                         ")"
                     )
                 )
