@@ -7,7 +7,7 @@
 ![AgentHub README Hero](docs/assets/agenthub-readme-hero.png)
 
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-334155)](.github/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-public_preview-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
+[![Release](https://img.shields.io/badge/release-v1.0.0_RC-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0ea5e9.svg)](LICENSE)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-first-16a34a)](docs/SELF_HOST_QUICKSTART.md)
 [![Tailscale](https://img.shields.io/badge/Tailscale-friendly-4f46e5)](docs/TAILSCALE_PRIVATE_MODE.md)
@@ -24,11 +24,11 @@ Architecture and deployment topology: [Architecture diagrams](docs/ARCHITECTURE.
 
 - **One inbox for every agent session.** See local Codex, Claude, Kimi, and OpenCode sessions in one place.
 - **Multi-machine control.** Register Windows, Linux, and macOS workers, then route session input and health jobs to the right machine.
-- **Phone and desktop access.** Use Web, Android APK, or Windows desktop to continue work away from the terminal. The Android APK asks for your server URL on first launch before showing login.
+- **Phone and desktop access.** Use Web, Android, Windows desktop, or macOS desktop to continue work away from the terminal. Clients ask for your server URL before login.
 - **Tailscale-first private mode.** Start without opening worker ports to the public internet.
 - **HTTPS public relay.** If you have a domain and reverse proxy, expose the Web/App entry through HTTPS while workers still use private networking or outbound-only connections.
 - **Configuration-first setup.** Voice ASR, server URL, worker roots, and provider credentials are configuration, not hardcoded maintainer defaults.
-- **1.0 Workbench Mode (in development).** AgentHub keeps the existing Session console and adds an async task workbench for briefs, local worker execution, artifacts, and review.
+- **1.0 Workbench Mode.** AgentHub keeps the existing Session console and adds an async task workbench for briefs, local worker execution, artifacts, review, and rework.
 
 ## Common Scenarios
 
@@ -43,7 +43,8 @@ Tips:
 - For local-server setups, prefer a Tailscale DNS name or `100.x.y.z` address in Android so LAN IP changes do not break the app.
 - For public VM setups, use HTTPS for Web/App login; do not use plain public `http://` for authenticated access.
 - A worker can live on the same machine as the server or on many separate machines. AgentHub routes jobs and syncs state; agent runtimes still use the worker's local environment.
-- iOS client and macOS desktop are not first-party surfaces yet. Contribution prompts and guardrails are already in `CONTRIBUTING.md`.
+- The React Native iOS client is source- and CI-supported and compiles for the iOS Simulator. Device/App Store distribution still requires Apple signing, provisioning, and real-device verification.
+- macOS desktop packaging is automated. Public distribution still requires Apple signing and notarization credentials in GitHub Actions.
 
 ## Getting Started
 
@@ -170,12 +171,13 @@ If you want a fuller chooser page before picking one of the three paths, use:
 | --- | --- | --- |
 | Web self-host | Supported | Main console and API surface |
 | Android APK | Supported | First-launch server setup, then normal login |
+| React Native Android | 1.0 candidate | Sessions, tasks, files, images, voice, approvals, and notifications; Release builds APK/AAB |
 | Windows desktop | Supported | Electron client with first-launch server setup |
+| macOS desktop | 1.0 candidate | Automated DMG/ZIP packaging; public distribution requires signing and notarization |
 | Windows worker | Supported | Bundle + PowerShell installer |
 | Linux worker | Supported | Bundle + shell/systemd installer |
 | macOS worker | Supported | Bundle + per-user LaunchAgent installer |
-| iOS client | Community welcome | Prompt and guardrails are in `CONTRIBUTING.md` |
-| macOS desktop | Community welcome | Prompt and guardrails are in `CONTRIBUTING.md` |
+| iOS client | Source and CI supported | React Native Simulator build passes; signed IPA/device distribution is not complete |
 
 ## Docs
 
@@ -203,8 +205,12 @@ If you want a fuller chooser page before picking one of the three paths, use:
 npm run web:build
 npm run desktop:build
 npm run desktop:package:win
+npm run desktop:package:mac
 npm run mobile:build:debug
 npm run mobile:build:release
+npm run mobile:native:build:android:debug
+npm run mobile:native:build:android
+npm run mobile:native:build:ios
 ```
 
 Generate downloadable worker bundles:
@@ -221,6 +227,9 @@ npm run web:test
 npm run web:build
 npm run desktop:test
 npm run mobile:test
+npm run mobile:native:test
+npm run mobile:native:typecheck
+npm run release:version:check
 .\.venv\Scripts\python.exe scripts\audit-public-export.py
 ```
 

@@ -7,7 +7,7 @@
 ![AgentHub README Hero](docs/assets/agenthub-readme-hero.png)
 
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-334155)](.github/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-public_preview-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
+[![Release](https://img.shields.io/badge/release-v1.0.0_RC-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0ea5e9.svg)](LICENSE)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-first-16a34a)](docs/SELF_HOST_QUICKSTART.md)
 [![Tailscale](https://img.shields.io/badge/Tailscale-friendly-4f46e5)](docs/TAILSCALE_PRIVATE_MODE.md)
@@ -24,11 +24,11 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 
 - **统一会话收件箱。** 把本机和远程机器上的 Codex、Claude、Kimi、OpenCode 会话放到同一个入口。
 - **多机器控制。** Windows、Linux 和 macOS worker 都可以接入，消息、健康检查和任务会路由到对应机器。
-- **手机和桌面都能用。** Web、Android APK、Windows 桌面端都可以接入同一个 AgentHub server；其中 Android APK 首启会先要求填写 server URL。
+- **手机和桌面都能用。** Web、Android、Windows 和 macOS 桌面端可以接入同一个 AgentHub server；客户端首启先配置自己的 server URL。
 - **Tailscale-first 私有模式。** 不需要把 worker 端口暴露到公网，也能从手机控制本机 agent。
 - **Public relay 公开入口。** 如果你有域名和 HTTPS 反代，也可以把 Web/App 入口放到公网，worker 仍然可以只走私网或出站连接。
 - **配置优先。** 语音识别、服务器地址、worker 根目录、provider 密钥都走配置，不写死维护者环境。
-- **1.0 Workbench Mode（开发中）。** 在保留当前 Session 控制台的基础上，新增异步任务工作台：写任务书、派发到本地 worker、等待 artifact、再验收。
+- **1.0 Workbench Mode。** 在保留 Session 控制台的基础上，新增异步任务工作台：写任务书、派发到本地 worker、跟踪执行与 artifact、验收或要求返工。
 
 ## 典型使用场景
 
@@ -43,7 +43,8 @@ AgentHub 不是托管 SaaS，也不是任意远程 shell。agent 继续运行在
 - 本机 server 场景下，Android 里优先填 Tailscale DNS 或 `100.x.y.z` 地址，避免局域网 IP 变化。
 - 公网 VM 场景下，Web/App 入口必须使用 HTTPS；普通公网 `http://` 不应该用于登录态。
 - worker 可以和 server 同机，也可以分布在多台电脑上；AgentHub 只负责任务路由和状态同步，agent runtime 仍然使用 worker 本机环境。
-- iOS client 和 macOS desktop 当前不是 first-party 支持面，但 `CONTRIBUTING.md` 已经放了贡献提示词和约束，欢迎社区补齐。
+- React Native iOS 客户端已经进入源码和 CI 支持面，可完成 Simulator 编译；安装到真机或发布 App Store 仍需要 Apple 签名、provisioning 和真机验证。
+- macOS desktop 已进入自动打包链路；公开分发的签名和 notarization 需要维护者在 GitHub Actions 配置 Apple 凭据。
 
 ## 快速开始
 
@@ -170,12 +171,13 @@ sudo bash scripts/install-selfhost-linux.sh \
 | --- | --- | --- |
 | Web self-host | 已支持 | 主控制台和 API |
 | Android APK | 已支持 | 首启先配置 server URL，再进入登录 |
+| React Native Android | 1.0 候选 | 会话、任务、文件、图片、语音、审批和通知；Release 同时产出 APK/AAB |
 | Windows desktop | 已支持 | Electron 客户端，首启配置服务器 |
+| macOS desktop | 1.0 候选 | 自动构建 DMG/ZIP；公开分发需签名与 notarization |
 | Windows worker | 已支持 | bundle + PowerShell 安装脚本 |
 | Linux worker | 已支持 | bundle + shell/systemd 安装脚本 |
 | macOS worker | 已支持 | bundle + 每用户 LaunchAgent 安装脚本 |
-| iOS client | 欢迎社区贡献 | `CONTRIBUTING.md` 里已有可直接开工的提示词 |
-| macOS desktop | 欢迎社区贡献 | `CONTRIBUTING.md` 里已有可直接开工的提示词 |
+| iOS client | 源码与 CI 支持 | React Native 客户端可通过 Simulator 编译；签名 IPA/真机分发尚未完成 |
 
 ## 文档入口
 
@@ -204,8 +206,12 @@ sudo bash scripts/install-selfhost-linux.sh \
 npm run web:build
 npm run desktop:build
 npm run desktop:package:win
+npm run desktop:package:mac
 npm run mobile:build:debug
 npm run mobile:build:release
+npm run mobile:native:build:android:debug
+npm run mobile:native:build:android
+npm run mobile:native:build:ios
 ```
 
 生成可下载的 worker bundles：
@@ -222,6 +228,9 @@ npm run web:test
 npm run web:build
 npm run desktop:test
 npm run mobile:test
+npm run mobile:native:test
+npm run mobile:native:typecheck
+npm run release:version:check
 .\.venv\Scripts\python.exe scripts\audit-public-export.py
 ```
 

@@ -1,12 +1,12 @@
 # Open Source Launch
 
-This document is the release and launch checklist for the first public AgentHub OSS drop.
+This document is the release and launch checklist for AgentHub 1.0.
 
 ## Positioning
 
 Lead with one sentence:
 
-> AgentHub is a self-hosted control plane for managing Codex, Claude, Kimi, and other local agent sessions across your own machines, with phone and desktop access.
+> AgentHub is a self-hosted agent workbench for managing Codex, Claude, Kimi, and other local agent sessions across your own machines, with phone and desktop access.
 
 Keep the public story anchored in:
 
@@ -16,30 +16,37 @@ Keep the public story anchored in:
 - Docker mode
 - phone can control local agent sessions
 
-## Supported surface for v0.1
+## Supported surface for v1.0
 
 Official first-party support:
 
 - Web self-host
-- Android APK
+- Android compatibility APK
+- React Native Android APK/AAB
 - Windows desktop
+- macOS desktop packaging
 - Windows/Linux/macOS worker bundles
+- Session Mode and Workbench Mode
 
-Not first-party in this release:
+Source and CI support without a signed installable artifact:
 
-- iOS
-- macOS desktop
+- React Native iOS Simulator build
 
-README should say this clearly and link to `CONTRIBUTING.md` for platform contribution prompts.
+README must state that iOS device/App Store distribution and public macOS distribution still require Apple signing, provisioning, notarization, and real-device smoke evidence.
 
 ## Release assets
 
 Expected GitHub Release assets:
 
 - `agenthub-android-release.apk`
-- `agenthub-desktop-windows-*.zip` or equivalent Windows package
+- `agenthub-native-android-release.apk`
+- `agenthub-native-android-release.aab`
+- `AgentHub-*-windows-*.exe`
+- `AgentHub-*-macos-*.dmg`
+- `AgentHub-*-macos-*.zip`
 - `agenthub-worker-windows.zip`
 - `agenthub-worker-linux.tar.gz`
+- `agenthub-worker-macos.tar.gz`
 - `SHA256SUMS`
 
 ## Screenshot shot list
@@ -53,6 +60,7 @@ Minimum set:
 3. worker enrollment / worker status
 4. approval or plan interaction UI
 5. settings or self-host configuration surface
+6. Workbench task brief and review flow
 
 ## Demo video
 

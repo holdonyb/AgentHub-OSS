@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## Unreleased (v1.0.0 release candidate)
+
+- Added Workbench Mode beside the existing Session console, including structured task briefs, worker dispatch, attempts, artifacts, review, approval, and rework.
+- Added the React Native Android/iOS client with self-host server setup, sessions, tasks, files, workers, approvals, image attachments, voice dictation, and native notification deduplication.
+- Added official macOS worker installation through a per-user LaunchAgent with verified bundle updates and rollback protection.
+- Added Windows and macOS desktop packaging with runtime-configured server selection and optional platform signing credentials.
+- Unified package, Android, React Native, desktop, and protocol versions at `1.0.0`, with CI checks that reject mismatched tags or component versions.
+- Expanded GitHub Actions to compile React Native Android on Linux and the iOS Simulator target on macOS before release.
+- Fixed the mobile Workbench task sheet so its title, close control, and submit actions remain reachable while long forms scroll.
 
 ## v0.1.1 - 2026-05-27
 

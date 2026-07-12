@@ -91,4 +91,4 @@ Add `--purge` to remove the default per-worker installation root as well. Logs u
 ## Limitations
 
 - LaunchAgents run in a user login domain. A Mac with no logged-in user session needs a different operational model; do not convert this installer into a root LaunchDaemon because the agent CLI login and user configuration would no longer match.
-- The repository can validate scripts, bundle contents, Python behavior, and manifest integrity on Windows/Linux CI. Actual `launchctl bootstrap`, macOS Python bootstrap, and CLI discovery require the macOS CI job or a real Mac smoke test.
+- The repository validates scripts, bundle contents, Python behavior, plist rendering, and manifest integrity in macOS CI. Actual user-session `launchctl bootstrap`, installed CLI discovery, and long-running sleep/wake behavior still require a real Mac smoke test.

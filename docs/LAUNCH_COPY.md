@@ -6,11 +6,11 @@ This file keeps the public-facing launch copy aligned across the website, README
 
 Chinese:
 
-> AgentHub 是一个 self-hosted control plane，用来统一管理你自己机器上的 Codex、Claude、Kimi、OpenCode 等本地 agent session，并通过 Web、Android、Windows Desktop 远程接管。
+> AgentHub 是一个 self-hosted agent workbench，用来统一管理你自己机器上的 Codex、Claude、Kimi、OpenCode session，并通过 Web、Android、Windows/macOS Desktop 远程派发、接管和验收工作。
 
 English:
 
-> AgentHub is a self-hosted control plane for managing Codex, Claude, Kimi, OpenCode, and other local agent sessions across your own machines, with Web, Android, and Windows desktop access.
+> AgentHub is a self-hosted agent workbench for managing Codex, Claude, Kimi, OpenCode, and other local agent sessions across your own machines, with Web, Android, Windows, and macOS desktop access.
 
 ## Chinese Launch Post
 
@@ -19,12 +19,13 @@ Long version:
 > 开源了 `AgentHub`。  
 > 它不是托管 SaaS，也不是远程 shell 平台，而是一个给自己机器用的 AI agent 控制台。
 >
-> 你可以把 server 跑在本机、Docker 或 VM 上，让 Windows / Linux / macOS worker 接入，然后通过 Web、Android、Windows Desktop 统一查看和控制多台机器上的 Codex、Claude、Kimi、OpenCode session。
+> 你可以把 server 跑在本机、Docker 或 VM 上，让 Windows / Linux / macOS worker 接入，然后通过 Web、Android、Windows/macOS Desktop 统一查看会话，或在 Workbench 中写任务书、派发、跟踪产物并验收。
 >
 > 当前这版已经把几条最关键的链路收口到能复现的程度：
 >
 > - Local / Docker / VM 三种安装路径
-> - Android APK、Windows Desktop、Windows/Linux/macOS worker bundle
+> - Web、Android、Windows/macOS Desktop 和 Windows/Linux/macOS worker bundle
+> - Session 控制台与 Workbench 任务派发/产物验收
 > - `npx agenthub-worker` 安装 worker
 > - Tailscale private mode 和 HTTPS public relay
 > - 官网下载页、版本说明页、安装选择页
@@ -47,7 +48,7 @@ Short version:
 
 > 开源了 `AgentHub`。  
 > 一个 self-hosted AI agent 控制台，用来统一管理你自己机器上的 Codex / Claude / Kimi / OpenCode session。  
-> 支持本机、Docker、VM 三种 server 路径，也支持 Android、Windows Desktop 和 Windows/Linux/macOS worker。
+> 支持本机、Docker、VM 三种 server 路径，也支持 Web、Android、Windows/macOS Desktop、Windows/Linux/macOS worker，以及 Session / Workbench 两种工作模式。
 > 官网：`https://myagenthub.dev`
 
 Friend-group version:
@@ -64,12 +65,13 @@ Long version:
 >
 > It is not a hosted SaaS and not a generic remote shell. It is a self-hosted control plane for the local agent runtimes you already use on your own machines.
 >
-> You can run the server on a laptop, through Docker, or on a VM, attach Windows, Linux, and macOS workers, and then manage Codex, Claude, Kimi, and OpenCode sessions from Web, Android, or Windows desktop.
+> You can run the server on a laptop, through Docker, or on a VM, attach Windows, Linux, and macOS workers, and then manage sessions or dispatch reviewed Workbench tasks from Web, Android, Windows, or macOS desktop.
 >
 > The current release is focused on reproducible install and control paths:
 >
 > - Local / Docker / VM server modes
-> - Android APK, Windows desktop, Windows/Linux/macOS worker bundles
+> - Web, Android, Windows/macOS desktop, and Windows/Linux/macOS worker bundles
+> - Session control and Workbench task review
 > - `npx agenthub-worker` for worker install
 > - Tailscale private mode and HTTPS public relay
 > - public download, install, and release pages
@@ -84,19 +86,19 @@ Long version:
 Short version:
 
 > Open sourced `AgentHub`.  
-> A self-hosted control plane for Codex, Claude, Kimi, OpenCode, and other local agent sessions across your own machines.  
-> Supports Local / Docker / VM server modes plus Web, Android, Windows desktop, and Windows/Linux/macOS workers.
+> A self-hosted agent workbench for Codex, Claude, Kimi, OpenCode, and other local agent sessions across your own machines.
+> Supports Local / Docker / VM server modes plus Web, Android, Windows/macOS desktop, and Windows/Linux/macOS workers.
 > `https://myagenthub.dev`
 
 ## X Post
 
 Chinese:
 
-> Open sourced `AgentHub`.\n\nA self-hosted AI agent control plane for Codex / Claude / Kimi / OpenCode on your own machines.\n\n- Local / Docker / VM server modes\n- Android + Windows desktop clients\n- Windows / Linux / macOS workers\n- Tailscale private mode + HTTPS public relay\n\nWebsite: https://myagenthub.dev
+> Open sourced `AgentHub`.\n\nA self-hosted AI agent workbench for Codex / Claude / Kimi / OpenCode on your own machines.\n\n- Local / Docker / VM server modes\n- Web + Android + Windows/macOS desktop\n- Session control + Workbench task review\n- Windows / Linux / macOS workers\n\nWebsite: https://myagenthub.dev
 
 English:
 
-> Open sourced `AgentHub`.\n\nA self-hosted control plane for Codex / Claude / Kimi / OpenCode sessions on your own machines.\n\n- Local / Docker / VM server modes\n- Android + Windows desktop clients\n- Windows / Linux / macOS workers\n- Tailscale private mode + HTTPS public relay\n\nhttps://myagenthub.dev
+> Open sourced `AgentHub`.\n\nA self-hosted agent workbench for Codex / Claude / Kimi / OpenCode sessions on your own machines.\n\n- Local / Docker / VM server modes\n- Web + Android + Windows/macOS desktop\n- Session control + Workbench task review\n- Windows / Linux / macOS workers\n\nhttps://myagenthub.dev
 
 ## Hacker News
 
@@ -116,9 +118,10 @@ Body:
 > - Local / Docker / VM server modes
 > - Tailscale private mode and HTTPS public relay
 > - Web self-host console
-> - Android APK
-> - Windows desktop
+> - Android compatibility and React Native APKs
+> - Windows/macOS desktop packaging
 > - Windows / Linux / macOS workers
+> - Session Mode and Workbench Mode
 >
 > It currently targets Codex, Claude, Kimi, and OpenCode style local session workflows.
 >
