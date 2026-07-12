@@ -154,6 +154,52 @@ describe('mobile API', () => {
     );
   });
 
+  it('submits workspace file jobs and reads their session sync state', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'list-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'read-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'write-job', status: 'queued' } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ session: { session_id: 'session/1' }, items: [], jobs: [], has_more: false }),
+      );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.listSessionFiles('session/1', { path: 'src' }, 'csrf-token');
+    await api.readSessionFile('session/1', { path: 'src/App.tsx', max_bytes: 5000000 }, 'csrf-token');
+    await api.writeSessionFile(
+      'session/1',
+      { path: 'src/App.tsx', text: 'export default App;', expected_modified_at: '2026-07-12T00:00:00Z' },
+      'csrf-token',
+    );
+    await api.getSessionSync('session/1');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/sessions/session%2F1/files/list',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ path: 'src' }),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/sessions/session%2F1/files/read',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      'https://agenthub.example.com/api/sessions/session%2F1/files/write',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      4,
+      'https://agenthub.example.com/api/sync/session/session%2F1?limit=200',
+      { credentials: 'include' },
+    );
+  });
+
   it('loads a session thread and its pending interactions through encoded paths', async () => {
     const fetcher = jest
       .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()

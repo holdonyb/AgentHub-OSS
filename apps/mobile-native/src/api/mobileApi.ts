@@ -111,6 +111,56 @@ export interface NativeTimelinePayload {
   next_after_cursor?: string;
 }
 
+export interface NativeSessionSyncPayload {
+  session: NativeSessionSummary;
+  items: NativeTimelineItem[];
+  jobs: NativeJob[];
+  next_after_seq?: number;
+  next_after_cursor?: string;
+  has_more: boolean;
+}
+
+export type NativeWorkspacePreviewCapability =
+  | 'directory'
+  | 'text'
+  | 'markdown'
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'download';
+
+export interface NativeWorkspaceFileEntry {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file';
+  content_type?: string | null;
+  extension?: string | null;
+  preview_capability?: NativeWorkspacePreviewCapability;
+  is_editable?: boolean;
+  size_bytes?: number | null;
+  modified_at?: string | null;
+}
+
+export interface NativeWorkspaceFileListResult {
+  path: string;
+  workspace_root?: string;
+  entries: NativeWorkspaceFileEntry[];
+  truncated?: boolean;
+}
+
+export interface NativeWorkspaceFileReadResult {
+  path: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  truncated: boolean;
+  modified_at?: string | null;
+  preview_kind?: 'text' | 'image' | 'audio' | 'video' | 'download';
+  downloadable?: boolean;
+  data_base64?: string;
+  text?: string;
+}
+
 export interface NativeTimelinePageOptions {
   beforeCreatedAt?: string;
   beforeSeq?: number;
@@ -234,6 +284,7 @@ export interface MobileApi {
     sessionId: string,
     options?: NativeTimelinePageOptions,
   ): Promise<NativeTimelinePayload>;
+  getSessionSync(sessionId: string): Promise<NativeSessionSyncPayload>;
   listPermissions(
     sessionId: string,
     status?: NativePermission['status'],
@@ -254,6 +305,21 @@ export interface MobileApi {
     sessionId: string,
     csrfToken: string,
   ): Promise<{ session: NativeSessionSummary }>;
+  listSessionFiles(
+    sessionId: string,
+    payload: { path: string },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  readSessionFile(
+    sessionId: string,
+    payload: { path: string; max_bytes?: number },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  writeSessionFile(
+    sessionId: string,
+    payload: { path: string; text: string; expected_modified_at?: string | null },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
   listTasks(status?: NativeTaskStatus): Promise<NativeListPayload<NativeTaskSummary>>;
   getTask(taskId: string): Promise<NativeTaskDetail>;
   createTask(
@@ -292,6 +358,10 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       ].join('&');
       return client.get<NativeTimelinePayload>(`${sessionPath(sessionId)}/timeline?${query}`);
     },
+    getSessionSync: (sessionId) =>
+      client.get<NativeSessionSyncPayload>(
+        `/api/sync/session/${encodeURIComponent(sessionId)}?limit=200`,
+      ),
     listPermissions: (sessionId, status = 'pending') =>
       client.get<NativeListPayload<NativePermission>>(
         `/api/permissions?status=${encodeURIComponent(status)}&session_id=${encodeURIComponent(sessionId)}`,
@@ -311,6 +381,12 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         {},
         { csrfToken },
       ),
+    listSessionFiles: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/list`, payload, { csrfToken }),
+    readSessionFile: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/read`, payload, { csrfToken }),
+    writeSessionFile: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/write`, payload, { csrfToken }),
     listTasks: (status) =>
       client.get<NativeListPayload<NativeTaskSummary>>(
         status ? `/api/tasks?status=${encodeURIComponent(status)}` : '/api/tasks',

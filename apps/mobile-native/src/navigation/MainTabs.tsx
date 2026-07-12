@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MobileApi, NativeUser } from '../api/mobileApi';
+import { FilesScreen } from '../screens/FilesScreen';
 import { SessionsScreen } from '../screens/SessionsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
 import { WorkersScreen } from '../screens/WorkersScreen';
@@ -11,17 +12,6 @@ import { nativeTabs, type NativeTabKey } from './tabDefinitions';
 
 type RootTabParamList = Record<NativeTabKey, undefined>;
 const Tab = createBottomTabNavigator<RootTabParamList>();
-
-function ConnectedScreen({ serverUrl }: { serverUrl: string }) {
-  return (
-    <View style={styles.screen}>
-      <Text style={styles.eyebrow}>AGENTHUB</Text>
-      <Text style={styles.title}>文件</Text>
-      <Text style={styles.detail}>服务器连接已验证</Text>
-      <Text numberOfLines={2} style={styles.serverUrl}>{serverUrl}</Text>
-    </View>
-  );
-}
 
 function ProfileScreen({
   user,
@@ -137,6 +127,16 @@ export function MainTabs({
               if (tab.key === 'workers') {
                 return <WorkersScreen api={api} onRequestError={onRequestError} />;
               }
+              if (tab.key === 'files') {
+                return (
+                  <FilesScreen
+                    api={api}
+                    canEdit={user.role !== 'viewer'}
+                    csrfToken={csrfToken}
+                    onRequestError={onRequestError}
+                  />
+                );
+              }
               if (tab.key === 'me') {
                 return (
                   <ProfileScreen
@@ -149,7 +149,7 @@ export function MainTabs({
                   />
                 );
               }
-              return <ConnectedScreen serverUrl={serverUrl} />;
+              return null;
             }}
           </Tab.Screen>
         ))}
@@ -168,7 +168,6 @@ const styles = StyleSheet.create({
   },
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   title: { color: colors.text, fontSize: 28, fontWeight: '700' },
-  detail: { color: colors.muted, fontSize: 15 },
   detailLabel: { color: colors.muted, fontSize: 12 },
   serverUrl: { color: colors.text, fontSize: 14, lineHeight: 20 },
   role: { color: colors.success, fontSize: 12, fontWeight: '800' },

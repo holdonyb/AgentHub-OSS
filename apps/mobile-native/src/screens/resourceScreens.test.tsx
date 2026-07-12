@@ -1,12 +1,14 @@
 import type { ReactElement } from 'react';
 import { AgentHubApiError } from '@agenthub/client-core';
 import type {
+  NativeJob,
   NativeSessionSummary,
   NativeTaskDetail,
   NativeTaskSummary,
   NativeWorkerSummary,
 } from '../api/mobileApi';
 import { SessionsScreen } from './SessionsScreen';
+import { FilesScreen } from './FilesScreen';
 import { TasksScreen } from './TasksScreen';
 import { WorkersScreen } from './WorkersScreen';
 
@@ -103,6 +105,18 @@ const session: NativeSessionSummary = {
   status: 'needs_reply',
   last_activity_at: '2026-07-11T11:58:00.000Z',
 };
+
+function queuedJob(jobId: string, kind: string): NativeJob {
+  return {
+    job_id: jobId,
+    kind,
+    target_session_id: 'session-1',
+    worker_id: 'worker-1',
+    backend: 'codex',
+    status: 'queued',
+    error_text: null,
+  };
+}
 
 const task: NativeTaskSummary = {
   task_id: 'task-1',
@@ -402,5 +416,108 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('codex');
     expect(renderedText(renderer)).toContain('claude');
     expect(renderedText(renderer)).toContain('psmux');
+  });
+
+  it('browses, reads, edits, and saves workspace text files', async () => {
+    const workspaceSession = { ...session, workspace_root: 'E:/Work/AgentHub-OSS' };
+    const listSessions = jest.fn(async () => ({ items: [workspaceSession] }));
+    const listSessionFiles = jest.fn(async () => ({ job: queuedJob('list-job', 'file_list') }));
+    const readSessionFile = jest.fn(async () => ({ job: queuedJob('read-job', 'file_read') }));
+    const writeSessionFile = jest.fn(async () => ({ job: queuedJob('write-job', 'file_write') }));
+    const getSessionSync = jest
+      .fn()
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'list-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({
+            path: '.',
+            workspace_root: 'E:/Work/AgentHub-OSS',
+            entries: [
+              { name: 'src', path: 'src', kind: 'directory', preview_capability: 'directory' },
+              {
+                name: 'README.md',
+                path: 'README.md',
+                kind: 'file',
+                preview_capability: 'markdown',
+                is_editable: true,
+                size_bytes: 64,
+              },
+            ],
+          }),
+        }],
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'read-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({
+            path: 'README.md',
+            filename: 'README.md',
+            content_type: 'text/markdown',
+            size_bytes: 64,
+            truncated: false,
+            modified_at: '2026-07-12T00:00:00Z',
+            preview_kind: 'text',
+            text: '# AgentHub\n原始内容',
+          }),
+        }],
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'write-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({
+            path: 'README.md',
+            filename: 'README.md',
+            content_type: 'text/markdown',
+            size_bytes: 70,
+            truncated: false,
+            modified_at: '2026-07-12T00:01:00Z',
+            preview_kind: 'text',
+            text: '# AgentHub\n更新内容',
+          }),
+        }],
+        has_more: false,
+      });
+    const renderer = await render(
+      <FilesScreen
+        api={{ getSessionSync, listSessionFiles, listSessions, readSessionFile, writeSessionFile }}
+        canEdit
+        csrfToken="csrf-token"
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('README.md');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开文件 README.md' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('原始内容');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '编辑文件' })));
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '文件内容' }), '# AgentHub\n更新内容');
+    });
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '保存文件' })));
+    await settle();
+
+    expect(writeSessionFile).toHaveBeenCalledWith(
+      'session-1',
+      {
+        path: 'README.md',
+        text: '# AgentHub\n更新内容',
+        expected_modified_at: '2026-07-12T00:00:00Z',
+      },
+      'csrf-token',
+    );
+    expect(renderedText(renderer)).toContain('更新内容');
   });
 });
