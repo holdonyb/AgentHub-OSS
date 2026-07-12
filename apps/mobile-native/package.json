@@ -49,6 +49,9 @@
   },
   "jest": {
     "preset": "jest-expo",
-    "testRegex": "src/.*\\.test\\.tsx?$"
+    "testRegex": "src/.*\\.test\\.tsx?$",
+    "moduleNameMapper": {
+      "^uuid$": "<rootDir>/../../node_modules/uuid/dist/cjs/index.js"
+    }
   }
 }
