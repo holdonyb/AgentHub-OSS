@@ -15,6 +15,12 @@
     "plugins": [
       "expo-secure-store",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "允许 AgentHub 选择要发送给 Agent 的图片。"
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

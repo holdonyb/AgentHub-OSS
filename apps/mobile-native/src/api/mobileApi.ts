@@ -104,6 +104,12 @@ export interface NativeJob {
   updated_at?: string;
 }
 
+export interface NativeSessionAttachmentInput {
+  filename: string;
+  content_type: string;
+  data_base64: string;
+}
+
 export interface NativeTimelinePayload {
   items: NativeTimelineItem[];
   has_more: boolean;
@@ -292,7 +298,11 @@ export interface MobileApi {
   listJobs(): Promise<NativeListPayload<NativeJob>>;
   sendSessionInput(
     sessionId: string,
-    payload: { prompt: string; reply_mode?: 'direct' | 'plan' },
+    payload: {
+      prompt: string;
+      reply_mode?: 'direct' | 'plan';
+      attachments?: NativeSessionAttachmentInput[];
+    },
     csrfToken: string,
   ): Promise<{ job: NativeJob }>;
   respondPermission(

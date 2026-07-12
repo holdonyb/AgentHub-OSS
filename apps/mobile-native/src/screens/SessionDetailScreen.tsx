@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -33,6 +34,7 @@ import {
   sortedTimeline,
   type NativePermissionChoice,
 } from './sessionDetailPresentation';
+import { pickSessionImage, type NativePendingImage } from './nativeImagePicker';
 
 type SessionDetailApi = Pick<
   MobileApi,
@@ -312,6 +314,7 @@ export function SessionDetailScreen({
 }) {
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<NativePendingImage[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentJob, setSentJob] = useState<NativeJob | null>(null);
   const [sessionOverride, setSessionOverride] = useState<NativeSessionSummary | null>(null);
@@ -397,23 +400,51 @@ export function SessionDetailScreen({
 
   async function sendReply() {
     const prompt = reply.trim();
-    if (!prompt || sending || currentSession.status === 'terminated') return;
+    if ((!prompt && attachments.length === 0) || sending || currentSession.status === 'terminated') return;
     setSending(true);
     setSendError(null);
     try {
       const response = await api.sendSessionInput(
         session.session_id,
-        { prompt },
+        {
+          prompt,
+          ...(attachments.length > 0
+            ? {
+                attachments: attachments.map(({ filename, content_type, data_base64 }) => ({
+                  filename,
+                  content_type,
+                  data_base64,
+                })),
+              }
+            : {}),
+        },
         csrfToken,
       );
       setSentJob(response.job);
       setReply('');
+      setAttachments([]);
       await resource.reload();
     } catch (error) {
       onRequestError?.(error);
       setSendError(errorMessage(error));
     } finally {
       setSending(false);
+    }
+  }
+
+  async function addImage() {
+    if (attachments.length >= 5) {
+      setSendError('一次最多添加 5 张图片');
+      return;
+    }
+    try {
+      const image = await pickSessionImage();
+      if (!image) return;
+      setAttachments((current) => [...current, image]);
+      setSendError(null);
+    } catch (error) {
+      onRequestError?.(error);
+      setSendError(errorMessage(error));
     }
   }
 
@@ -723,7 +754,34 @@ export function SessionDetailScreen({
               {sendState.text}
             </Text>
           ) : null}
+          {attachments.length > 0 ? (
+            <View accessibilityLabel="待发送图片" style={styles.attachmentRow}>
+              {attachments.map((attachment, index) => (
+                <View key={`${attachment.filename}-${index}`} style={styles.attachmentChip}>
+                  <Image source={{ uri: attachment.preview_uri }} style={styles.attachmentImage} />
+                  <Text numberOfLines={1} style={styles.attachmentName}>{attachment.filename}</Text>
+                  <Pressable
+                    accessibilityLabel={`移除图片 ${attachment.filename}`}
+                    accessibilityRole="button"
+                    onPress={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    style={styles.attachmentRemove}
+                  >
+                    <Ionicons color={colors.muted} name="close" size={16} />
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
           <View style={styles.composerRow}>
+            <Pressable
+              accessibilityLabel="添加图片"
+              accessibilityRole="button"
+              disabled={sending || currentSession.status === 'terminated'}
+              onPress={() => void addImage()}
+              style={({ pressed }) => [styles.attachButton, pressed && styles.pressed]}
+            >
+              <Ionicons color={colors.accent} name="image-outline" size={21} />
+            </Pressable>
             <TextInput
               accessibilityLabel="回复内容"
               editable={!sending && currentSession.status !== 'terminated'}
@@ -741,11 +799,11 @@ export function SessionDetailScreen({
             <Pressable
               accessibilityLabel="发送回复"
               accessibilityRole="button"
-              disabled={!reply.trim() || sending || currentSession.status === 'terminated'}
+              disabled={(!reply.trim() && attachments.length === 0) || sending || currentSession.status === 'terminated'}
               onPress={() => void sendReply()}
               style={({ pressed }) => [
                 styles.sendButton,
-                (!reply.trim() || sending || currentSession.status === 'terminated') && styles.disabled,
+                ((!reply.trim() && attachments.length === 0) || sending || currentSession.status === 'terminated') && styles.disabled,
                 pressed && styles.pressed,
               ]}
             >
@@ -922,7 +980,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 9,
   },
+  attachmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  attachmentChip: {
+    alignItems: 'center',
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    maxWidth: 190,
+    padding: 5,
+  },
+  attachmentImage: { borderRadius: 4, height: 32, width: 32 },
+  attachmentName: { color: colors.text, flexShrink: 1, fontSize: 12, fontWeight: '600' },
+  attachmentRemove: { alignItems: 'center', height: 28, justifyContent: 'center', width: 28 },
   composerRow: { alignItems: 'flex-end', flexDirection: 'row', gap: 9 },
+  attachButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
   replyInput: {
     backgroundColor: colors.canvas,
     borderColor: colors.border,

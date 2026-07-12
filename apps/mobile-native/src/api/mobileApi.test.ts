@@ -262,7 +262,14 @@ describe('mobile API', () => {
       .mockResolvedValueOnce(jsonResponse({ session: { session_id: 'session-1', status: 'terminated' } }));
     const api = createMobileApi('https://agenthub.example.com', fetcher);
 
-    await api.sendSessionInput('session-1', { prompt: '第一行\n第二行' }, 'csrf-token');
+    await api.sendSessionInput(
+      'session-1',
+      {
+        prompt: '第一行\n第二行',
+        attachments: [{ filename: 'screen.png', content_type: 'image/png', data_base64: 'aW1hZ2U=' }],
+      },
+      'csrf-token',
+    );
     await api.respondPermission(
       'permission-1',
       'answer',
@@ -276,7 +283,10 @@ describe('mobile API', () => {
       'https://agenthub.example.com/api/sessions/session-1/input',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ prompt: '第一行\n第二行' }),
+        body: JSON.stringify({
+          prompt: '第一行\n第二行',
+          attachments: [{ filename: 'screen.png', content_type: 'image/png', data_base64: 'aW1hZ2U=' }],
+        }),
         headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
       }),
     );

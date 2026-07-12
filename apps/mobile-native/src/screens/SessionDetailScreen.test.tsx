@@ -6,8 +6,10 @@ import type {
   NativeTimelineItem,
 } from '../api/mobileApi';
 import { SessionDetailScreen } from './SessionDetailScreen';
+import { pickSessionImage } from './nativeImagePicker';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('./nativeImagePicker', () => ({ pickSessionImage: jest.fn() }));
 
 interface TestInstance {
   props: Record<string, unknown>;
@@ -286,6 +288,53 @@ describe('native session detail', () => {
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '刷新会话详情' })));
     await settle();
     expect(renderedText(renderer)).toContain('失败：模型容量不足');
+  });
+
+  it('selects an image and sends it without requiring prompt text', async () => {
+    const queuedJob = {
+      job_id: 'job-image',
+      kind: 'session_input',
+      target_session_id: 'session-1',
+      worker_id: 'worker-main',
+      backend: 'codex',
+      status: 'queued',
+      error_text: null,
+    } as NativeJob;
+    jest.mocked(pickSessionImage).mockResolvedValue({
+      filename: 'screen.png',
+      content_type: 'image/png',
+      data_base64: 'aW1hZ2U=',
+      preview_uri: 'file:///screen.png',
+      size_bytes: 5,
+    });
+    const api = createDetailApi({
+      sendSessionInput: jest.fn(async () => ({ job: queuedJob })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '添加图片' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('screen.png');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '发送回复' })));
+    await settle();
+    expect(api.sendSessionInput).toHaveBeenCalledWith(
+      'session-1',
+      {
+        prompt: '',
+        attachments: [{ filename: 'screen.png', content_type: 'image/png', data_base64: 'aW1hZ2U=' }],
+      },
+      'csrf-token',
+    );
   });
 
   it('recovers the latest reply status when a detail screen is reopened', async () => {
