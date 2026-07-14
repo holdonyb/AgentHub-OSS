@@ -40,6 +40,7 @@ def init_database(engine: Engine) -> None:
     _ensure_compatible_columns(engine)
     _ensure_compatible_indexes(engine)
     _bootstrap_default_space(engine)
+    _bootstrap_pending_notifications(engine)
 
 
 def _ensure_compatible_columns(engine: Engine) -> None:
@@ -85,6 +86,14 @@ def _ensure_compatible_columns(engine: Engine) -> None:
         "controls_json": "TEXT NOT NULL DEFAULT '{}'",
         "runtime_metadata_json": "TEXT NOT NULL DEFAULT '{}'",
         "archived_at": "DATETIME",
+        "execution_status": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+        "execution_status_source": "VARCHAR(32) NOT NULL DEFAULT 'legacy'",
+        "execution_status_seq": "INTEGER NOT NULL DEFAULT 0",
+        "execution_status_observed_at": "DATETIME",
+        "attention_status": "VARCHAR(32) NOT NULL DEFAULT 'none'",
+        "attention_reason": "VARCHAR(32) NOT NULL DEFAULT ''",
+        "attention_revision": "INTEGER NOT NULL DEFAULT 0",
+        "attention_changed_at": "DATETIME",
     }
     if engine.dialect.name == "sqlite":
         with engine.begin() as conn:
@@ -99,6 +108,56 @@ def _ensure_compatible_columns(engine: Engine) -> None:
             for name, ddl in session_columns.items():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE agent_sessions ADD COLUMN {name} {ddl}"))
+                    existing.add(name)
+            status_projection = (
+                "CASE status "
+                "WHEN 'ready' THEN 'idle' "
+                "WHEN 'queued' THEN 'queued' "
+                "WHEN 'running' THEN 'running' "
+                "WHEN 'needs_reply' THEN 'waiting_input' "
+                "WHEN 'failed' THEN 'failed' "
+                "WHEN 'terminated' THEN 'terminated' "
+                "ELSE 'unknown' END"
+                if "status" in existing
+                else "'unknown'"
+            )
+            observed_fallbacks = [
+                column for column in ("updated_at", "created_at") if column in existing
+            ]
+            observed_expression = "COALESCE(" + ", ".join(
+                ["execution_status_observed_at", *observed_fallbacks, "CURRENT_TIMESTAMP"]
+            ) + ")"
+            approval_attention_predicate = (
+                "status = 'needs_reply' AND COALESCE(attention_revision, 0) = 0"
+                if "status" in existing
+                else "0"
+            )
+            conn.execute(
+                text(
+                    "UPDATE agent_sessions SET "
+                    f"execution_status = {status_projection}, "
+                    "execution_status_source = COALESCE(NULLIF(execution_status_source, ''), 'legacy'), "
+                    "execution_status_seq = CASE WHEN COALESCE(execution_status_seq, 0) < 1 THEN 1 ELSE execution_status_seq END, "
+                    f"execution_status_observed_at = {observed_expression}"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE agent_sessions SET "
+                    "attention_status = CASE "
+                    f"WHEN {approval_attention_predicate} "
+                    "THEN 'unseen' ELSE attention_status END, "
+                    "attention_reason = CASE "
+                    f"WHEN {approval_attention_predicate} "
+                    "THEN 'approval' ELSE attention_reason END, "
+                    "attention_revision = CASE "
+                    f"WHEN {approval_attention_predicate} "
+                    "THEN 1 ELSE attention_revision END, "
+                    "attention_changed_at = CASE "
+                    f"WHEN {approval_attention_predicate} AND COALESCE(attention_changed_at, '') = '' "
+                    f"THEN {observed_expression} ELSE attention_changed_at END"
+                )
+            )
             execution_columns = (
                 {column["name"] for column in inspector.get_columns("agent_task_executions")}
                 if "agent_task_executions" in table_names
@@ -171,6 +230,18 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
             ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_task_updated ON agent_task_executions (space_id, task_id, updated_at DESC)", {"space_id", "task_id", "updated_at"}),
             ("CREATE INDEX IF NOT EXISTS ix_agent_task_executions_space_job ON agent_task_executions (space_id, job_id)", {"space_id", "job_id"}),
         ],
+        "notification_records": [
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_recipient_transition "
+                "ON notification_records (space_id, recipient_user_id, transition_key)",
+                {"space_id", "recipient_user_id", "transition_key"},
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_notification_recipient_created "
+                "ON notification_records (space_id, recipient_user_id, created_at DESC)",
+                {"space_id", "recipient_user_id", "created_at"},
+            ),
+        ],
     }
     with engine.begin() as conn:
         for table_name, statements in index_statements.items():
@@ -239,6 +310,15 @@ def _bootstrap_default_space(engine: Engine) -> None:
             if hasattr(model, "space_id"):
                 db.query(model).filter(model.space_id.is_(None)).update({"space_id": space.space_id}, synchronize_session=False)
         db.query(SpaceMembership).filter(SpaceMembership.space_id.is_(None)).delete(synchronize_session=False)
+        db.commit()
+
+
+def _bootstrap_pending_notifications(engine: Engine) -> None:
+    from app.core.notifications import backfill_pending_notification_records
+
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+    with SessionLocal() as db:
+        backfill_pending_notification_records(db)
         db.commit()
 
 

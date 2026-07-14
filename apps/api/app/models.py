@@ -168,6 +168,14 @@ class AgentSession(Base):
     mode: Mapped[str] = mapped_column(String(64), default="handoff_required", nullable=False)
     runtime_session_ref: Mapped[str] = mapped_column(String(240), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="ready", nullable=False)
+    execution_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
+    execution_status_source: Mapped[str] = mapped_column(String(32), default="legacy", nullable=False)
+    execution_status_seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    execution_status_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attention_status: Mapped[str] = mapped_column(String(32), default="none", nullable=False)
+    attention_reason: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    attention_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attention_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     title: Mapped[str] = mapped_column(String(240), default="", nullable=False)
     display_title: Mapped[str] = mapped_column(String(240), default="", nullable=False)
     custom_title: Mapped[str | None] = mapped_column(String(240), nullable=True)
@@ -183,6 +191,40 @@ class AgentSession(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class NotificationRecord(Base):
+    __tablename__ = "notification_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "space_id",
+            "recipient_user_id",
+            "transition_key",
+            name="uq_notification_recipient_transition",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ntf"))
+    notification_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, default=lambda: new_id("ntf")
+    )
+    space_id: Mapped[str] = mapped_column(ForeignKey("spaces.space_id"), nullable=False, index=True)
+    recipient_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    transition_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(180), nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="info", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class AgentTask(Base):

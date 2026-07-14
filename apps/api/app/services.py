@@ -13,6 +13,7 @@ import httpx
 from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.json import dumps_json, loads_json
+from app.core.session_state import ensure_session_state, set_session_status
 from app.models import AgentArtifact, AgentPermission, AgentSession, AgentTask, AgentTaskExecution, AgentTimeline, Event, Job, Memory, ProviderSnapshot, Schedule, User, Worker, utcnow
 
 
@@ -158,6 +159,7 @@ def worker_out(worker: Worker) -> dict[str, Any]:
 
 
 def session_out(session: AgentSession) -> dict[str, Any]:
+    ensure_session_state(session)
     preferred_title = session.custom_title or session.llm_title or session.display_title or session.heuristic_title or session.title
     display_title = _safe_session_title(session, preferred_title)
     activity_summary = session.activity_summary or session.last_message or "当前空闲"
@@ -172,6 +174,14 @@ def session_out(session: AgentSession) -> dict[str, Any]:
         "mode": session.mode,
         "runtime_session_ref": session.runtime_session_ref,
         "status": session.status,
+        "execution_status": session.execution_status,
+        "execution_status_source": session.execution_status_source,
+        "execution_status_seq": session.execution_status_seq,
+        "execution_status_observed_at": session.execution_status_observed_at,
+        "attention_status": session.attention_status,
+        "attention_reason": session.attention_reason,
+        "attention_revision": session.attention_revision,
+        "attention_changed_at": session.attention_changed_at,
         "title": display_title,
         "display_title": display_title,
         "custom_title": session.custom_title,
@@ -190,6 +200,7 @@ def session_out(session: AgentSession) -> dict[str, Any]:
 
 
 def session_summary_out(session: AgentSession) -> dict[str, Any]:
+    ensure_session_state(session)
     preferred_title = session.custom_title or session.llm_title or session.display_title or session.heuristic_title or session.title
     display_title = _safe_session_title(session, preferred_title)
     activity_summary = session.activity_summary or session.last_message or "当前空闲"
@@ -204,6 +215,14 @@ def session_summary_out(session: AgentSession) -> dict[str, Any]:
         "mode": session.mode,
         "runtime_session_ref": session.runtime_session_ref,
         "status": session.status,
+        "execution_status": session.execution_status,
+        "execution_status_source": session.execution_status_source,
+        "execution_status_seq": session.execution_status_seq,
+        "execution_status_observed_at": session.execution_status_observed_at,
+        "attention_status": session.attention_status,
+        "attention_reason": session.attention_reason,
+        "attention_revision": session.attention_revision,
+        "attention_changed_at": session.attention_changed_at,
         "title": display_title,
         "display_title": display_title,
         "custom_title": session.custom_title,
@@ -352,7 +371,7 @@ def ensure_codex_plan_exit_permission(
     existing = _matching_plan_exit_permission(db, session, plan_text)
     if existing is not None:
         if existing.status == "pending":
-            session.status = "needs_reply"
+            set_session_status(session, "needs_reply", source="permission")
             session.last_activity_at = utcnow()
             session.updated_at = session.last_activity_at
             session.last_message = plan_text or session.last_message
@@ -387,7 +406,7 @@ def ensure_codex_plan_exit_permission(
     db.add(permission)
     db.flush()
     now = utcnow()
-    session.status = "needs_reply"
+    set_session_status(session, "needs_reply", source="permission", at=now)
     session.last_activity_at = now
     session.updated_at = now
     session.last_message = plan_text or session.last_message
@@ -608,7 +627,7 @@ def expire_pending_plan_exit_permissions_no_longer_waiting_on_timeline(
             payload={"session_id": session.session_id, "kind": permission.kind, "reason": "timeline_no_longer_waiting"},
         )
     if expired and not _session_has_pending_interaction_permission(db, session):
-        session.status = "ready"
+        set_session_status(session, "ready", source="permission", at=now)
         session.updated_at = now
         session.activity_summary = session.activity_summary if session.activity_summary != "等待你处理计划审批" else "当前空闲"
     return expired

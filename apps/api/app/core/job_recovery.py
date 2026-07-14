@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_event
 from app.core.config import get_settings
 from app.core.json import loads_json
+from app.core.session_state import set_session_status
 from app.models import AgentPermission, AgentSession, Job, Worker, utcnow
 from app.task_lifecycle import project_task_job_lifecycle
 
@@ -83,7 +84,11 @@ def _recover_job_rows(db: Session, jobs: list[Job], *, worker_id_for_event: str)
                 .one_or_none()
             )
             if session:
-                session.status = _session_status_after_stale_job(db, session)
+                set_session_status(
+                    session,
+                    _session_status_after_stale_job(db, session),
+                    source="recovery",
+                )
                 session.updated_at = now
         write_event(
             db,
@@ -152,7 +157,11 @@ def recover_orphaned_running_jobs(
                 .one_or_none()
             )
             if session:
-                session.status = _session_status_after_stale_job(db, session)
+                set_session_status(
+                    session,
+                    _session_status_after_stale_job(db, session),
+                    source="recovery",
+                )
                 session.updated_at = now
         write_event(
             db,
@@ -230,7 +239,11 @@ def _recover_disconnected_worker_jobs(db: Session, worker: Worker, now: datetime
                 .one_or_none()
             )
             if session:
-                session.status = _session_status_after_stale_job(db, session)
+                set_session_status(
+                    session,
+                    _session_status_after_stale_job(db, session),
+                    source="recovery",
+                )
                 session.updated_at = now
         write_event(
             db,

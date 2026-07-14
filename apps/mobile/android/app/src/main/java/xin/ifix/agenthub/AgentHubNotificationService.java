@@ -18,6 +18,7 @@ import android.webkit.CookieManager;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -40,6 +41,21 @@ public class AgentHubNotificationService extends Service {
     private static final int MAX_REMEMBERED_KEYS = 400;
     private static final long POLL_INTERVAL_MS = 30_000L;
     private static final int HTTP_TIMEOUT_MS = 12_000;
+    private static final int HTTP_NOT_FOUND = 404;
+
+    private static class JsonResponse {
+        final int status;
+        final JSONObject body;
+
+        JsonResponse(int status, JSONObject body) {
+            this.status = status;
+            this.body = body;
+        }
+
+        boolean isSuccessful() {
+            return status >= 200 && status < 300;
+        }
+    }
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -105,6 +121,8 @@ public class AgentHubNotificationService extends Service {
         String cookie = CookieManager.getInstance().getCookie(baseUrl);
         if (cookie == null || cookie.trim().isEmpty()) return;
 
+        if (pollNotificationLedger(baseUrl, cookie)) return;
+
         JSONObject permissions = getJson(baseUrl, withCursor("/api/sync/permissions", lastPermissionCursor), cookie);
         if (permissions.length() > 0) {
             notifyPendingPermissions(permissions);
@@ -118,28 +136,95 @@ public class AgentHubNotificationService extends Service {
         }
     }
 
+    private boolean pollNotificationLedger(String baseUrl, String cookie) throws Exception {
+        JsonResponse response = requestJson(baseUrl, "/api/notifications", "GET", cookie, null);
+        if (response.status == HTTP_NOT_FOUND) return false;
+        if (!response.isSuccessful()) return true;
+        JSONArray items = response.body.optJSONArray("items");
+        if (items == null) return true;
+        String csrfToken = cookieValue(cookie, "agenthub_csrf");
+        if (csrfToken.isEmpty()) return true;
+        for (int index = 0; index < items.length(); index += 1) {
+            JSONObject notification = items.optJSONObject(index);
+            if (notification == null || !"pending".equals(notification.optString("status"))) continue;
+            String notificationId = notification.optString("notification_id");
+            if (notificationId.isEmpty()) continue;
+            JsonResponse claim = requestJson(
+                baseUrl,
+                "/api/notifications/" + Uri.encode(notificationId) + "/delivered",
+                "POST",
+                cookie,
+                csrfToken
+            );
+            if (!claim.isSuccessful() || !claim.body.optBoolean("claimed", false)) continue;
+            JSONObject delivered = claim.body.optJSONObject("notification");
+            if (delivered == null) delivered = notification;
+            showAlertNotification(
+                firstNonEmpty(delivered.optString("title"), "AgentHub 有新的通知"),
+                firstNonEmpty(delivered.optString("body"), "打开 AgentHub 查看详情"),
+                "ledger:" + notificationId,
+                delivered.optString("session_id")
+            );
+        }
+        return true;
+    }
+
     private String loadBaseUrl() {
         return AgentHubServerConfig.loadServerUrl(this);
     }
 
     private JSONObject getJson(String baseUrl, String path, String cookie) throws Exception {
+        JsonResponse response = requestJson(baseUrl, path, "GET", cookie, null);
+        return response.isSuccessful() ? response.body : new JSONObject();
+    }
+
+    private JsonResponse requestJson(
+        String baseUrl,
+        String path,
+        String method,
+        String cookie,
+        String csrfToken
+    ) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
-        connection.setRequestMethod("GET");
+        connection.setRequestMethod(method);
         connection.setConnectTimeout(HTTP_TIMEOUT_MS);
         connection.setReadTimeout(HTTP_TIMEOUT_MS);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Cookie", cookie);
         connection.setRequestProperty("User-Agent", "AgentHub-Android-Notifier");
+        if (csrfToken != null && !csrfToken.isEmpty()) {
+            connection.setRequestProperty("X-CSRF-Token", csrfToken);
+        }
+        if ("POST".equals(method)) {
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+        }
         int status = connection.getResponseCode();
-        if (status < 200 || status >= 300) {
-            connection.disconnect();
-            return new JSONObject();
-        }
-        try (InputStream input = connection.getInputStream()) {
-            return new JSONObject(readAll(input));
+        InputStream responseStream = status >= 200 && status < 300
+            ? connection.getInputStream()
+            : connection.getErrorStream();
+        try {
+            String body = responseStream == null ? "" : readAll(responseStream);
+            return new JsonResponse(status, body.trim().isEmpty() ? new JSONObject() : new JSONObject(body));
         } finally {
+            if (responseStream != null) responseStream.close();
             connection.disconnect();
         }
+    }
+
+    private String cookieValue(String cookieHeader, String name) {
+        if (cookieHeader == null || name == null) return "";
+        String prefix = name + "=";
+        for (String part : cookieHeader.split(";")) {
+            String value = part.trim();
+            if (value.startsWith(prefix)) return value.substring(prefix.length());
+        }
+        return "";
     }
 
     private void notifyPendingPermissions(JSONObject payload) {

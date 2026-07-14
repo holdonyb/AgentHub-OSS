@@ -134,6 +134,12 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(mainActivity).toContain('NotificationManager.IMPORTANCE_HIGH');
     expect(mainActivity).toContain('RingtoneManager.TYPE_NOTIFICATION');
     expect(service).toContain('startForeground');
+    expect(service).toContain('/api/notifications');
+    expect(service).toContain('/delivered');
+    expect(service).toContain('X-CSRF-Token');
+    expect(service).toContain('claimed');
+    expect(service).toContain('pollNotificationLedger');
+    expect(service).toContain('HTTP_NOT_FOUND');
     expect(service).toContain('/api/sync/permissions');
     expect(service).toContain('/api/sync/inbox');
     expect(service).toContain('pendingPermissionSessionsById');

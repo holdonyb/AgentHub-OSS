@@ -14,6 +14,7 @@ from app.core.deps import Actor, DbSession, require_min_role
 from app.core.config import get_settings
 from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json, loads_json
+from app.core.session_state import mark_session_attention_seen, set_session_status
 from app.models import AgentPermission, AgentSession, AgentTimeline, Job, ProviderSnapshot, Worker, utcnow
 from app.schemas import (
     SessionBtwIn,
@@ -76,6 +77,14 @@ SESSION_LIST_LOAD_ONLY = (
     AgentSession.mode,
     AgentSession.runtime_session_ref,
     AgentSession.status,
+    AgentSession.execution_status,
+    AgentSession.execution_status_source,
+    AgentSession.execution_status_seq,
+    AgentSession.execution_status_observed_at,
+    AgentSession.attention_status,
+    AgentSession.attention_reason,
+    AgentSession.attention_revision,
+    AgentSession.attention_changed_at,
     AgentSession.title,
     AgentSession.display_title,
     AgentSession.custom_title,
@@ -536,7 +545,11 @@ def upsert_session(db: DbSession, payload: SessionCreateIn, *, space_id: str | N
     session.namespace = payload.namespace
     session.mode = payload.mode
     session.runtime_session_ref = payload.runtime_session_ref
-    session.status = _merged_discovered_status(db, session, payload.status)
+    set_session_status(
+        session,
+        _merged_discovered_status(db, session, payload.status),
+        source="worker",
+    )
     heuristic_title = _readable_title(payload)
     display_title = session.custom_title or payload.custom_title or payload.llm_title or heuristic_title
     if payload.custom_title:
@@ -715,6 +728,18 @@ def get_session(session_id: str, db: DbSession, actor: Actor = Depends(require_m
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    return {"session": session_out(session)}
+
+
+@router.post("/api/sessions/{session_id}/attention/seen")
+def mark_attention_seen(
+    session_id: str,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("viewer")),
+):
+    session = _require_session(db, actor.space_id, session_id)
+    mark_session_attention_seen(session)
+    db.commit()
     return {"session": session_out(session)}
 
 
@@ -1239,7 +1264,7 @@ def send_session_input(
         created_by=actor.actor_id,
     )
     if not session_was_running:
-        session.status = "queued"
+        set_session_status(session, "queued", source="job")
     session.updated_at = utcnow()
     db.add(job)
     db.flush()
@@ -1444,7 +1469,7 @@ def terminate_session(
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
-    session.status = "terminated"
+    set_session_status(session, "terminated", source="user")
     session.updated_at = utcnow()
     write_event(
         db,

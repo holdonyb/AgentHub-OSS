@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.deps import Actor, DbSession, require_worker
 from app.core.job_recovery import recover_orphaned_running_jobs, recover_stale_running_jobs
 from app.core.json import dumps_json, loads_json
+from app.core.session_state import set_session_status
 from app.models import AgentPermission, AgentSession, AgentTimeline, Job, Schedule, Worker, utcnow
 from app.routers.sessions import upsert_session
 from app.schemas import ClaimJobIn, CompleteJobIn, DiscoveredSessionsIn, FailJobIn
@@ -317,7 +318,7 @@ def _create_plan_choice_permission(db: DbSession, job: Job, session: AgentSessio
     )
     db.add(permission)
     db.flush()
-    session.status = "needs_reply"
+    set_session_status(session, "needs_reply", source="permission")
     _touch_session_activity(
         session,
         message=result_text or session.last_message,
@@ -375,7 +376,7 @@ def claim_job(
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
-            session.status = "running"
+            set_session_status(session, "running", source="job", at=now)
             _touch_session_activity(session, at=now, summary=session.activity_summary or "worker 已领取，正在运行")
     write_event(
         db,
@@ -416,7 +417,7 @@ def complete_job(
         if session:
             preserved_status = session.status
             _attach_btw_result(db, job, session, payload.result_text or "")
-            session.status = preserved_status
+            set_session_status(session, preserved_status, source="job", at=now)
             _touch_session_activity(session, at=now)
     elif job.target_session_id and _job_updates_runtime_metadata(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
@@ -434,7 +435,7 @@ def complete_job(
                 summary=payload.result_text or session.activity_summary,
             )
             if not _create_plan_choice_permission(db, job, session, payload.result_text or ""):
-                session.status = "ready"
+                set_session_status(session, "ready", source="job", at=now)
     project_task_job_lifecycle(
         db,
         job,
@@ -495,7 +496,7 @@ def fail_job(
     if job.target_session_id and _job_updates_target_session(job):
         session = db.query(AgentSession).filter(AgentSession.space_id == job.space_id, AgentSession.session_id == job.target_session_id).one_or_none()
         if session:
-            session.status = "failed"
+            set_session_status(session, "failed", source="job", at=now)
             _touch_session_activity(
                 session,
                 at=now,
