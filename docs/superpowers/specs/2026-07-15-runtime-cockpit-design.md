@@ -33,13 +33,15 @@ Excluded:
 
 The client derives one `RuntimeCockpitItem` for each non-archived session.
 
-Priority order:
+Classification precedence for each session:
 
 1. `attention`: unresolved permission, `needs_reply`, or explicit user-attention state.
 2. `offline`: owning worker is offline or missing.
 3. `working`: session execution state is `queued` or `running`.
 4. `done`: the latest execution reached a terminal state and has unseen output.
 5. `idle`: ready, terminated, or otherwise not active.
+
+The default display order is `attention`, `working`, `done`, `idle`, then `offline`. Offline ownership still overrides execution state during classification, but offline sessions stay at the end of the list so stale machines cannot crowd active work out of the first viewport.
 
 Each item carries `stateReason` and `stateUpdatedAt`. The UI displays these as product-facing labels and relative time; it does not expose implementation diagnostics by default.
 

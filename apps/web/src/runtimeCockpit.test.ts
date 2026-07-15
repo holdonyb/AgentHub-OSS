@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentPermission, AgentSession, Worker } from '@agenthub/protocol';
+import type { AgentPermission, AgentSession, AgentTask, Worker } from '@agenthub/protocol';
 import { projectRuntimeCockpit } from './runtimeCockpit';
 
 function session(overrides: Partial<AgentSession> = {}): AgentSession {
@@ -140,5 +140,16 @@ describe('projectRuntimeCockpit', () => {
     );
 
     expect(result.items.map((item) => item.sessionId)).toEqual(['attention', 'idle-a', 'idle-b']);
+  });
+
+  it('links a runtime to its existing Workbench task', () => {
+    const result = projectRuntimeCockpit(
+      [session()],
+      [worker()],
+      [],
+      [{ task_id: 'task-1', latest_session_id: 'sess-1' } as AgentTask],
+    );
+
+    expect(result.items[0].taskId).toBe('task-1');
   });
 });

@@ -71,6 +71,8 @@ import {
   requestNativeNotificationPermission,
 } from './nativeNotifications';
 import { startStreamingVoice, type StreamingVoiceController, type VoiceStreamAuthPayload } from './voiceStreaming';
+import { RuntimeCockpit } from './RuntimeCockpitView';
+import { projectRuntimeCockpit } from './runtimeCockpit';
 import {
   formatRelativeTime,
   isLocaleCode,
@@ -102,7 +104,7 @@ type FastModeState = 'enabled' | 'disabled' | 'unknown' | 'unavailable';
 type PermissionAction = 'allow' | 'deny' | 'answer';
 type NotificationState = NotificationPermission | 'unsupported';
 type LaunchMode = 'none' | 'start' | 'fork';
-type AppMode = 'session' | 'workbench';
+type AppMode = 'cockpit' | 'session' | 'workbench';
 type NativeMicrophoneState = 'granted' | 'denied' | 'unavailable';
 type ApkUpdateStatus = 'idle' | 'checking' | 'ready' | 'failed';
 type ThemeMode = 'dark' | 'light';
@@ -1706,7 +1708,8 @@ function initialThemeMode(): ThemeMode {
 
 function initialAppMode(): AppMode {
   try {
-    return localStorage.getItem(APP_MODE_STORAGE_KEY) === 'workbench' ? 'workbench' : 'session';
+    const stored = localStorage.getItem(APP_MODE_STORAGE_KEY);
+    return stored === 'cockpit' || stored === 'workbench' ? stored : 'session';
   } catch {
     return 'session';
   }
@@ -3423,6 +3426,10 @@ function App() {
   const pendingPermissions = useMemo(
     () => permissions.filter((permission) => permission.status === 'pending'),
     [permissions],
+  );
+  const runtimeCockpit = useMemo(
+    () => projectRuntimeCockpit(sessions, workers, pendingPermissions, tasks),
+    [pendingPermissions, sessions, tasks, workers],
   );
   const firstPendingPermission = pendingPermissions[0];
   const visiblePendingPermission =
@@ -6668,7 +6675,7 @@ function App() {
   }
 
   return (
-    <main className={`app-shell theme-${themeMode} text-ink bg-paper`}>
+    <main className={`app-shell mode-${appMode} theme-${themeMode} text-ink bg-paper`}>
       <header className="topbar">
         <div className="brand-row">
           <button
@@ -6688,6 +6695,14 @@ function App() {
           {t(locale, 'workerSignal', { online: onlineWorkers, total: workers.length })}
         </div>
         <div className="app-mode-switch" role="group" aria-label="AgentHub mode">
+          <button
+            type="button"
+            className={appMode === 'cockpit' ? 'selected' : ''}
+            aria-pressed={appMode === 'cockpit'}
+            onClick={() => setAppMode('cockpit')}
+          >
+            Cockpit
+          </button>
           <button
             type="button"
             className={appMode === 'workbench' ? 'selected' : ''}
@@ -6809,7 +6824,20 @@ function App() {
         </div>
       )}
 
-      {appMode === 'workbench' ? (
+      {appMode === 'cockpit' ? (
+        <RuntimeCockpit
+          projection={runtimeCockpit}
+          locale={locale}
+          onOpenSession={(sessionId) => {
+            setAppMode('session');
+            openSession(sessionId, 'thread');
+          }}
+          onOpenTask={(taskId) => {
+            setAppMode('workbench');
+            void openTask(taskId).catch(() => setNotice(pickLocale(locale, '任务详情同步失败，稍后重试', 'Task sync failed. Try again.')));
+          }}
+        />
+      ) : appMode === 'workbench' ? (
         <WorkbenchShell
           tasks={tasks}
           selectedTaskId={selectedTaskId}
@@ -8265,32 +8293,34 @@ function App() {
         />
       )}
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">
-        <button type="button" className={mobilePane === 'sessions' ? 'selected' : ''} onClick={showSessionList}>
-          <MessageCircle size={18} />
-          {text.mobileSessions}
-        </button>
-        <button type="button" className={mobilePane === 'thread' ? 'selected' : ''} onClick={() => navigateMobilePane('thread')}>
-          <Play size={18} />
-          {text.mobileThread}
-        </button>
-        <button type="button" className={mobilePane === 'files' ? 'selected' : ''} onClick={() => navigateMobilePane('files')}>
-          <Folder size={18} />
-          {text.mobileFiles}
-        </button>
-        <button type="button" className={mobilePane === 'workers' ? 'selected' : ''} onClick={() => navigateMobilePane('workers')}>
-          <Cpu size={18} />
-          {text.mobileWorkers}
-        </button>
-        <button
-          type="button"
-          className={mobilePane === 'me' ? 'selected' : ''}
-          onClick={() => navigateMobilePane('me')}
-        >
-          <UserCircle size={18} />
-          {text.mobileMe}
-        </button>
-      </nav>
+      {appMode === 'session' ? (
+        <nav className="mobile-nav" aria-label="Mobile navigation">
+          <button type="button" className={mobilePane === 'sessions' ? 'selected' : ''} onClick={showSessionList}>
+            <MessageCircle size={18} />
+            {text.mobileSessions}
+          </button>
+          <button type="button" className={mobilePane === 'thread' ? 'selected' : ''} onClick={() => navigateMobilePane('thread')}>
+            <Play size={18} />
+            {text.mobileThread}
+          </button>
+          <button type="button" className={mobilePane === 'files' ? 'selected' : ''} onClick={() => navigateMobilePane('files')}>
+            <Folder size={18} />
+            {text.mobileFiles}
+          </button>
+          <button type="button" className={mobilePane === 'workers' ? 'selected' : ''} onClick={() => navigateMobilePane('workers')}>
+            <Cpu size={18} />
+            {text.mobileWorkers}
+          </button>
+          <button
+            type="button"
+            className={mobilePane === 'me' ? 'selected' : ''}
+            onClick={() => navigateMobilePane('me')}
+          >
+            <UserCircle size={18} />
+            {text.mobileMe}
+          </button>
+        </nav>
+      ) : null}
       {fileEditor && (
         <WorkspaceTextEditorDialog
           locale={locale}

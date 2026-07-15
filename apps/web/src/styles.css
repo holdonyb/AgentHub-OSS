@@ -4498,6 +4498,249 @@ textarea:disabled {
   min-height: 86px;
 }
 
+.runtime-cockpit {
+  width: 100%;
+  max-width: 100vw;
+  height: calc(100dvh - 60px);
+  min-height: 0;
+  overflow: auto;
+  padding: 30px clamp(20px, 4vw, 58px) 48px;
+  background: var(--ah-bg);
+  color: var(--ah-text);
+}
+
+.runtime-cockpit-head,
+.runtime-cockpit-filters,
+.runtime-cockpit-list {
+  width: min(1120px, 100%);
+  margin-inline: auto;
+}
+
+.runtime-cockpit-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 22px;
+}
+
+.runtime-cockpit-eyebrow {
+  color: var(--ah-accent);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.runtime-cockpit-head h1 {
+  margin: 6px 0 7px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.runtime-cockpit-head p {
+  margin: 0;
+  color: var(--ah-muted);
+  font-size: 14px;
+}
+
+.runtime-cockpit-filters {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 0 0 14px;
+  scrollbar-width: thin;
+}
+
+.runtime-cockpit-filters button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--ah-border);
+  border-radius: 999px;
+  background: var(--ah-surface);
+  color: var(--ah-muted-strong);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.runtime-cockpit-filters button span {
+  min-width: 20px;
+  border-radius: 999px;
+  background: var(--ah-surface-soft);
+  padding: 2px 6px;
+  color: var(--ah-muted);
+  font-size: 11px;
+}
+
+.runtime-cockpit-filters button.selected {
+  border-color: var(--ah-accent);
+  background: var(--ah-accent-soft);
+  color: var(--ah-accent);
+}
+
+.runtime-cockpit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.runtime-cockpit-row {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid var(--ah-border-soft);
+  border-radius: 8px;
+  background: var(--ah-surface);
+  box-shadow: var(--ah-shadow-card);
+  overflow: hidden;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.runtime-cockpit-row:hover {
+  border-color: var(--ah-border);
+  background: var(--ah-bg-elevated);
+  transform: translateY(-1px);
+}
+
+.runtime-cockpit-row-main {
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.runtime-cockpit-row-main:focus-visible {
+  outline: 2px solid var(--ah-accent);
+  outline-offset: -3px;
+}
+
+.runtime-cockpit-state-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--ah-status-idle-bg);
+  color: var(--ah-status-idle);
+}
+
+.runtime-cockpit-row.lane-attention .runtime-cockpit-state-icon {
+  background: var(--ah-status-approval-bg);
+  color: var(--ah-status-approval);
+}
+
+.runtime-cockpit-row.lane-working .runtime-cockpit-state-icon {
+  background: var(--ah-status-running-bg);
+  color: var(--ah-status-running);
+}
+
+.runtime-cockpit-row.lane-done .runtime-cockpit-state-icon {
+  background: var(--ah-status-success-bg);
+  color: var(--ah-status-success);
+}
+
+.runtime-cockpit-row-content {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.runtime-cockpit-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.runtime-cockpit-row-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.runtime-cockpit-state-label {
+  flex: 0 0 auto;
+  color: var(--ah-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runtime-cockpit-row-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  color: var(--ah-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.runtime-cockpit-row-meta > * {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runtime-cockpit-row-meta > * + *::before {
+  content: '·';
+  margin: 0 7px;
+  color: var(--ah-border);
+}
+
+.runtime-cockpit-row-summary {
+  overflow: hidden;
+  color: var(--ah-muted-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-cockpit-task-link {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-right: 10px;
+  border: 1px solid var(--ah-border);
+  border-radius: 8px;
+  background: var(--ah-surface-soft);
+  color: var(--ah-accent);
+}
+
+.runtime-cockpit-task-link:hover,
+.runtime-cockpit-task-link:focus-visible {
+  border-color: var(--ah-accent);
+  outline: none;
+}
+
+.runtime-cockpit-empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--ah-muted);
+  text-align: center;
+}
+
+.runtime-cockpit-empty strong {
+  color: var(--ah-text);
+  font-size: 17px;
+}
+
 @media (max-width: 1120px) {
   .workspace {
     grid-template-columns: 300px minmax(0, 1fr);
@@ -4569,10 +4812,22 @@ textarea:disabled {
     color: #e5edf6;
   }
 
+  .app-shell.mode-cockpit,
+  .app-shell.mode-workbench {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
   .workbench-layout {
     display: block;
     height: calc(100dvh - var(--mobile-topbar-height) - var(--mobile-nav-height) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
     overflow-y: auto;
+  }
+
+  .app-shell.mode-workbench .workbench-layout {
+    height: calc(
+      100dvh - var(--mobile-topbar-height) - var(--mobile-toast-clearance) - env(safe-area-inset-top, 0px) -
+        env(safe-area-inset-bottom, 0px)
+    );
   }
 
   .task-inbox {
@@ -4745,12 +5000,104 @@ textarea:disabled {
     justify-self: end;
     gap: 2px;
     padding: 2px;
+    max-width: min(46vw, 190px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-mode-switch::-webkit-scrollbar {
+    display: none;
   }
 
   .app-mode-switch button {
+    flex: 0 0 auto;
     min-height: 30px;
     padding: 0 8px;
     font-size: 12px;
+  }
+
+  .runtime-cockpit {
+    width: 100%;
+    max-width: 100%;
+    height: calc(100dvh - var(--mobile-topbar-height) - var(--mobile-nav-height) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
+    padding: 14px 12px 24px;
+  }
+
+  .app-shell.mode-cockpit .runtime-cockpit {
+    height: calc(
+      100dvh - var(--mobile-topbar-height) - var(--mobile-toast-clearance) - env(safe-area-inset-top, 0px) -
+        env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  .runtime-cockpit-head {
+    align-items: start;
+    padding-bottom: 14px;
+  }
+
+  .runtime-cockpit-head h1 {
+    margin-top: 4px;
+    font-size: 21px;
+  }
+
+  .runtime-cockpit-head p {
+    font-size: 13px;
+  }
+
+  .runtime-cockpit-filters {
+    position: sticky;
+    top: -14px;
+    z-index: 3;
+    overflow-x: auto;
+    margin-inline: -12px;
+    padding: 10px 12px;
+    background: var(--ah-bg);
+    scrollbar-width: none;
+  }
+
+  .runtime-cockpit-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .runtime-cockpit-filters button {
+    min-height: 36px;
+  }
+
+  .runtime-cockpit-row-main {
+    min-height: 72px;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    padding: 9px;
+  }
+
+  .runtime-cockpit-state-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .runtime-cockpit-row-title {
+    align-items: start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .runtime-cockpit-state-label {
+    font-size: 11px;
+  }
+
+  .runtime-cockpit-row-meta > * {
+    max-width: 105px;
+  }
+
+  .runtime-cockpit-row-summary {
+    font-size: 12px;
+  }
+
+  .runtime-cockpit-task-link {
+    width: 44px;
+    height: 44px;
+    margin-right: 7px;
   }
 
   .topbar .role-chip,
@@ -4812,6 +5159,11 @@ textarea:disabled {
   }
 
   .notification-toast + .workspace {
+    --mobile-toast-clearance: 74px;
+  }
+
+  .notification-toast + .runtime-cockpit,
+  .notification-toast + .workbench-layout {
     --mobile-toast-clearance: 74px;
   }
 

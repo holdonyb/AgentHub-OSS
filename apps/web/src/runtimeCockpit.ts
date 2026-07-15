@@ -1,4 +1,4 @@
-import type { AgentPermission, AgentSession, Worker } from '@agenthub/protocol';
+import type { AgentPermission, AgentSession, AgentTask, Worker } from '@agenthub/protocol';
 
 export type RuntimeCockpitLane = 'attention' | 'working' | 'done' | 'idle' | 'offline';
 
@@ -65,6 +65,7 @@ function projectSession(
   session: AgentSession,
   worker: Worker | undefined,
   pendingPermission: AgentPermission | undefined,
+  linkedTaskId: string | null,
 ): RuntimeCockpitItem {
   const lastActivityAt = session.last_activity_at ?? session.updated_at ?? null;
   const base = {
@@ -78,7 +79,7 @@ function projectSession(
     summary: session.activity_summary || session.last_message || '',
     lastActivityAt,
     permissionId: pendingPermission?.permission_id ?? null,
-    taskId: sessionTaskId(session),
+    taskId: sessionTaskId(session) ?? linkedTaskId,
   };
 
   if (pendingPermission) {
@@ -163,8 +164,14 @@ export function projectRuntimeCockpit(
   sessions: AgentSession[],
   workers: Worker[],
   permissions: AgentPermission[],
+  tasks: AgentTask[] = [],
 ): RuntimeCockpitProjection {
   const workersById = new Map(workers.map((worker) => [worker.worker_id, worker]));
+  const taskBySession = new Map(
+    tasks
+      .filter((task) => task.latest_session_id)
+      .map((task) => [task.latest_session_id as string, task.task_id]),
+  );
   const permissionBySession = new Map<string, AgentPermission>();
   for (const permission of permissions) {
     if (permission.status !== 'pending') continue;
@@ -176,7 +183,14 @@ export function projectRuntimeCockpit(
 
   const items = sessions
     .filter((session) => !session.archived_at)
-    .map((session) => projectSession(session, workersById.get(session.worker_id), permissionBySession.get(session.session_id)))
+    .map((session) =>
+      projectSession(
+        session,
+        workersById.get(session.worker_id),
+        permissionBySession.get(session.session_id),
+        taskBySession.get(session.session_id) ?? null,
+      ),
+    )
     .sort((left, right) => {
       const laneDifference = laneOrder[left.lane] - laneOrder[right.lane];
       if (laneDifference !== 0) return laneDifference;

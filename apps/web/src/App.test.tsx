@@ -1062,13 +1062,26 @@ describe('AgentHub console', () => {
     });
   });
 
-  it('switches globally between Workbench and Session modes without hiding session mode', async () => {
+  it('switches between Cockpit, Workbench, and Session and opens existing records', async () => {
     render(<App />);
 
+    expect(await screen.findByRole('button', { name: /Cockpit/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /Workbench/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Session/ })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Mobile navigation' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cockpit/ }));
+    expect(await screen.findByRole('heading', { name: /所有 Agent，一眼看清/ })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Mobile navigation' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /打开会话 修复移动控制台/ }));
+    expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Mobile navigation' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cockpit/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /打开 修复移动控制台 的任务/ }));
+    expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Workbench/ }));
     expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
