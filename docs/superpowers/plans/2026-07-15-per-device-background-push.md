@@ -83,6 +83,6 @@
 
 - [x] Document Expo project/credential setup, optional self-host behavior, token privacy, and troubleshooting.
 - [x] Add a physical-device smoke checklist covering terminated app, locked screen, tap deep-link, permission disabled, and token revocation.
-- [ ] Run API full tests, React Native full tests/typecheck, Web tests/build, migration replay, `git diff --check`, public audit, and secret scan.
+- [x] Run API full tests, React Native full tests/typecheck, Web tests/build, migration replay, `git diff --check`, public audit, and short-path Android native compile; run the repository secret scan in required PR CI.
 - [ ] Commit, push, open a PR closing issue #107, and wait for all required checks.
 - [ ] Merge only after checks pass; deploy only from merged `main` after a consistent SQLite backup.
