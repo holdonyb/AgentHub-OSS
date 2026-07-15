@@ -254,6 +254,7 @@ def test_worker_scripts_wire_auto_update_configuration() -> None:
     build_script = (REPO_ROOT / "scripts" / "build-worker-bundle.py").read_text(encoding="utf-8")
     install_windows = (REPO_ROOT / "scripts" / "install-windows-worker.ps1").read_text(encoding="utf-8")
     loop_windows = (REPO_ROOT / "scripts" / "windows-worker-loop.ps1").read_text(encoding="utf-8")
+    update_windows = (REPO_ROOT / "scripts" / "update-windows-worker.ps1").read_text(encoding="utf-8")
     install_linux = (REPO_ROOT / "scripts" / "install-linux-worker.sh").read_text(encoding="utf-8")
 
     assert "scripts/update-windows-worker.ps1" in build_script
@@ -272,6 +273,9 @@ def test_worker_scripts_wire_auto_update_configuration() -> None:
     assert "update-windows-worker.ps1" in loop_windows
     assert "GetEnvironmentVariable('Path', 'User')" in loop_windows
     assert "GetEnvironmentVariable('Path', 'Machine')" in loop_windows
+    assert '$ErrorActionPreference = "Continue"' in update_windows
+    assert "$updateExitCode = $LASTEXITCODE" in update_windows
+    assert 'worker auto-update exited code=$updateExitCode' in update_windows
     assert "AGENTHUB_WORKER_AUTO_UPDATE" in install_linux
     assert "command -v uv" in install_linux
     assert "ExecStartPre=" in install_linux
