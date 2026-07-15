@@ -143,6 +143,38 @@ Voice transcription and the voice assistant are separate:
 
 If no voice credentials are configured, normal Web/App/worker usage still works.
 
+## Native Background Push
+
+Background Android/iOS notifications are optional. They use a per-user, per-device delivery ledger plus Expo Push transport. Self-host installs that do not configure Expo continue to use the in-product notification inbox and foreground local notifications.
+
+Server settings:
+
+```env
+AGENTHUB_EXPO_PUSH_ENABLED=true
+AGENTHUB_EXPO_PUSH_ACCESS_TOKEN=
+AGENTHUB_EXPO_PUSH_BATCH_SIZE=100
+AGENTHUB_EXPO_PUSH_MAX_ATTEMPTS=3
+AGENTHUB_EXPO_PUSH_TIMEOUT_SECONDS=5
+AGENTHUB_EXPO_PUSH_BACKOFF_SECONDS=5
+AGENTHUB_EXPO_PUSH_RECEIPT_DELAY_SECONDS=900
+AGENTHUB_EXPO_PUSH_DISPATCH_INTERVAL_SECONDS=10
+```
+
+Native build setting:
+
+```env
+EXPO_PUBLIC_EAS_PROJECT_ID=your-eas-project-id
+```
+
+Rules:
+
+- `EXPO_PUBLIC_EAS_PROJECT_ID` is embedded into the APK/IPA; changing it requires a rebuild.
+- `AGENTHUB_EXPO_PUSH_ACCESS_TOKEN` remains server-only and is required only if Expo push access-token security is enabled.
+- Device tokens are never returned by the device list API or written to audit payloads.
+- Registering a device does not replay notifications created before registration.
+- Expo receives the bounded notification title/body and routing ids. Leave push disabled if that transport is outside your privacy boundary.
+- Invalid Expo tokens are automatically disabled after a `DeviceNotRegistered` ticket or receipt.
+
 ## Doubao ASR Configuration
 
 Doubao is the current provider that supports both:

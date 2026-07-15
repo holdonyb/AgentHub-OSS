@@ -65,6 +65,20 @@ Implemented tests cover:
 10. Confirm worker internal API is not usable without worker token.
 11. Stop a worker and confirm no queued jobs are assigned to it.
 
+## Physical-device Push Checklist
+
+Use a release-signed React Native build with `EXPO_PUBLIC_EAS_PROJECT_ID` configured and an API with Expo push enabled.
+
+1. Log in, grant notification permission, and confirm `GET /api/push/devices` returns one redacted enabled device.
+2. Terminate the app process, create a new approval for that user, and confirm the locked phone receives exactly one notification.
+3. Open the notification and confirm AgentHub deep-links to the target session and marks the inbox item read.
+4. Keep Web open while creating another approval and confirm the phone still receives its own delivery.
+5. Disable OS notification permission and confirm the notification remains available in the in-app inbox after reopening.
+6. Log out and confirm the device is revoked; create another approval and confirm no push is sent to that installation.
+7. Rotate/reinstall the app, register the new token, and confirm an Expo `DeviceNotRegistered` response disables the stale token without deleting inbox history.
+
+Simulators, Expo Go, and foreground-only local notifications do not satisfy this gate.
+
 ## Deployment Regression Notes
 
 The production smoke in `scripts/deploy-linux.sh` verifies API health, public worker enrollment rejection, and internal worker API isolation. It does not prove that a live Windows worker can drain a real queued Codex/Claude/Kimi job, and it does not inspect Android device safe areas. Those gaps caused the queued-job stall and APK layout regression to escape earlier deployment checks.

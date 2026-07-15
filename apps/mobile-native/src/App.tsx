@@ -8,6 +8,7 @@ import type { AuthRoute } from './auth/authRoute';
 import type { ServerConfig } from './config/serverConfig';
 import { ServerConfigRepository } from './config/serverConfigRepository';
 import { MainTabs } from './navigation/MainTabs';
+import { currentPushDeviceId, revokeCurrentPushDevice } from './notifications/pushRegistration';
 import { LoadingScreen } from './screens/LoadingScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { ServerSetupScreen } from './screens/ServerSetupScreen';
@@ -88,7 +89,8 @@ export default function App() {
     if (!api || !runtime.config || !runtime.auth) return;
     setBusy(true);
     try {
-      await api.logout(runtime.auth.csrf_token);
+      const deviceId = await currentPushDeviceId().catch(() => null);
+      await api.logout(runtime.auth.csrf_token, deviceId ?? undefined);
       setRuntime({ route: 'login', config: runtime.config, auth: null, error: null });
     } catch (error) {
       if (error instanceof AgentHubApiError && error.status === 401) {
@@ -104,6 +106,9 @@ export default function App() {
   async function handleChangeServer() {
     setBusy(true);
     try {
+      if (api && runtime.auth) {
+        await revokeCurrentPushDevice(api, runtime.auth.csrf_token).catch(() => false);
+      }
       await repository.clear();
       setRuntime({ route: 'server-setup', config: null, auth: null, error: null });
     } catch (error) {

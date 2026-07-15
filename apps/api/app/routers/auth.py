@@ -10,8 +10,8 @@ from app.core.deps import CSRF_COOKIE, SESSION_COOKIE, Actor, DbSession, require
 from app.core.json import dumps_json, loads_json
 from app.core.security import generate_token, hash_password, hash_token, verify_password
 from app.core.spaces import actor_space_payload, ensure_default_space, ensure_space_membership
-from app.models import AccessToken, Invite, SessionToken, SpaceMembership, User, utcnow
-from app.schemas import BootstrapIn, InviteAcceptIn, InviteCreateIn, LoginIn, TokenCreateIn
+from app.models import AccessToken, Invite, PushDevice, SessionToken, SpaceMembership, User, utcnow
+from app.schemas import BootstrapIn, InviteAcceptIn, InviteCreateIn, LoginIn, LogoutIn, TokenCreateIn
 from app.services import user_out
 
 router = APIRouter()
@@ -133,7 +133,31 @@ def login(payload: LoginIn, request: Request, response: Response, db: DbSession)
 
 
 @router.post("/api/auth/logout")
-def logout(response: Response, db: DbSession, actor: Actor = Depends(require_user)):
+def logout(
+    response: Response,
+    db: DbSession,
+    payload: LogoutIn | None = None,
+    actor: Actor = Depends(require_user),
+):
+    assert actor.user is not None
+    changed = False
+    if payload and payload.device_id:
+        device = (
+            db.query(PushDevice)
+            .filter(
+                PushDevice.device_id == payload.device_id,
+                PushDevice.space_id == actor.space_id,
+                PushDevice.user_id == actor.user.id,
+            )
+            .one_or_none()
+        )
+        if device is not None:
+            now = utcnow()
+            device.enabled = False
+            device.push_token = ""
+            device.revoked_at = now
+            device.updated_at = now
+            changed = True
     if actor.session_token:
         actor.session_token.revoked_at = utcnow()
         write_event(
@@ -145,6 +169,8 @@ def logout(response: Response, db: DbSession, actor: Actor = Depends(require_use
             source_id=actor.actor_id,
             event_type="auth.logout",
         )
+        changed = True
+    if changed:
         db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")

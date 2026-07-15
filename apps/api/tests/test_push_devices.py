@@ -185,3 +185,31 @@ def test_device_delivery_is_created_only_for_notifications_after_registration(cl
     _request_permission(client, worker_headers, worker_id, "permission-after-revocation")
     with client.app.state.db_engine.connect() as connection:
         assert connection.execute(text("SELECT COUNT(*) FROM notification_deliveries")).scalar_one() == 1
+
+
+def test_logout_atomically_revokes_the_current_push_device(client: TestClient) -> None:
+    from app.models import PushDevice
+
+    bootstrap_owner(client)
+    owner_login = login(client)
+    headers = auth_headers(owner_login)
+    registered = _register_device(
+        client,
+        headers,
+        device_id="phone-logout-1",
+        push_token="ExponentPushToken[logout-token]",
+    )
+    assert registered.status_code == 200, registered.text
+
+    logged_out = client.post(
+        "/api/auth/logout",
+        json={"device_id": "phone-logout-1"},
+        headers=headers,
+    )
+    assert logged_out.status_code == 200, logged_out.text
+
+    with client.app.state.SessionLocal() as db:
+        device = db.query(PushDevice).filter(PushDevice.device_id == "phone-logout-1").one()
+        assert device.enabled is False
+        assert device.push_token == ""
+        assert device.revoked_at is not None

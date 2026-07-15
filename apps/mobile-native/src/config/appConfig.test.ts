@@ -1,4 +1,9 @@
 import appConfig from '../../app.json';
+import { buildAppConfig } from '../../app.config';
+
+const { readFileSync } = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
 
 const javaKeywords = new Set([
   'abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class',
@@ -29,5 +34,26 @@ describe('Expo native identifiers', () => {
         NSExceptionAllowsInsecureHTTPLoads: true,
       },
     });
+  });
+});
+
+describe('Expo push configuration', () => {
+  it('injects the self-host operator EAS project id without hardcoding one', () => {
+    const configured = buildAppConfig({ EXPO_PUBLIC_EAS_PROJECT_ID: 'self-host-project' });
+
+    expect(configured.extra).toEqual({ eas: { projectId: 'self-host-project' } });
+    expect(appConfig.expo).not.toHaveProperty('extra.eas.projectId');
+  });
+
+  it('leaves push transport disabled when no EAS project id is configured', () => {
+    expect(buildAppConfig({}).extra).toBeUndefined();
+  });
+
+  it('passes the repository EAS project id into Android and release builds', () => {
+    const workflowRoot = `${process.cwd().replace(/\\/g, '/')}/../../.github/workflows`;
+    for (const workflow of ['android-apk.yml', 'release.yml']) {
+      const source = readFileSync(`${workflowRoot}/${workflow}`, 'utf8');
+      expect(source).toContain('EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID }}');
+    }
   });
 });

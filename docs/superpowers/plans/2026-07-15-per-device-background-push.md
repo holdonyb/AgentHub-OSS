@@ -20,10 +20,10 @@
 - Create: `apps/api/tests/test_push_devices.py`
 - Modify: `apps/api/tests/test_database_compatibility.py`
 
-- [ ] Write failing API and compatibility tests for device upsert ownership, redacted responses, revocation, fresh schema, and upgrade schema.
-- [ ] Run `pytest apps/api/tests/test_push_devices.py apps/api/tests/test_database_compatibility.py -q` and confirm failures are caused by missing models/routes.
-- [ ] Add `PushDevice` and `NotificationDelivery`, migration `0007`, schemas, and compatibility indexes.
-- [ ] Re-run the focused tests and confirm they pass.
+- [x] Write failing API and compatibility tests for device upsert ownership, redacted responses, revocation, fresh schema, and upgrade schema.
+- [x] Run `pytest apps/api/tests/test_push_devices.py apps/api/tests/test_database_compatibility.py -q` and confirm failures are caused by missing models/routes.
+- [x] Add `PushDevice` and `NotificationDelivery`, migration `0007`, schemas, and compatibility indexes.
+- [x] Re-run the focused tests and confirm they pass.
 
 ### Task 2: Authenticated device API and no historical replay
 
@@ -34,10 +34,10 @@
 - Modify: `apps/api/tests/test_push_devices.py`
 - Modify: `apps/api/tests/test_notification_ledger.py`
 
-- [ ] Add failing tests proving registration does not backfill old records, new notifications create one row per enabled device, Web delivery does not change device delivery, and revoked devices receive no new rows.
-- [ ] Run focused tests and confirm the missing behavior fails.
-- [ ] Implement user-scoped upsert/list/revoke endpoints and delivery row creation in the same transaction as notification persistence.
-- [ ] Re-run focused tests and confirm they pass.
+- [x] Add failing tests proving registration does not backfill old records, new notifications create one row per enabled device, Web delivery does not change device delivery, and revoked devices receive no new rows.
+- [x] Run focused tests and confirm the missing behavior fails.
+- [x] Implement user-scoped upsert/list/revoke endpoints and delivery row creation in the same transaction as notification persistence.
+- [x] Re-run focused tests and confirm they pass.
 
 ### Task 3: Expo ticket and receipt dispatcher
 
@@ -48,10 +48,10 @@
 - Create: `apps/api/tests/test_push_dispatcher.py`
 - Modify: `.env.example`
 
-- [ ] Add failing transport-injected tests for successful tickets, transient retry, malformed provider responses, receipt success, and `DeviceNotRegistered` disabling.
-- [ ] Run `pytest apps/api/tests/test_push_dispatcher.py -q` and confirm failures are due to the missing dispatcher.
-- [ ] Implement bounded claim/send/receipt passes and an optional API lifecycle loop controlled by configuration.
-- [ ] Re-run dispatcher and notification tests.
+- [x] Add failing transport-injected tests for successful tickets, transient retry, malformed provider responses, receipt success, and `DeviceNotRegistered` disabling.
+- [x] Run `pytest apps/api/tests/test_push_dispatcher.py -q` and confirm failures are due to the missing dispatcher.
+- [x] Implement bounded claim/send/receipt passes and an optional API lifecycle loop controlled by configuration.
+- [x] Re-run dispatcher and notification tests.
 
 ### Task 4: React Native registration and revocation
 
@@ -66,11 +66,11 @@
 - Modify: `apps/mobile-native/src/notifications/useNativeNotificationGuard.test.tsx`
 - Modify: the existing logout owner in `apps/mobile-native/src/`
 
-- [ ] Add failing tests for stable device id, absent project id, denied permission, successful upsert, idempotent refresh, and logout revocation.
-- [ ] Run focused Jest tests and confirm expected failures.
-- [ ] Add Expo token acquisition and authenticated registration without exposing the push token in UI state.
-- [ ] Keep current ledger polling when registration is unavailable.
-- [ ] Re-run React Native tests and typecheck.
+- [x] Add failing tests for stable device id, absent project id, denied permission, successful upsert, idempotent refresh, and logout revocation.
+- [x] Run focused Jest tests and confirm expected failures.
+- [x] Add Expo token acquisition and authenticated registration without exposing the push token in UI state.
+- [x] Keep current ledger polling when registration is unavailable.
+- [x] Re-run React Native tests and typecheck.
 
 ### Task 5: Documentation, regression, and real-device gate
 
@@ -81,9 +81,8 @@
 - Modify: `docs/TESTING.md`
 - Modify: `PROJECT_STATUS.md`
 
-- [ ] Document Expo project/credential setup, optional self-host behavior, token privacy, and troubleshooting.
-- [ ] Add a physical-device smoke checklist covering terminated app, locked screen, tap deep-link, permission disabled, and token revocation.
+- [x] Document Expo project/credential setup, optional self-host behavior, token privacy, and troubleshooting.
+- [x] Add a physical-device smoke checklist covering terminated app, locked screen, tap deep-link, permission disabled, and token revocation.
 - [ ] Run API full tests, React Native full tests/typecheck, Web tests/build, migration replay, `git diff --check`, public audit, and secret scan.
 - [ ] Commit, push, open a PR closing issue #107, and wait for all required checks.
 - [ ] Merge only after checks pass; deploy only from merged `main` after a consistent SQLite backup.
-

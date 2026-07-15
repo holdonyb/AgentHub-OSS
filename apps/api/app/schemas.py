@@ -90,6 +90,10 @@ class LoginIn(BaseModel):
     password: str
 
 
+class LogoutIn(BaseModel):
+    device_id: str | None = Field(default=None, min_length=8, max_length=160)
+
+
 class AuthOut(BaseModel):
     user: UserOut
     csrf_token: str

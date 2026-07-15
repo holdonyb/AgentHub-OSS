@@ -8,6 +8,7 @@ import {
   subscribeToNotificationResponses,
 } from './nativeNotifications';
 import { syncNotificationLedger } from './notificationLedger';
+import { registerCurrentPushDevice } from './pushRegistration';
 import { useNativeNotificationGuard, type NativeNotificationGuardState } from './useNativeNotificationGuard';
 
 jest.mock('./nativeNotifications', () => ({
@@ -19,6 +20,7 @@ jest.mock('./nativeNotifications', () => ({
   subscribeToNotificationResponses: jest.fn(),
 }));
 jest.mock('./notificationLedger', () => ({ syncNotificationLedger: jest.fn() }));
+jest.mock('./pushRegistration', () => ({ registerCurrentPushDevice: jest.fn() }));
 
 const { act, create } = jest.requireActual('react-test-renderer') as {
   act(callback: () => void | Promise<void>): void | Promise<void>;
@@ -32,6 +34,7 @@ const api = {
   listPermissions: jest.fn(),
   listJobs: jest.fn(),
   markNotificationRead: jest.fn(),
+  upsertPushDevice: jest.fn(),
 } as unknown as MobileApi;
 
 function Probe() {
@@ -47,12 +50,43 @@ beforeEach(() => {
   jest.mocked(nativeNotificationsEnabled).mockResolvedValue(true);
   jest.mocked(consumeLastNotificationResponse).mockResolvedValue(null);
   jest.mocked(syncNotificationLedger).mockResolvedValue({ available: true, pendingCount: 2 });
+  jest.mocked(registerCurrentPushDevice).mockResolvedValue(true);
   jest.mocked(subscribeToNotificationResponses).mockImplementation((listener) => {
     notificationResponseListener = listener;
     return jest.fn();
   });
   jest.mocked(api.listPermissions).mockResolvedValue({ items: [] });
   jest.mocked(api.listJobs).mockResolvedValue({ items: [] });
+});
+
+it('registers the current device once without blocking ledger synchronization', async () => {
+  let renderer!: { unmount(): void };
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+
+  expect(registerCurrentPushDevice).toHaveBeenCalledTimes(1);
+  expect(registerCurrentPushDevice).toHaveBeenCalledWith(api, 'csrf-token');
+  expect(syncNotificationLedger).toHaveBeenCalled();
+
+  await act(async () => {
+    await currentHook.refresh();
+  });
+  expect(registerCurrentPushDevice).toHaveBeenCalledTimes(1);
+  await act(async () => renderer.unmount());
+});
+
+it('continues foreground ledger synchronization when push registration fails', async () => {
+  jest.mocked(registerCurrentPushDevice).mockRejectedValue(new Error('push unavailable'));
+  let renderer!: { unmount(): void };
+
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+
+  expect(syncNotificationLedger).toHaveBeenCalled();
+  expect(currentHook.pendingCount).toBe(2);
+  await act(async () => renderer.unmount());
 });
 
 it('opens and marks read the notification that launched the app', async () => {

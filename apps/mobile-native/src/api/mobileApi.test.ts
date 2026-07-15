@@ -42,7 +42,7 @@ describe('mobile API', () => {
     const api = createMobileApi('https://agenthub.example.com', fetcher);
 
     await api.me();
-    await api.logout('csrf');
+    await api.logout('csrf', 'phone-install-1');
 
     expect(fetcher).toHaveBeenNthCalledWith(1, 'https://agenthub.example.com/api/auth/me', {
       credentials: 'include',
@@ -53,6 +53,7 @@ describe('mobile API', () => {
       expect.objectContaining({
         method: 'POST',
         credentials: 'include',
+        body: JSON.stringify({ device_id: 'phone-install-1' }),
         headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf' }),
       }),
     );
@@ -110,6 +111,42 @@ describe('mobile API', () => {
       'https://agenthub.example.com/api/notifications/notice%2F1/read',
       expect.objectContaining({
         method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
+
+  it('registers and revokes a push device with CSRF protection', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ device: { device_id: 'phone-install-1', enabled: true } }))
+      .mockResolvedValueOnce(jsonResponse({ revoked: true }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+    const payload = {
+      device_id: 'phone-install-1',
+      platform: 'android' as const,
+      transport: 'expo' as const,
+      push_token: 'ExponentPushToken[private-token]',
+      app_version: '1.0.0',
+    };
+
+    await api.upsertPushDevice(payload, 'csrf-token');
+    await api.revokePushDevice('phone-install-1', 'csrf-token');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/push/devices',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/push/devices/phone-install-1',
+      expect.objectContaining({
+        method: 'DELETE',
         headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
       }),
     );
