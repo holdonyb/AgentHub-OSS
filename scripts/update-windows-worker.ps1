@@ -69,9 +69,20 @@ try {
         $arguments += "--dry-run"
     }
 
-    & $pythonPath @arguments 2>&1 | ForEach-Object { Write-UpdateLog ([string]$_) }
-    if ($LASTEXITCODE -ne 0) {
-        Write-UpdateLog "worker auto-update exited code=$LASTEXITCODE"
+    # Windows PowerShell surfaces native stderr as ErrorRecord objects. Keep them
+    # in the update log without letting ErrorActionPreference=Stop abort the pipe.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $pythonPath @arguments 2>&1 | ForEach-Object { Write-UpdateLog ([string]$_) }
+        $updateExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($updateExitCode -ne 0) {
+        Write-UpdateLog "worker auto-update exited code=$updateExitCode"
     }
 }
 catch {
