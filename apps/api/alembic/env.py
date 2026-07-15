@@ -6,7 +6,9 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import engine_from_config, inspect, pool
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps" / "api"))
@@ -39,6 +41,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        if not inspect(connection).get_table_names():
+            target_metadata.create_all(bind=connection)
+            MigrationContext.configure(connection).stamp(ScriptDirectory.from_config(config), "head")
+            connection.commit()
+            return
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

@@ -226,7 +226,17 @@ def test_worker_runtime_prefers_top_level_runtime_settings_over_stale_nested_wor
     assert runtime.heartbeat_interval_seconds == 44
 
 
-def test_provider_snapshots_advertise_interaction_support_boundaries() -> None:
+def test_provider_snapshots_advertise_interaction_support_boundaries(monkeypatch) -> None:
+    monkeypatch.setattr(
+        providers_module.AgentProvider,
+        "get_diagnostic",
+        lambda provider: {
+            "available": True,
+            "auth_status": "unknown",
+            "feature_overrides": {},
+            "models": provider.default_models,
+        },
+    )
     snapshots = providers_module.provider_snapshots_from_capabilities(
         {"codex": True, "claude": True, "kimi": True, "opencode": True},
     )
