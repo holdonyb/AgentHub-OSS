@@ -52,6 +52,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("next_attempt_at", sa.DateTime(), nullable=True),
+        sa.Column("receipt_attempts", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("receipt_next_attempt_at", sa.DateTime(), nullable=True),
         sa.Column("provider_ticket_id", sa.String(length=240), nullable=True),
         sa.Column("provider_receipt_id", sa.String(length=240), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=False, server_default=""),
@@ -74,11 +76,21 @@ def upgrade() -> None:
     op.create_index("ix_notification_deliveries_push_device_id", "notification_deliveries", ["push_device_id"])
     op.create_index("ix_notification_deliveries_status", "notification_deliveries", ["status"])
     op.create_index("ix_notification_deliveries_next_attempt_at", "notification_deliveries", ["next_attempt_at"])
+    op.create_index(
+        "ix_notification_deliveries_receipt_next_attempt_at",
+        "notification_deliveries",
+        ["receipt_next_attempt_at"],
+    )
     op.create_index("ix_notification_deliveries_provider_ticket_id", "notification_deliveries", ["provider_ticket_id"])
     op.create_index(
         "ix_notification_delivery_dispatch",
         "notification_deliveries",
         ["status", "next_attempt_at", "created_at"],
+    )
+    op.create_index(
+        "ix_notification_delivery_receipt_dispatch",
+        "notification_deliveries",
+        ["status", "receipt_next_attempt_at", "ticketed_at"],
     )
 
 

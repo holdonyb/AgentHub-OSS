@@ -157,6 +157,8 @@ AGENTHUB_EXPO_PUSH_MAX_ATTEMPTS=3
 AGENTHUB_EXPO_PUSH_TIMEOUT_SECONDS=5
 AGENTHUB_EXPO_PUSH_BACKOFF_SECONDS=5
 AGENTHUB_EXPO_PUSH_RECEIPT_DELAY_SECONDS=900
+AGENTHUB_EXPO_PUSH_CLAIM_LEASE_SECONDS=60
+AGENTHUB_EXPO_PUSH_DEVICE_TTL_DAYS=30
 AGENTHUB_EXPO_PUSH_DISPATCH_INTERVAL_SECONDS=10
 ```
 
@@ -164,16 +166,19 @@ Native build setting:
 
 ```env
 EXPO_PUBLIC_EAS_PROJECT_ID=your-eas-project-id
+GOOGLE_SERVICES_JSON=/private/path/google-services.json
 ```
 
 Rules:
 
 - `EXPO_PUBLIC_EAS_PROJECT_ID` is embedded into the APK/IPA; changing it requires a rebuild.
+- Android background push requires `google-services.json` at build time and an FCM V1 service-account key uploaded to the same EAS/Firebase project. GitHub Actions accepts the file as base64 secret `AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64`.
 - `AGENTHUB_EXPO_PUSH_ACCESS_TOKEN` remains server-only and is required only if Expo push access-token security is enabled.
 - Device tokens are never returned by the device list API or written to audit payloads.
 - Registering a device does not replay notifications created before registration.
 - Expo receives the bounded notification title/body and routing ids. Leave push disabled if that transport is outside your privacy boundary.
 - Invalid Expo tokens are automatically disabled after a `DeviceNotRegistered` ticket or receipt.
+- Devices renew their registration daily and expire server-side after `AGENTHUB_EXPO_PUSH_DEVICE_TTL_DAYS` without renewal.
 
 ## Doubao ASR Configuration
 

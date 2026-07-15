@@ -30,12 +30,12 @@ The user-level notification ledger and React Native foreground integration are m
 
 Fresh feature-branch verification on `2026-07-15`:
 
-- API: `391 passed, 4 skipped`
+- API: `400 passed, 4 skipped`
 - Web: `201 passed`; production build passed
 - Compatibility Android: `16 passed`; JDK 21 debug APK compile passed
-- React Native per-device push branch: `107 passed`; TypeScript typecheck and short-path JDK 21 debug APK compile passed
+- React Native per-device push branch: `110 passed`; TypeScript typecheck and short-path JDK 21 debug APK compile passed
 - Desktop: `34 passed`
-- Alembic: production-representative `0005 -> 0006` SQLite upgrade smoke passed with legacy session projection preserved
+- Alembic: fresh and repeatable existing-database upgrades through `0007` passed with the legacy session projection preserved
 - `git diff --check`: passed
 
 ## Implemented Surface

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_event
 from app.core.deps import CSRF_COOKIE, SESSION_COOKIE, Actor, DbSession, require_min_role, require_space_user, require_user
 from app.core.json import dumps_json, loads_json
+from app.core.push_devices import disable_push_device
 from app.core.security import generate_token, hash_password, hash_token, verify_password
 from app.core.spaces import actor_space_payload, ensure_default_space, ensure_space_membership
 from app.models import AccessToken, Invite, PushDevice, SessionToken, SpaceMembership, User, utcnow
@@ -152,11 +153,7 @@ def logout(
             .one_or_none()
         )
         if device is not None:
-            now = utcnow()
-            device.enabled = False
-            device.push_token = ""
-            device.revoked_at = now
-            device.updated_at = now
+            disable_push_device(db, device, "Push device revoked during logout")
             changed = True
     if actor.session_token:
         actor.session_token.revoked_at = utcnow()

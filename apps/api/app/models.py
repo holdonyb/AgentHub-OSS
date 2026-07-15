@@ -264,6 +264,8 @@ class NotificationDelivery(Base):
     status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    receipt_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    receipt_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     provider_ticket_id: Mapped[str | None] = mapped_column(String(240), nullable=True, index=True)
     provider_receipt_id: Mapped[str | None] = mapped_column(String(240), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)

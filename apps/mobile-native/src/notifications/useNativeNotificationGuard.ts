@@ -12,6 +12,9 @@ import { notificationSignals } from './notificationSignals';
 import { syncNotificationLedger } from './notificationLedger';
 import { registerCurrentPushDevice } from './pushRegistration';
 
+const PUSH_REGISTRATION_RETRY_MS = 60_000;
+const PUSH_REGISTRATION_REFRESH_MS = 24 * 60 * 60 * 1_000;
+
 type NotificationApi = Pick<
   MobileApi,
   'listJobs' | 'listNotifications' | 'listPermissions' | 'markNotificationDelivered' | 'markNotificationRead' | 'upsertPushDevice' | 'revokePushDevice'
@@ -35,7 +38,7 @@ export function useNativeNotificationGuard(
   const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const inFlight = useRef(false);
-  const pushRegistrationAttempted = useRef(false);
+  const pushRegistrationNextAttemptAt = useRef(0);
   const handledResponses = useRef(new Set<string>());
 
   const refresh = useCallback(async () => {
@@ -45,10 +48,14 @@ export function useNativeNotificationGuard(
     try {
       const permissionGranted = await nativeNotificationsEnabled();
       setEnabled(permissionGranted);
-      if (permissionGranted && !pushRegistrationAttempted.current) {
-        pushRegistrationAttempted.current = true;
+      const now = Date.now();
+      if (permissionGranted && now >= pushRegistrationNextAttemptAt.current) {
+        pushRegistrationNextAttemptAt.current = now + PUSH_REGISTRATION_RETRY_MS;
         try {
-          await registerCurrentPushDevice(api, csrfToken);
+          const registered = await registerCurrentPushDevice(api, csrfToken);
+          if (registered) {
+            pushRegistrationNextAttemptAt.current = now + PUSH_REGISTRATION_REFRESH_MS;
+          }
         } catch (error) {
           onError?.(error);
         }
@@ -108,7 +115,7 @@ export function useNativeNotificationGuard(
   const enable = useCallback(async () => {
     try {
       setEnabled(await enableNativeNotifications());
-      pushRegistrationAttempted.current = false;
+      pushRegistrationNextAttemptAt.current = 0;
       await refresh();
     } catch (error) {
       onError?.(error);

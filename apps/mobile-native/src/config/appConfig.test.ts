@@ -49,11 +49,23 @@ describe('Expo push configuration', () => {
     expect(buildAppConfig({}).extra).toBeUndefined();
   });
 
+  it('injects the Android Firebase registration file only when configured', () => {
+    const configured = buildAppConfig({
+      EXPO_PUBLIC_EAS_PROJECT_ID: 'self-host-project',
+      GOOGLE_SERVICES_JSON: '/runner/google-services.json',
+    });
+
+    expect(configured.android?.googleServicesFile).toBe('/runner/google-services.json');
+    expect(buildAppConfig({}).android?.googleServicesFile).toBeUndefined();
+  });
+
   it('passes the repository EAS project id into Android and release builds', () => {
     const workflowRoot = `${process.cwd().replace(/\\/g, '/')}/../../.github/workflows`;
     for (const workflow of ['android-apk.yml', 'release.yml']) {
       const source = readFileSync(`${workflowRoot}/${workflow}`, 'utf8');
       expect(source).toContain('EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID }}');
+      expect(source).toContain('AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64');
+      expect(source).toContain('GOOGLE_SERVICES_JSON=$RUNNER_TEMP/google-services.json');
     }
   });
 });

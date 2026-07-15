@@ -14,7 +14,12 @@ class Base(DeclarativeBase):
 def create_db_engine(database_url: str) -> Engine:
     if database_url.startswith("sqlite"):
         connect_args = {"check_same_thread": False, "timeout": 30}
-        engine = create_engine(database_url, connect_args=connect_args, future=True)
+        engine = create_engine(
+            database_url,
+            connect_args=connect_args,
+            future=True,
+            hide_parameters=True,
+        )
 
         @event.listens_for(engine, "connect")
         def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
@@ -26,7 +31,7 @@ def create_db_engine(database_url: str) -> Engine:
             cursor.close()
 
         return engine
-    return create_engine(database_url, future=True)
+    return create_engine(database_url, future=True, hide_parameters=True)
 
 
 def create_session_local(engine: Engine) -> sessionmaker[Session]:
@@ -252,6 +257,11 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_notification_delivery_dispatch "
                 "ON notification_deliveries (status, next_attempt_at, created_at)",
                 {"status", "next_attempt_at", "created_at"},
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_notification_delivery_receipt_dispatch "
+                "ON notification_deliveries (status, receipt_next_attempt_at, ticketed_at)",
+                {"status", "receipt_next_attempt_at", "ticketed_at"},
             ),
         ],
     }

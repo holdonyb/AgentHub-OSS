@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { AgentHubApiError } from '@agenthub/client-core';
 import type { MobileApi } from '../api/mobileApi';
 
 const DEVICE_ID_KEY = 'agenthub.pushDeviceId.v1';
@@ -41,17 +42,33 @@ export async function registerCurrentPushDevice(
 
   const token = await Notifications.getExpoPushTokenAsync({ projectId });
   if (!token.data) return false;
-  const deviceId = await getOrCreateDeviceId(Platform.OS);
-  await api.upsertPushDevice(
-    {
-      device_id: deviceId,
-      platform: Platform.OS,
-      transport: 'expo',
-      push_token: token.data,
-      app_version: Constants.expoConfig?.version ?? '',
-    },
-    csrfToken,
-  );
+  const registration = {
+    platform: Platform.OS,
+    transport: 'expo' as const,
+    push_token: token.data,
+    app_version: Constants.expoConfig?.version ?? '',
+  };
+  let deviceId = await getOrCreateDeviceId(Platform.OS);
+  try {
+    await api.upsertPushDevice(
+      {
+        device_id: deviceId,
+        ...registration,
+      },
+      csrfToken,
+    );
+  } catch (error) {
+    if (!(error instanceof AgentHubApiError) || error.status !== 409) throw error;
+    deviceId = createDeviceId(Platform.OS);
+    await SecureStore.setItemAsync(DEVICE_ID_KEY, deviceId);
+    await api.upsertPushDevice(
+      {
+        device_id: deviceId,
+        ...registration,
+      },
+      csrfToken,
+    );
+  }
   return true;
 }
 

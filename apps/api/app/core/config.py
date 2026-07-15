@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     expo_push_timeout_seconds: Annotated[float, Field(ge=0.1, le=30)] = 5.0
     expo_push_backoff_seconds: Annotated[float, Field(ge=0, le=3600)] = 5.0
     expo_push_receipt_delay_seconds: Annotated[int, Field(ge=0, le=3600)] = 900
+    expo_push_claim_lease_seconds: Annotated[int, Field(ge=5, le=3600)] = 60
+    expo_push_device_ttl_days: Annotated[int, Field(ge=1, le=365)] = 30
     expo_push_dispatch_interval_seconds: Annotated[float, Field(ge=1, le=300)] = 10.0
     max_session_attachments: Annotated[int, Field(ge=1, le=20)] = 5
     max_session_attachment_bytes: Annotated[int, Field(ge=1024)] = 8 * 1024 * 1024

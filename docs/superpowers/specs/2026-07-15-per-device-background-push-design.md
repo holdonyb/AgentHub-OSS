@@ -21,11 +21,11 @@ AgentHub currently stores one notification state per user. A Web tab, the compat
 `NotificationDelivery` joins a `NotificationRecord` to a `PushDevice`. Its state machine is:
 
 ```text
-queued -> sending -> ticketed -> delivered
-             |           |
-             +-> retry ---+
-             +-> failed
-             +-> disabled
+queued -> sending -> ticketed -> checking_receipt -> delivered
+             |           |             |
+             +-> retry ---+             +-> ticketed (bounded retry)
+             +-> failed                 +-> failed
+             +-> disabled <-------------+
 ```
 
 The unique `(notification_record_id, push_device_id)` constraint prevents duplicate delivery. Delivery creation happens only for devices enabled at notification creation time, which prevents historical replay after installation or upgrade.
@@ -42,14 +42,14 @@ The first implementation exposes one authenticated maintenance endpoint for dete
 
 ## React Native Flow
 
-After login and notification permission grant, the app obtains a stable local device id from SecureStore and an Expo push token using the configured EAS project id. It upserts the device through the authenticated API. If permission, project id, or token acquisition is unavailable, registration is skipped and foreground ledger polling remains active.
+After login and notification permission grant, the app obtains a stable local device id from SecureStore and an Expo push token using the configured EAS project id. It upserts the device through the authenticated API. If the installation changes accounts after an expired session, a device-id ownership conflict rotates the local id once; the server atomically disables any older active registration for the same Expo token so the previous account cannot continue sending to that installation. If permission, project id, or token acquisition is unavailable, registration is skipped and foreground ledger polling remains active.
 
 Push payloads contain only `notificationId`, `sessionId`, type, title, and bounded body text. Notification taps reuse the existing cold-start/live response path. Logout revokes the current device registration before local authentication state is cleared when the network is available; server-side token rotation and device expiry remain additional safeguards.
 
 ## Security And Operations
 
 - Device APIs require a normal authenticated user and CSRF on mutations.
-- A user can update or revoke only devices bound to their own user and space.
+- A user can update or revoke only devices bound to their own user and space. Possession of the same opaque Expo token may move that delivery endpoint to a newly authenticated account, disabling the old endpoint without exposing its owner or history.
 - Push tokens are redacted from API responses, events, and logs.
 - Provider access tokens are server environment configuration only.
 - Payloads contain no local paths, raw tool output, secrets, or full transcripts.
@@ -62,4 +62,3 @@ Push payloads contain only `notificationId`, `sessionId`, type, title, and bound
 - Dispatcher tests use an injected HTTP transport and cover success, transient failure, malformed responses, and `DeviceNotRegistered`.
 - React Native tests cover project-id absence, permission denial, idempotent registration, logout revocation, and tap deep-linking.
 - CI compiles Android and iOS. Physical background delivery is not claimed until a signed build, Expo credentials, and a real device complete the smoke run.
-

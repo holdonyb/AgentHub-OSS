@@ -89,6 +89,33 @@ it('continues foreground ledger synchronization when push registration fails', a
   await act(async () => renderer.unmount());
 });
 
+it('retries a failed push registration after the retry window', async () => {
+  const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+  jest.mocked(registerCurrentPushDevice)
+    .mockRejectedValueOnce(new Error('push unavailable'))
+    .mockResolvedValueOnce(true);
+  let renderer!: { unmount(): void };
+
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+  expect(registerCurrentPushDevice).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await currentHook.refresh();
+  });
+  expect(registerCurrentPushDevice).toHaveBeenCalledTimes(1);
+
+  now.mockReturnValue(61_001);
+  await act(async () => {
+    await currentHook.refresh();
+  });
+  expect(registerCurrentPushDevice).toHaveBeenCalledTimes(2);
+
+  now.mockRestore();
+  await act(async () => renderer.unmount());
+});
+
 it('opens and marks read the notification that launched the app', async () => {
   jest.mocked(consumeLastNotificationResponse).mockResolvedValue({
     notificationId: 'notice-cold',

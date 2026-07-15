@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
+import { AgentHubApiError } from '@agenthub/client-core';
 import type { MobileApi } from '../api/mobileApi';
 import {
   currentPushDeviceId,
@@ -98,4 +99,31 @@ it('reuses the stored device id and revokes it before logout', async () => {
     'csrf-token',
   );
   expect(api.revokePushDevice).toHaveBeenCalledWith('agenthub-android-existing', 'csrf-token');
+});
+
+it('rotates a device id once when it belongs to another account', async () => {
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValue('agenthub-android-previous-account');
+  jest.mocked(api.upsertPushDevice)
+    .mockRejectedValueOnce(new AgentHubApiError({ status: 409, message: 'device already belongs to another user' }))
+    .mockResolvedValueOnce({ device: {} as never });
+
+  await expect(registerCurrentPushDevice(api, 'csrf-token')).resolves.toBe(true);
+
+  expect(api.upsertPushDevice).toHaveBeenCalledTimes(2);
+  expect(api.upsertPushDevice).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ device_id: 'agenthub-android-previous-account' }),
+    'csrf-token',
+  );
+  expect(api.upsertPushDevice).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      device_id: expect.stringMatching(/^agenthub-(android|ios)-/),
+    }),
+    'csrf-token',
+  );
+  expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
+    'agenthub.pushDeviceId.v1',
+    expect.not.stringMatching(/previous-account/),
+  );
 });

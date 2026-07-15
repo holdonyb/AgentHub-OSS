@@ -9,12 +9,20 @@ export function buildAppConfig(environment: PushBuildEnvironment): ExpoConfig {
     ?? environment.EAS_PROJECT_ID
     ?? ''
   ).trim();
-  if (!projectId) return { ...appJson.expo } as ExpoConfig;
+  const googleServicesFile = (environment.GOOGLE_SERVICES_JSON ?? '').trim();
   return {
     ...appJson.expo,
-    extra: {
-      eas: { projectId },
-    },
+    ...(projectId ? {
+      extra: {
+        eas: { projectId },
+      },
+    } : {}),
+    ...(googleServicesFile ? {
+      android: {
+        ...appJson.expo.android,
+        googleServicesFile,
+      },
+    } : {}),
   } as ExpoConfig;
 }
 
