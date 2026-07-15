@@ -1062,41 +1062,60 @@ describe('AgentHub console', () => {
     });
   });
 
-  it('switches between Cockpit, Workbench, and Session and opens existing records', async () => {
+  it('switches between runtime overview, task workbench, and sessions and opens existing records', async () => {
     render(<App />);
 
-    expect(await screen.findByRole('button', { name: /Cockpit/ })).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /Workbench/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Session/ })).toBeInTheDocument();
+    const desktopModeSwitch = await screen.findByRole('group', { name: 'AgentHub mode' });
+    expect(within(desktopModeSwitch).getByRole('button', { name: '运行总览' })).toBeInTheDocument();
+    expect(within(desktopModeSwitch).getByRole('button', { name: '任务工作台' })).toBeInTheDocument();
+    expect(within(desktopModeSwitch).getByRole('button', { name: '会话' })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Mobile navigation' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Cockpit/ }));
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '运行总览' }));
     expect(await screen.findByRole('heading', { name: /所有 Agent，一眼看清/ })).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: 'Mobile navigation' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /打开会话 修复移动控制台/ }));
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Mobile navigation' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Cockpit/ }));
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '运行总览' }));
     fireEvent.click(await screen.findByRole('button', { name: /打开 修复移动控制台 的任务/ }));
     expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Workbench/ }));
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '任务工作台' }));
     expect(await screen.findByRole('heading', { name: /任务收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复登录页移动端布局/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '新建任务' })).toHaveAttribute('aria-label', '新建任务');
 
-    fireEvent.click(screen.getByRole('button', { name: /Session/ }));
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '会话' }));
     expect(await screen.findByRole('heading', { name: /会话收件箱/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /修复移动控制台/ })).toBeInTheDocument();
+  });
+
+  it('uses one explained mobile workspace menu instead of three crowded mode tabs', async () => {
+    render(<App />);
+
+    const trigger = await screen.findByRole('button', { name: '切换工作区' });
+    expect(trigger).toHaveTextContent('会话');
+
+    fireEvent.click(trigger);
+    expect(screen.getByText('查看和控制 Agent 会话')).toBeInTheDocument();
+    expect(screen.getByText('按状态总览所有 Agent')).toBeInTheDocument();
+    expect(screen.getByText('下发、验收和返工结构化任务')).toBeInTheDocument();
+
+    const menu = screen.getByRole('menu');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /运行总览/ }));
+    expect(await screen.findByRole('heading', { name: /所有 Agent，一眼看清/ })).toBeInTheDocument();
+    expect(screen.queryByText('查看和控制 Agent 会话')).not.toBeInTheDocument();
   });
 
   it('opens a Workbench task as a dedicated mobile detail view and returns to the task list', async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    const desktopModeSwitch = await screen.findByRole('group', { name: 'AgentHub mode' });
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '任务工作台' }));
     const workbench = await screen.findByRole('region', { name: 'Agent Workbench' });
     expect(workbench).not.toHaveClass('mobile-task-detail-open');
 
@@ -1168,7 +1187,8 @@ describe('AgentHub console', () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /Workbench/ }));
+    const desktopModeSwitch = await screen.findByRole('group', { name: 'AgentHub mode' });
+    fireEvent.click(within(desktopModeSwitch).getByRole('button', { name: '任务工作台' }));
     fireEvent.click(await screen.findByRole('button', { name: /新建任务/ }));
     const composer = await screen.findByRole('dialog', { name: '新建任务' });
     expect(within(composer).getByLabelText('目标节点')).toHaveValue('win-main');
@@ -4652,15 +4672,17 @@ describe('AgentHub console', () => {
     fireEvent.change(within(mePane).getAllByRole('combobox', { name: '界面语言' })[0], { target: { value: 'en-US' } });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Me' })).toBeInTheDocument();
+      const mobileNavigation = screen.getByRole('navigation', { name: 'Mobile navigation' });
+      expect(within(mobileNavigation).getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
+      expect(within(mobileNavigation).getByRole('button', { name: 'Me' })).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Workers' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Device & Updates' })).toBeInTheDocument();
     await waitFor(() => expect(localStorage.getItem('agenthub.locale')).toBe('en-US'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+    const mobileNavigation = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    fireEvent.click(within(mobileNavigation).getByRole('button', { name: 'Sessions' }));
     expect(await screen.findByText('Inbox')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search sessions, projects, or content')).toBeInTheDocument();
@@ -4680,8 +4702,9 @@ describe('AgentHub console', () => {
     fireEvent.change(within(englishMePane).getAllByRole('combobox', { name: 'Language' })[0], { target: { value: 'zh-TW' } });
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '會話' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '我的' })).toBeInTheDocument();
+      const localizedNavigation = screen.getByRole('navigation', { name: 'Mobile navigation' });
+      expect(within(localizedNavigation).getByRole('button', { name: '會話' })).toBeInTheDocument();
+      expect(within(localizedNavigation).getByRole('button', { name: '我的' })).toBeInTheDocument();
     });
     expect(await screen.findByRole('heading', { name: '設備與更新' })).toBeInTheDocument();
     expect(within(await screen.findByLabelText('我的')).getAllByRole('combobox', { name: '界面語言' })[0]).toHaveValue(

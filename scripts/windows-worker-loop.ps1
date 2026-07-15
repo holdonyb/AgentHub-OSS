@@ -67,6 +67,29 @@ if (!(Test-Path $envPath)) {
 
 . $envPath
 
+function Merge-WorkerPath {
+    $pathEntries = @(
+        @($env:Path -split ';')
+        @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';')
+        @([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
+    )
+    $seen = @{}
+    $merged = foreach ($entry in $pathEntries) {
+        $trimmed = [Environment]::ExpandEnvironmentVariables(([string]$entry).Trim()).TrimEnd('\')
+        if (!$trimmed) {
+            continue
+        }
+        $key = $trimmed.ToLowerInvariant()
+        if (!$seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $trimmed
+        }
+    }
+    $env:Path = $merged -join ';'
+}
+
+Merge-WorkerPath
+
 $env:PYTHONPATH = @(
     (Join-Path $repoRoot "workers/shared"),
     (Join-Path $repoRoot "workers/local-windows"),

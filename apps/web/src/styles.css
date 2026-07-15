@@ -567,6 +567,7 @@ textarea:disabled {
 
 .mobile-only,
 .mobile-worker-signal,
+.mobile-mode-menu,
 .mobile-nav {
   display: none;
 }
@@ -4948,7 +4949,7 @@ textarea:disabled {
 
   .topbar {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) auto auto;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
     gap: 6px;
     height: var(--mobile-topbar-height);
     padding: 0 max(10px, env(safe-area-inset-right, 0px)) 0 max(10px, env(safe-area-inset-left, 0px));
@@ -4976,18 +4977,7 @@ textarea:disabled {
   }
 
   .mobile-worker-signal {
-    display: inline-flex;
-    justify-self: center;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    color: #d7dde3;
-    font-size: 12px;
-    font-weight: 800;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    display: none;
   }
 
   .topbar-actions {
@@ -4997,12 +4987,7 @@ textarea:disabled {
   }
 
   .app-mode-switch {
-    justify-self: end;
-    gap: 2px;
-    padding: 2px;
-    max-width: min(46vw, 190px);
-    overflow-x: auto;
-    scrollbar-width: none;
+    display: none;
   }
 
   .app-mode-switch::-webkit-scrollbar {
@@ -5014,6 +4999,106 @@ textarea:disabled {
     min-height: 30px;
     padding: 0 8px;
     font-size: 12px;
+  }
+
+  .mobile-mode-menu {
+    position: relative;
+    display: block;
+    justify-self: center;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .mobile-mode-trigger {
+    width: auto;
+    max-width: 100%;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    overflow: hidden;
+    border: 1px solid rgba(91, 141, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    padding: 0 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .mobile-mode-trigger span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-mode-popover {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + var(--mobile-topbar-height) + 8px);
+    left: 50%;
+    z-index: 1200;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    display: grid;
+    gap: 5px;
+    transform: translateX(-50%);
+    border: 1px solid var(--ah-border);
+    border-radius: 8px;
+    background: var(--ah-surface);
+    box-shadow: 0 18px 48px rgba(2, 8, 20, 0.34);
+    padding: 8px;
+  }
+
+  .mobile-mode-popover > button {
+    width: 100%;
+    min-height: 58px;
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) 20px;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ah-text);
+    padding: 8px 10px;
+    text-align: left;
+  }
+
+  .mobile-mode-popover > button.selected {
+    border-color: color-mix(in srgb, var(--ah-accent) 42%, transparent);
+    background: color-mix(in srgb, var(--ah-accent) 13%, var(--ah-surface));
+    color: var(--ah-accent);
+  }
+
+  .mobile-mode-popover > button > span {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .mobile-mode-popover strong,
+  .mobile-mode-popover small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-mode-popover small {
+    color: var(--ah-text-muted);
+    font-size: 11px;
+  }
+
+  .mobile-mode-worker-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border-top: 1px solid var(--ah-border-soft);
+    color: var(--ah-text-muted);
+    padding: 9px 10px 3px;
+    font-size: 11px;
+    font-weight: 700;
   }
 
   .runtime-cockpit {
@@ -6028,6 +6113,18 @@ textarea:disabled {
 
   .app-shell.theme-light .mobile-worker-signal {
     color: #475569;
+  }
+
+  .app-shell.theme-light .mobile-mode-trigger {
+    border-color: #d7dde3;
+    background: #ffffff;
+    color: #1f2937;
+  }
+
+  .app-shell.theme-light .reply-mode-tabs button.selected {
+    border-color: #1269d3;
+    background: #1269d3;
+    color: #ffffff;
   }
 
   .app-shell.theme-light .workspace,

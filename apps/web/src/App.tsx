@@ -3178,6 +3178,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [csrfToken, setCsrfToken] = useState('');
   const [appMode, setAppMode] = useState<AppMode>(() => initialAppMode());
+  const [mobileModeMenuOpen, setMobileModeMenuOpen] = useState(false);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -4412,6 +4413,7 @@ function App() {
     } catch {
       // Ignore storage failures in constrained webviews.
     }
+    setMobileModeMenuOpen(false);
   }, [appMode]);
 
   useEffect(() => {
@@ -6694,6 +6696,80 @@ function App() {
           <span className="status-dot status-good" />
           {t(locale, 'workerSignal', { online: onlineWorkers, total: workers.length })}
         </div>
+        <div className="mobile-mode-menu">
+          <button
+            className="mobile-mode-trigger"
+            type="button"
+            aria-label={pickLocale(locale, '切换工作区', 'Switch workspace')}
+            aria-expanded={mobileModeMenuOpen}
+            onClick={() => setMobileModeMenuOpen((current) => !current)}
+          >
+            <span>
+              {appMode === 'session'
+                ? pickLocale(locale, '会话', 'Sessions')
+                : appMode === 'cockpit'
+                  ? pickLocale(locale, '运行总览', 'Runtime')
+                  : pickLocale(locale, '任务工作台', 'Tasks')}
+            </span>
+            <ChevronDown size={15} />
+          </button>
+          {mobileModeMenuOpen ? (
+            <div className="mobile-mode-popover" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className={appMode === 'session' ? 'selected' : ''}
+                onClick={() => {
+                  setAppMode('session');
+                  setMobileModeMenuOpen(false);
+                }}
+              >
+                <MessageCircle size={19} />
+                <span>
+                  <strong>{pickLocale(locale, '会话', 'Sessions')}</strong>
+                  <small>{pickLocale(locale, '查看和控制 Agent 会话', 'View and control agent sessions')}</small>
+                </span>
+                {appMode === 'session' ? <Check size={17} /> : null}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={appMode === 'cockpit' ? 'selected' : ''}
+                onClick={() => {
+                  setAppMode('cockpit');
+                  setMobileModeMenuOpen(false);
+                }}
+              >
+                <Activity size={19} />
+                <span>
+                  <strong>{pickLocale(locale, '运行总览', 'Runtime overview')}</strong>
+                  <small>{pickLocale(locale, '按状态总览所有 Agent', 'See every agent grouped by state')}</small>
+                </span>
+                {appMode === 'cockpit' ? <Check size={17} /> : null}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className={appMode === 'workbench' ? 'selected' : ''}
+                onClick={() => {
+                  setAppMode('workbench');
+                  setMobileModeMenuOpen(false);
+                }}
+              >
+                <FileText size={19} />
+                <span>
+                  <strong>{pickLocale(locale, '任务工作台', 'Task workbench')}</strong>
+                  <small>{pickLocale(locale, '下发、验收和返工结构化任务', 'Dispatch, review, and rework structured tasks')}</small>
+                </span>
+                {appMode === 'workbench' ? <Check size={17} /> : null}
+              </button>
+              <div className="mobile-mode-worker-status">
+                <span className="status-dot status-good" />
+                {t(locale, 'workerSignal', { online: onlineWorkers, total: workers.length })}
+              </div>
+            </div>
+          ) : null}
+        </div>
         <div className="app-mode-switch" role="group" aria-label="AgentHub mode">
           <button
             type="button"
@@ -6701,7 +6777,7 @@ function App() {
             aria-pressed={appMode === 'cockpit'}
             onClick={() => setAppMode('cockpit')}
           >
-            Cockpit
+            {pickLocale(locale, '运行总览', 'Runtime')}
           </button>
           <button
             type="button"
@@ -6709,7 +6785,7 @@ function App() {
             aria-pressed={appMode === 'workbench'}
             onClick={() => setAppMode('workbench')}
           >
-            Workbench
+            {pickLocale(locale, '任务工作台', 'Workbench')}
           </button>
           <button
             type="button"
@@ -6717,7 +6793,7 @@ function App() {
             aria-pressed={appMode === 'session'}
             onClick={() => setAppMode('session')}
           >
-            Session
+            {pickLocale(locale, '会话', 'Sessions')}
           </button>
         </div>
         <div className="topbar-actions">

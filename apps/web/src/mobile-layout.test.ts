@@ -109,7 +109,9 @@ describe('mobile WebView layout guardrails', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
 
-    expect(mobileBlock).toMatch(/\.app-mode-switch\s*{[^}]*overflow-x:\s*auto/s);
+    expect(mobileBlock).toMatch(/\.app-mode-switch\s*{[^}]*display:\s*none/s);
+    expect(mobileBlock).toMatch(/\.mobile-mode-menu\s*{[^}]*display:\s*block/s);
+    expect(mobileBlock).toMatch(/\.mobile-mode-popover\s*{[^}]*position:\s*fixed[^}]*max-width:\s*calc\(100vw - 24px\)/s);
     expect(mobileBlock).toMatch(/\.runtime-cockpit\s*{[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
     expect(mobileBlock).toMatch(/\.runtime-cockpit-filters\s*{[^}]*overflow-x:\s*auto/s);
     expect(mobileBlock).toMatch(/\.runtime-cockpit-row-main\s*{[^}]*min-height:\s*72px/s);
