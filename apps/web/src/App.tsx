@@ -56,6 +56,7 @@ import type {
   ConnectionMode,
   Event,
   Job,
+  NotificationRecord,
   ProviderSnapshot,
   Role,
   Schedule,
@@ -361,6 +362,7 @@ interface NotificationInboxItem {
   createdAt?: string | null;
   sessionId?: string | null;
   permissionId?: string | null;
+  serverStatus?: NotificationRecord['status'];
 }
 
 interface MobileHistoryState {
@@ -2899,6 +2901,53 @@ function timelineLabel(item: AgentTimelineItem) {
   return '系统事件';
 }
 
+function notificationItemsFromRecords(records: NotificationRecord[] = []): NotificationInboxItem[] {
+  return records
+    .filter((record) => !['dismissed', 'superseded'].includes(record.status))
+    .map((record) => ({
+      id: record.notification_id,
+      title: record.title,
+      body: record.body,
+      createdAt: record.created_at,
+      sessionId: record.session_id,
+      permissionId: record.source_type === 'permission' ? record.source_id : null,
+      serverStatus: record.status,
+    }))
+    .sort((left, right) => {
+      const leftTime = parseApiDate(left.createdAt)?.getTime() ?? 0;
+      const rightTime = parseApiDate(right.createdAt)?.getTime() ?? 0;
+      return rightTime - leftTime;
+    });
+}
+
+export function mergeRevisionedSession(current: AgentSession, incoming: AgentSession): AgentSession {
+  const merged = { ...current, ...incoming };
+  const currentExecutionRevision = current.execution_status_seq;
+  const incomingExecutionRevision = incoming.execution_status_seq;
+  if (
+    currentExecutionRevision !== undefined &&
+    (incomingExecutionRevision === undefined || incomingExecutionRevision < currentExecutionRevision)
+  ) {
+    merged.status = current.status;
+    merged.execution_status = current.execution_status;
+    merged.execution_status_source = current.execution_status_source;
+    merged.execution_status_seq = current.execution_status_seq;
+    merged.execution_status_observed_at = current.execution_status_observed_at;
+  }
+  const currentAttentionRevision = current.attention_revision;
+  const incomingAttentionRevision = incoming.attention_revision;
+  if (
+    currentAttentionRevision !== undefined &&
+    (incomingAttentionRevision === undefined || incomingAttentionRevision < currentAttentionRevision)
+  ) {
+    merged.attention_status = current.attention_status;
+    merged.attention_reason = current.attention_reason;
+    merged.attention_revision = current.attention_revision;
+    merged.attention_changed_at = current.attention_changed_at;
+  }
+  return merged;
+}
+
 function WorkbenchShell({
   tasks,
   selectedTaskId,
@@ -3192,6 +3241,7 @@ function App() {
   });
   const [notificationInboxOpen, setNotificationInboxOpen] = useState(false);
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(() => readStoredNotificationIds());
+  const [serverNotifications, setServerNotifications] = useState<NotificationRecord[] | null>(null);
   const [dismissedPermissionToastIds, setDismissedPermissionToastIds] = useState<Set<string>>(() => new Set());
   const [focusedPermissionId, setFocusedPermissionId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
@@ -3215,6 +3265,7 @@ function App() {
   const selectedIdRef = useRef<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<AgentSession[]>([]);
+  const attentionSeenRequestsRef = useRef<Set<string>>(new Set());
   const timelineBySessionRef = useRef<Record<string, AgentTimelineItem[]>>({});
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
@@ -3226,6 +3277,7 @@ function App() {
   const mobileHistoryDepthRef = useRef(0);
   const timelineLoadingRef = useRef<Set<string>>(new Set());
   const deliveredNotificationIdsRef = useRef<Set<string>>(readStoredDeliveredNotificationIds());
+  const claimingServerNotificationIdsRef = useRef<Set<string>>(new Set());
   const needsReplyNotificationsPrimed = useRef(false);
   const replyAttachmentsRef = useRef<ReplyAttachment[]>([]);
   const replyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3420,8 +3472,20 @@ function App() {
     () => mergeTimelineItems(selectedTimeline, jobTimelineItems(selectedSession, selectedJobs, selectedTimeline)),
     [selectedSession, selectedJobs, selectedTimeline],
   );
-  const notificationItems = useMemo(() => notificationItemsFromState(permissions, jobs), [permissions, jobs]);
-  const unreadNotificationCount = notificationItems.filter((item) => !readNotificationIds.has(item.id)).length;
+  const notificationItems = useMemo(
+    () => serverNotifications === null
+      ? notificationItemsFromState(permissions, jobs)
+      : notificationItemsFromRecords(serverNotifications),
+    [jobs, permissions, serverNotifications],
+  );
+  const effectiveReadNotificationIds = useMemo(() => {
+    const next = new Set(readNotificationIds);
+    serverNotifications?.forEach((notification) => {
+      if (!['pending', 'delivered'].includes(notification.status)) next.add(notification.notification_id);
+    });
+    return next;
+  }, [readNotificationIds, serverNotifications]);
+  const unreadNotificationCount = notificationItems.filter((item) => !effectiveReadNotificationIds.has(item.id)).length;
   const compactTimeline = useMemo(
     () => usefulTimelineItems(sortTimelineItemsByCreatedAt(selectedTimelineWithJobs)),
     [selectedTimelineWithJobs],
@@ -3790,6 +3854,81 @@ function App() {
     }
   }
 
+  function patchServerNotification(nextNotification: NotificationRecord) {
+    setServerNotifications((current) =>
+      current?.map((notification) =>
+        notification.notification_id === nextNotification.notification_id ? nextNotification : notification,
+      ) ?? current,
+    );
+  }
+
+  async function notifyServerLedgerRecord(notification: NotificationRecord) {
+    const count = serverNotifications?.filter((item) => ['pending', 'delivered'].includes(item.status)).length ?? 1;
+    setNotice(notification.notification_type === 'approval'
+      ? `${count} 个审批待处理：${compactText(notification.title, 64)}`
+      : notification.title);
+    document.title = `(${Math.max(1, count)}) AgentHub`;
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate([120, 60, 120]);
+    }
+    const nativeResult = await notifyNativeStatus({
+      id: notification.notification_id,
+      ...(notification.session_id ? { sessionId: notification.session_id } : {}),
+      title: notification.title,
+      body: notification.body,
+    });
+    if (nativeResult === 'scheduled') return;
+    if (nativeResult === 'permission-denied') {
+      setNotice(`${notification.title}。安卓通知未授权，请点铃铛开启`);
+      return;
+    }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try {
+        new Notification(notification.title, {
+          body: notification.body,
+          tag: notification.notification_id,
+        });
+      } catch {
+        // Some Android WebViews expose Notification but reject construction.
+      }
+    }
+  }
+
+  async function claimServerNotification(notification: NotificationRecord) {
+    if (!csrfToken || claimingServerNotificationIdsRef.current.has(notification.notification_id)) return;
+    claimingServerNotificationIdsRef.current.add(notification.notification_id);
+    try {
+      const response = await apiPost<{ claimed: boolean; notification: NotificationRecord }>(
+        `/api/notifications/${notification.notification_id}/delivered`,
+        {},
+        csrfToken,
+      );
+      patchServerNotification(response.notification);
+      if (response.claimed) await notifyServerLedgerRecord(response.notification);
+    } finally {
+      claimingServerNotificationIdsRef.current.delete(notification.notification_id);
+    }
+  }
+
+  async function loadNotificationLedger() {
+    try {
+      const payload = await apiGet<{ items?: NotificationRecord[] }>('/api/notifications');
+      if (!Array.isArray(payload.items)) {
+        setServerNotifications(null);
+        return null;
+      }
+      setServerNotifications(payload.items);
+      return payload.items;
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) {
+        setServerNotifications(null);
+        return null;
+      }
+      setServerNotifications((current) => current ?? []);
+      return [];
+    }
+  }
+
   async function loadTimelineForSession(sessionId: string, options: { force?: boolean } = {}) {
     if (!options.force && timelineBySessionRef.current[sessionId]) return;
     if (!options.force && timelineLoadingRef.current.has(sessionId)) return;
@@ -3856,7 +3995,10 @@ function App() {
   function mergeSessionList(current: AgentSession[], incoming: AgentSession[], removedSessionIds: string[]) {
     const next = new Map(current.map((session) => [session.session_id, session]));
     removedSessionIds.forEach((sessionId) => next.delete(sessionId));
-    incoming.forEach((session) => next.set(session.session_id, session));
+    incoming.forEach((session) => {
+      const existing = next.get(session.session_id);
+      next.set(session.session_id, existing ? mergeRevisionedSession(existing, session) : session);
+    });
     return Array.from(next.values());
   }
 
@@ -3952,7 +4094,7 @@ function App() {
     inboxCursorRef.current[archiveView] = payload.cursor;
     if (payload.items.length === 0 && payload.removed_session_ids.length === 0) return payload;
     const merged = mergeSessionList(sessionsRef.current, payload.items, payload.removed_session_ids);
-    if (archiveView === 'active') {
+    if (archiveView === 'active' && serverNotifications === null) {
       alertNewNeedsReplySessions(merged, permissions);
     }
     setSessions((current) => {
@@ -3972,7 +4114,7 @@ function App() {
     if (payload.items.length === 0) return;
     setPermissions((current) => {
       const next = mergePermissions(current, payload.items);
-      alertNewPendingPermissions(next);
+      if (serverNotifications === null) alertNewPendingPermissions(next);
       return next;
     });
   }
@@ -4167,13 +4309,14 @@ function App() {
     options: { background?: boolean } = {},
   ) {
     const sessionsPath = archiveView === 'archived' ? '/api/sessions?archived=true' : '/api/sessions';
-    const [sessionPayload, workerPayload, jobPayload, schedulePayload, providerPayload, permissionPayload] = await Promise.all([
+    const [sessionPayload, workerPayload, jobPayload, schedulePayload, providerPayload, permissionPayload, notificationPayload] = await Promise.all([
       apiGet<{ items: AgentSession[] }>(sessionsPath),
       apiGet<{ items: Worker[] }>('/api/workers'),
       apiGet<{ items: Job[] }>('/api/jobs'),
       apiGet<{ items: Schedule[] }>('/api/schedules'),
       apiGet<{ items: ProviderSnapshot[] }>('/api/providers'),
       apiGet<{ items: AgentPermission[] }>('/api/permissions'),
+      loadNotificationLedger(),
     ]);
     const secretItems = options.background ? secrets : await loadSecretItems(nextUser);
     const activeSelectedId = selectedIdRef.current;
@@ -4195,9 +4338,11 @@ function App() {
     setProviders(providerPayload.items);
     setPermissions(permissionPayload.items);
     setSecrets(secretItems);
-    alertNewPendingPermissions(permissionPayload.items);
-    if (archiveView === 'active') {
-      alertNewNeedsReplySessions(sessionPayload.items, permissionPayload.items);
+    if (notificationPayload === null) {
+      alertNewPendingPermissions(permissionPayload.items);
+      if (archiveView === 'active') {
+        alertNewNeedsReplySessions(sessionPayload.items, permissionPayload.items);
+      }
     }
     inboxCursorRef.current[archiveView] = inboxCursorForSessions(sessionPayload.items);
     permissionCursorRef.current = permissionCursorForItems(permissionPayload.items);
@@ -4487,6 +4632,13 @@ function App() {
   }, [loadState]);
 
   useEffect(() => {
+    if (loadState !== 'ready' || serverNotifications === null || !csrfToken) return;
+    serverNotifications
+      .filter((notification) => notification.status === 'pending')
+      .forEach((notification) => void claimServerNotification(notification).catch(() => undefined));
+  }, [csrfToken, loadState, serverNotifications]);
+
+  useEffect(() => {
     if (loadState !== 'ready') return;
     void loadEvents().catch(() => undefined);
   }, [loadState]);
@@ -4507,6 +4659,7 @@ function App() {
             : null;
         const inboxDelta = await loadInboxDelta(sessionArchiveView);
         await loadPermissionDelta();
+        await loadNotificationLedger();
         if (selectedSessionId) {
           const timelineBeforeDelta = timelineBySessionRef.current[selectedSessionId] ?? [];
           const sessionDelta = await loadSessionDelta(selectedSessionId);
@@ -5100,15 +5253,39 @@ function App() {
 
   function handleMarkAllNotificationsRead() {
     markNotificationIdsRead(notificationItems.map((item) => item.id));
+    if (serverNotifications !== null) {
+      setServerNotifications((current) => current?.map((notification) =>
+        ['pending', 'delivered'].includes(notification.status)
+          ? { ...notification, status: 'read' as const, read_at: new Date().toISOString() }
+          : notification,
+      ) ?? current);
+      void apiPost('/api/notifications/read-all', {}, csrfToken).catch(() => {
+        void loadNotificationLedger().catch(() => undefined);
+      });
+    }
   }
 
   function handleOpenNotificationItem(item: NotificationInboxItem) {
     markNotificationIdsRead([item.id]);
+    if (serverNotifications !== null) {
+      void apiPost<{ notification: NotificationRecord }>(
+        `/api/notifications/${item.id}/read`,
+        {},
+        csrfToken,
+      )
+        .then((response) => patchServerNotification(response.notification))
+        .catch(() => undefined);
+      if (item.sessionId) {
+        markSessionAttentionSeen(item.sessionId, true);
+      }
+    }
     closeNotificationInbox();
     if (item.permissionId) {
       const permission = pendingPermissions.find((candidate) => candidate.permission_id === item.permissionId) ?? null;
-      handleOpenPendingPermission(permission);
-      return;
+      if (permission) {
+        handleOpenPendingPermission(permission);
+        return;
+      }
     }
     if (item.sessionId) {
       openSession(item.sessionId, 'thread');
@@ -5147,8 +5324,24 @@ function App() {
     shouldScrollTranscriptToBottomRef.current = true;
     preserveTranscriptScrollRef.current = null;
     setIsTranscriptScrolled(false);
+    markSessionAttentionSeen(sessionId);
     navigateMobilePane(pane, sessionId);
     void loadTimelineForSession(sessionId, { force: true }).catch(() => setNotice('会话详情同步失败，稍后会自动重试'));
+  }
+
+  function markSessionAttentionSeen(sessionId: string, force = false) {
+    if (attentionSeenRequestsRef.current.has(sessionId)) return;
+    const session = sessionsRef.current.find((candidate) => candidate.session_id === sessionId);
+    if (!force && session?.attention_status !== 'unseen') return;
+    attentionSeenRequestsRef.current.add(sessionId);
+    void apiPost<{ session: AgentSession }>(
+      `/api/sessions/${sessionId}/attention/seen`,
+      {},
+      csrfToken,
+    )
+      .then((response) => patchSession(response.session))
+      .catch(() => undefined)
+      .finally(() => attentionSeenRequestsRef.current.delete(sessionId));
   }
 
   async function handleTopbarBellClick() {
@@ -6573,7 +6766,7 @@ function App() {
       {notificationInboxOpen && (
         <NotificationInbox
           items={notificationItems}
-          readIds={readNotificationIds}
+          readIds={effectiveReadNotificationIds}
           locale={locale}
           onOpenItem={handleOpenNotificationItem}
           onMarkAllRead={handleMarkAllNotificationsRead}

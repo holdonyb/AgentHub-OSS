@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role, require_worker
 from app.core.json import dumps_json, loads_json
+from app.core.notifications import acknowledge_source_notifications
+from app.core.session_state import set_session_status
 from app.models import AgentPermission, AgentSession, Job, utcnow
 from app.routers.internal import _assert_worker_binding, _touch_session_activity
 from app.schemas import PermissionRequestedIn, PermissionResolvedIn, PermissionRespondIn
@@ -162,7 +164,7 @@ def _enqueue_permission_answer_job(
     db.add(job)
     db.flush()
     if session.status != "running":
-        session.status = "queued"
+        set_session_status(session, "queued", source="permission")
     _touch_session_activity(
         session,
         message=prompt,
@@ -217,6 +219,12 @@ def respond_permission(
     permission.status = ACTION_STATUS[payload.action]
     permission.response_json = dumps_json({"action": payload.action, "response": payload.response})
     permission.resolved_at = utcnow()
+    acknowledge_source_notifications(
+        db,
+        space_id=actor.space_id,
+        source_type="permission",
+        source_id=permission.permission_id,
+    )
     session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == permission.session_id).one_or_none()
     continuation_job = None
     native_turn_permission = _is_native_turn_permission(permission)
@@ -239,7 +247,11 @@ def respond_permission(
             > 0
         )
         if continuation_job is None and not has_pending and session.status == "needs_reply":
-            session.status = "running" if native_turn_permission and _session_has_running_job(db, session.session_id) else "ready"
+            set_session_status(
+                session,
+                "running" if native_turn_permission and _session_has_running_job(db, session.session_id) else "ready",
+                source="permission",
+            )
             _touch_session_activity(session, summary=session.activity_summary)
     write_event(
         db,
@@ -325,7 +337,7 @@ def request_permission(
     permission.status = "pending"
     permission.response_json = dumps_json({})
     permission.resolved_at = None
-    session.status = "needs_reply"
+    set_session_status(session, "needs_reply", source="permission")
     _touch_session_activity(
         session,
         message=permission.description or permission.title or session.last_message,
@@ -365,6 +377,34 @@ def resolve_permission_from_worker(
     permission.status = payload.status
     permission.response_json = dumps_json(payload.response)
     permission.resolved_at = utcnow()
+    acknowledge_source_notifications(
+        db,
+        space_id=worker.space_id,
+        source_type="permission",
+        source_id=permission.permission_id,
+    )
+    session = (
+        db.query(AgentSession)
+        .filter(
+            AgentSession.space_id == worker.space_id,
+            AgentSession.session_id == permission.session_id,
+        )
+        .one_or_none()
+    )
+    has_other_pending = (
+        db.query(AgentPermission.id)
+        .filter(
+            AgentPermission.space_id == worker.space_id,
+            AgentPermission.session_id == permission.session_id,
+            AgentPermission.permission_id != permission.permission_id,
+            AgentPermission.status == "pending",
+        )
+        .first()
+        is not None
+    )
+    if session is not None and session.status == "needs_reply" and not has_other_pending:
+        set_session_status(session, "running", source="permission")
+        _touch_session_activity(session, summary=session.activity_summary)
     write_event(
         db,
         space_id=worker.space_id,

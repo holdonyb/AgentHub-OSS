@@ -14,6 +14,27 @@ AgentHub is a public, self-hosted control plane and workbench for Codex, Claude,
 
 The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves from a structured brief through worker dispatch, attempts, artifacts, review, approval, or rework without replacing the existing interactive session console.
 
+## Unreleased
+
+The runtime-attention notification work is implemented on `feature/runtime-attention-notifications` and is not deployed yet.
+
+- Sessions expose revisioned execution state separately from user-attention state, so stale discovery or sync responses cannot overwrite newer worker transitions.
+- The API owns a per-user notification ledger with pending, delivered, read, acknowledged, and dismissed lifecycle states.
+- Permission resolution and terminal job outcomes acknowledge their matching notifications instead of leaving historical alerts active.
+- Web and compatibility Android clients claim delivery through the server ledger before showing an alert, preventing repeat notifications across refreshes and app restarts.
+- Opening an unseen session from either the notification inbox or session list marks its attention state as seen through an idempotent API transition.
+- Older servers remain supported: Web and Android fall back to the legacy notification projection only when the notification ledger endpoint is unavailable.
+
+Fresh feature-branch verification on `2026-07-15`:
+
+- API: `381 passed, 4 skipped`
+- Web: `201 passed`; production build passed
+- Compatibility Android: `16 passed`; JDK 21 debug APK compile passed
+- React Native: `83 passed`; TypeScript typecheck passed
+- Desktop: `34 passed`
+- Alembic: production-representative `0005 -> 0006` SQLite upgrade smoke passed with legacy session projection preserved
+- `git diff --check`: passed
+
 ## Implemented Surface
 
 - FastAPI task APIs, lifecycle projection, attempt recovery, artifacts, review, approval, and rework

@@ -59,6 +59,14 @@ export interface AgentSession {
   mode: string;
   runtime_session_ref: string;
   status: 'ready' | 'queued' | 'running' | 'needs_reply' | 'failed' | 'terminated';
+  execution_status?: 'unknown' | 'idle' | 'queued' | 'running' | 'waiting_input' | 'failed' | 'terminated';
+  execution_status_source?: string;
+  execution_status_seq?: number;
+  execution_status_observed_at?: string | null;
+  attention_status?: 'none' | 'unseen' | 'seen';
+  attention_reason?: '' | 'completion' | 'approval' | 'failure';
+  attention_revision?: number;
+  attention_changed_at?: string | null;
   title: string;
   display_title: string;
   custom_title: string | null;
@@ -103,6 +111,24 @@ export interface AgentPermission {
   response: Record<string, unknown>;
   created_at: string;
   resolved_at: string | null;
+}
+
+export interface NotificationRecord {
+  notification_id: string;
+  notification_type: 'approval' | 'completion' | 'failure' | string;
+  source_type: string;
+  source_id: string;
+  session_id: string | null;
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'error' | string;
+  status: 'pending' | 'delivered' | 'read' | 'acknowledged' | 'dismissed' | 'superseded';
+  created_at: string;
+  updated_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  acknowledged_at: string | null;
+  dismissed_at: string | null;
 }
 
 export interface ProviderSnapshot {

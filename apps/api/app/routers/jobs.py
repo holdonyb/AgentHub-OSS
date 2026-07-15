@@ -7,6 +7,7 @@ from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role
 from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json
+from app.core.session_state import set_session_status
 from app.models import AgentPermission, AgentSession, Job, utcnow
 from app.schemas import JobCreateIn
 from app.services import ALLOWED_JOB_KINDS, job_out, job_summary_out
@@ -138,7 +139,11 @@ def cancel_job(job_id: str, db: DbSession, actor: Actor = Depends(require_min_ro
             .one_or_none()
         )
         if session:
-            session.status = _session_status_after_job_cancel(db, session)
+            set_session_status(
+                session,
+                _session_status_after_job_cancel(db, session),
+                source="job",
+            )
             session.updated_at = now
     write_event(
         db,

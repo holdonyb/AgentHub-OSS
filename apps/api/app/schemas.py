@@ -289,6 +289,14 @@ class SessionOut(BaseModel):
     mode: str
     runtime_session_ref: str
     status: str
+    execution_status: str
+    execution_status_source: str
+    execution_status_seq: int
+    execution_status_observed_at: datetime | None
+    attention_status: str
+    attention_reason: str
+    attention_revision: int
+    attention_changed_at: datetime | None
     title: str
     display_title: str
     custom_title: str | None
@@ -474,6 +482,33 @@ class AgentTaskOut(BaseModel):
     due_at: datetime | None
     archived_at: datetime | None
     metadata: dict[str, Any]
+
+
+class NotificationOut(BaseModel):
+    notification_id: str
+    notification_type: str
+    source_type: str
+    source_id: str
+    session_id: str | None
+    title: str
+    body: str
+    severity: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    delivered_at: datetime | None
+    read_at: datetime | None
+    acknowledged_at: datetime | None
+    dismissed_at: datetime | None
+
+
+class NotificationListOut(BaseModel):
+    items: list[NotificationOut]
+
+
+class NotificationTransitionOut(BaseModel):
+    notification: NotificationOut
+    claimed: bool = False
 
 
 class AgentTaskExecutionOut(BaseModel):

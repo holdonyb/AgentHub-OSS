@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import App, { mergeTimelineItems, parseApiDate } from './App';
+import type { AgentSession } from '@agenthub/protocol';
+import App, { mergeRevisionedSession, mergeTimelineItems, parseApiDate } from './App';
 import type { MessageRenderKind } from './messageRenderPreview';
 
 const capacitorApp = vi.hoisted(() => ({
@@ -63,6 +64,39 @@ const sessionPayload = {
     },
   ],
 };
+
+it('keeps newer execution and attention revisions when a stale sync response arrives', () => {
+  const current: AgentSession = {
+    ...sessionPayload.items[0],
+    status: 'needs_reply',
+    execution_status: 'running' as const,
+    execution_status_seq: 9,
+    attention_status: 'unseen' as const,
+    attention_reason: 'approval' as const,
+    attention_revision: 7,
+    heuristic_title: '修复移动控制台',
+    llm_title: null,
+    archived_at: null,
+  };
+  const stale = {
+    ...current,
+    display_title: '服务器更新后的标题',
+    execution_status: 'idle' as const,
+    execution_status_seq: 8,
+    attention_status: 'none' as const,
+    attention_reason: '' as const,
+    attention_revision: 6,
+  };
+
+  const merged = mergeRevisionedSession(current, stale);
+
+  expect(merged.display_title).toBe('服务器更新后的标题');
+  expect(merged.execution_status).toBe('running');
+  expect(merged.execution_status_seq).toBe(9);
+  expect(merged.attention_status).toBe('unseen');
+  expect(merged.attention_reason).toBe('approval');
+  expect(merged.attention_revision).toBe(7);
+});
 
 const taskPayload = {
   items: [
@@ -974,6 +1008,58 @@ describe('AgentHub console', () => {
       );
     });
     expect(within(screen.getByLabelText('Transcript')).getByText('继续执行')).toBeInTheDocument();
+  });
+
+  it('marks unseen attention as seen when a session is opened from the inbox', async () => {
+    const unseenSession = {
+      ...sessionPayload.items[0],
+      execution_status: 'waiting_input',
+      execution_status_seq: 4,
+      attention_status: 'unseen',
+      attention_reason: 'approval',
+      attention_revision: 3,
+    };
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse({ items: [unseenSession] });
+      if (url.endsWith('/api/tasks')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/notifications')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/attention/seen')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        return jsonResponse({
+          session: {
+            ...unseenSession,
+            attention_status: 'seen',
+            attention_revision: 4,
+          },
+        });
+      }
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    await screen.findByText('会话收件箱');
+    fireEvent.click(screen.getByRole('button', { name: /修复移动控制台/ }));
+
+    await waitFor(() => {
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        '/api/sessions/sess-1/attention/seen',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
   });
 
   it('switches globally between Workbench and Session modes without hiding session mode', async () => {
@@ -3965,6 +4051,75 @@ describe('AgentHub console', () => {
         title: 'AgentHub 会话等待回复',
         body: '修复移动控制台：等你回复：确认标题和摘要',
       });
+    });
+  });
+
+  it('uses the server notification ledger as the cross-device inbox authority', async () => {
+    const ledgerNotification = {
+      notification_id: 'ntf-server-1',
+      notification_type: 'approval',
+      source_type: 'permission',
+      source_id: 'perm-server-1',
+      session_id: 'sess-1',
+      title: '服务器审批通知',
+      body: '这条通知不依赖当前 permission 快照',
+      severity: 'warning',
+      status: 'pending',
+      created_at: '2026-07-14T08:00:00Z',
+      updated_at: '2026-07-14T08:00:00Z',
+      delivered_at: null,
+      read_at: null,
+      acknowledged_at: null,
+      dismissed_at: null,
+    };
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse(settingsPayload);
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/tasks')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/notifications')) return jsonResponse({ items: [ledgerNotification] });
+      if (url.endsWith('/api/notifications/ntf-server-1/delivered')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        return jsonResponse({ claimed: true, notification: { ...ledgerNotification, status: 'delivered' } });
+      }
+      if (url.endsWith('/api/notifications/ntf-server-1/read')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        return jsonResponse({ notification: { ...ledgerNotification, status: 'read' } });
+      }
+      if (url.endsWith('/api/sessions/sess-1/attention/seen')) {
+        return jsonResponse({ session: sessionPayload.items[0] });
+      }
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.includes('/api/sync/status')) return jsonResponse(syncStatusPayload);
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+    nativeNotifications.notifyNativeStatus.mockResolvedValue('scheduled');
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /1 条未读/ });
+    await waitFor(() => expect(nativeNotifications.notifyNativeStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /打开待处理通知/ }));
+    const inbox = await screen.findByRole('dialog', { name: '通知 inbox' });
+    fireEvent.click(within(inbox).getByRole('button', { name: /服务器审批通知/ }));
+
+    await waitFor(() => {
+      expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledWith(
+        '/api/notifications/ntf-server-1/read',
+        expect.objectContaining({ method: 'POST' }),
+      );
     });
   });
 

@@ -88,6 +88,65 @@ def test_ensure_compatible_columns_adds_task_attempt_number_with_default_one(tmp
     assert str(default_value).strip("'\"") == "1"
 
 
+def test_init_database_upgrades_legacy_sessions_and_adds_notification_ledger(tmp_path: Path) -> None:
+    from app.core.database import init_database
+
+    db_path = tmp_path / "legacy-runtime-attention.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path.as_posix()}", future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE agent_sessions ("
+                "session_id VARCHAR(180) PRIMARY KEY, status VARCHAR(32), "
+                "created_at DATETIME, updated_at DATETIME"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO agent_sessions (session_id, status, created_at, updated_at) "
+                "VALUES ('legacy-needs-reply', 'needs_reply', "
+                "'2026-07-01 09:00:00', '2026-07-01 10:00:00')"
+            )
+        )
+
+    init_database(engine)
+
+    session_columns = _sqlite_column_names(engine, "agent_sessions")
+    assert {
+        "execution_status",
+        "execution_status_source",
+        "execution_status_seq",
+        "execution_status_observed_at",
+        "attention_status",
+        "attention_reason",
+        "attention_revision",
+        "attention_changed_at",
+    }.issubset(session_columns)
+    with engine.connect() as conn:
+        projected = conn.execute(
+            text(
+                "SELECT session_id, status, execution_status, execution_status_seq, "
+                "execution_status_observed_at, attention_status, attention_reason, attention_revision "
+                "FROM agent_sessions WHERE session_id = 'legacy-needs-reply'"
+            )
+        ).one()
+        notification_table = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_records'")
+        ).scalar_one()
+
+    assert projected.session_id == "legacy-needs-reply"
+    assert projected.status == "needs_reply"
+    assert projected.execution_status == "waiting_input"
+    assert projected.execution_status_seq == 1
+    assert str(projected.execution_status_observed_at) == "2026-07-01 10:00:00"
+    assert projected.attention_status == "unseen"
+    assert projected.attention_reason == "approval"
+    assert projected.attention_revision == 1
+    assert notification_table == "notification_records"
+    assert "uq_notification_recipient_transition" in _sqlite_index_names(engine, "notification_records")
+
+
 def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_path: Path) -> None:
     from app.core.database import _ensure_compatible_indexes
 
