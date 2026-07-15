@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { MobileApi, NativeSessionSummary } from '../api/mobileApi';
@@ -27,16 +27,34 @@ export function SessionsScreen({
   onRequestError,
   csrfToken = '',
   canTerminate = false,
+  requestedSessionId = null,
+  onRequestedSessionHandled,
 }: {
   api: SessionsApi;
   onRequestError?(error: unknown): void;
   csrfToken?: string;
   canTerminate?: boolean;
+  requestedSessionId?: string | null;
+  onRequestedSessionHandled?(sessionId: string): void;
 }) {
   const [selectedSession, setSelectedSession] = useState<NativeSessionSummary | null>(null);
   const loadSessions = useCallback(async () => (await api.listSessions()).items, [api]);
   const resource = useAsyncResource(loadSessions, { onError: onRequestError });
   const sessions = resource.data ?? [];
+
+  useEffect(() => {
+    if (!requestedSessionId) return;
+    let active = true;
+    void api.getSession(requestedSessionId)
+      .then((payload) => {
+        if (active) setSelectedSession(payload.session);
+      })
+      .catch((error) => onRequestError?.(error))
+      .finally(() => onRequestedSessionHandled?.(requestedSessionId));
+    return () => {
+      active = false;
+    };
+  }, [api, onRequestError, onRequestedSessionHandled, requestedSessionId]);
 
   if (selectedSession) {
     return (

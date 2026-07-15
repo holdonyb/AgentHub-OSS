@@ -13,6 +13,30 @@ export interface NativeNotificationSignal {
   sessionId: string | null;
 }
 
+export interface ClaimedNativeNotification {
+  notification_id: string;
+  title: string;
+  body: string;
+  session_id: string | null;
+}
+
+export interface NativeNotificationResponseTarget {
+  notificationId: string;
+  sessionId: string | null;
+}
+
+function responseTarget(
+  response: Notifications.NotificationResponse,
+): NativeNotificationResponseTarget | null {
+  const data = response.notification.request.content.data ?? {};
+  const notificationId = typeof data.notificationId === 'string' ? data.notificationId : '';
+  if (!notificationId) return null;
+  return {
+    notificationId,
+    sessionId: typeof data.sessionId === 'string' ? data.sessionId : null,
+  };
+}
+
 interface DeliveryState {
   initialized: boolean;
   deliveredIds: string[];
@@ -99,4 +123,41 @@ export async function deliverNewNotifications(signals: NativeNotificationSignal[
   }
   await writeState([...delivered]);
   return deliveredNow;
+}
+
+export async function deliverClaimedNotification(
+  notification: ClaimedNativeNotification,
+): Promise<boolean> {
+  if (!(await Notifications.getPermissionsAsync()).granted) return false;
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: notification.title,
+      body: notification.body,
+      data: {
+        sessionId: notification.session_id,
+        notificationId: notification.notification_id,
+      },
+      sound: 'default',
+    },
+    trigger: null,
+  });
+  return true;
+}
+
+export function subscribeToNotificationResponses(
+  listener: (target: NativeNotificationResponseTarget) => void,
+): () => void {
+  const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+    const target = responseTarget(response);
+    if (target) listener(target);
+  });
+  return () => subscription.remove();
+}
+
+export async function consumeLastNotificationResponse(): Promise<NativeNotificationResponseTarget | null> {
+  const response = await Notifications.getLastNotificationResponseAsync();
+  if (!response) return null;
+  const target = responseTarget(response);
+  await Notifications.clearLastNotificationResponseAsync();
+  return target;
 }

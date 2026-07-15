@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { NavigationContainer } from '@react-navigation/native';
+import { createNavigationContainerRef, NavigationContainer } from '@react-navigation/native';
+import { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MobileApi, NativeUser } from '../api/mobileApi';
 import { useNativeNotificationGuard } from '../notifications/useNativeNotificationGuard';
@@ -113,9 +114,18 @@ export function MainTabs({
   onLogout,
   onChangeServer,
 }: MainTabsProps) {
-  const notificationGuard = useNativeNotificationGuard(api, onRequestError);
+  const navigationRef = useRef(createNavigationContainerRef<RootTabParamList>()).current;
+  const [requestedSessionId, setRequestedSessionId] = useState<string | null>(null);
+  const openNotificationSession = useCallback((sessionId: string) => {
+    setRequestedSessionId(sessionId);
+    if (navigationRef.isReady()) navigationRef.navigate('sessions');
+  }, [navigationRef]);
+  const handleRequestedSessionHandled = useCallback((sessionId: string) => {
+    setRequestedSessionId((current) => current === sessionId ? null : current);
+  }, []);
+  const notificationGuard = useNativeNotificationGuard(api, csrfToken, onRequestError, openNotificationSession);
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Tab.Navigator
         screenOptions={({ route }) => {
           const definition = nativeTabs.find((tab) => tab.key === route.name)!;
@@ -144,6 +154,8 @@ export function MainTabs({
                     canTerminate={user.role === 'owner' || user.role === 'admin'}
                     csrfToken={csrfToken}
                     onRequestError={onRequestError}
+                    onRequestedSessionHandled={handleRequestedSessionHandled}
+                    requestedSessionId={requestedSessionId}
                   />
                 );
               }

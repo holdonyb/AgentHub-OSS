@@ -16,7 +16,7 @@ The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves 
 
 ## Unreleased
 
-The runtime-attention notification work is implemented on `feature/runtime-attention-notifications` and is not deployed yet.
+The runtime-attention notification work was merged to `main` in `23cd94d` and is not deployed yet. React Native ledger integration is continuing on `feature/native-notification-ledger`.
 
 - Sessions expose revisioned execution state separately from user-attention state, so stale discovery or sync responses cannot overwrite newer worker transitions.
 - The API owns a per-user notification ledger with pending, delivered, read, acknowledged, and dismissed lifecycle states.
@@ -24,13 +24,15 @@ The runtime-attention notification work is implemented on `feature/runtime-atten
 - Web and compatibility Android clients claim delivery through the server ledger before showing an alert, preventing repeat notifications across refreshes and app restarts.
 - Opening an unseen session from either the notification inbox or session list marks its attention state as seen through an idempotent API transition.
 - Older servers remain supported: Web and Android fall back to the legacy notification projection only when the notification ledger endpoint is unavailable.
+- React Native now uses the same server ledger while its runtime is active, leaves records pending when OS notification permission is disabled, and opens the target session from live or cold-start notification taps.
+- Reliable notification delivery after the React Native process is suspended or terminated still requires native Android background transport and iOS push registration.
 
 Fresh feature-branch verification on `2026-07-15`:
 
 - API: `381 passed, 4 skipped`
 - Web: `201 passed`; production build passed
 - Compatibility Android: `16 passed`; JDK 21 debug APK compile passed
-- React Native: `83 passed`; TypeScript typecheck passed
+- React Native ledger branch: `97 passed`; TypeScript typecheck passed
 - Desktop: `34 passed`
 - Alembic: production-representative `0005 -> 0006` SQLite upgrade smoke passed with legacy session projection preserved
 - `git diff --check`: passed

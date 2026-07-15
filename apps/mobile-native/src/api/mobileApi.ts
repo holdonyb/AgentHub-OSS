@@ -104,6 +104,29 @@ export interface NativeJob {
   updated_at?: string;
 }
 
+export interface NativeNotificationRecord {
+  notification_id: string;
+  notification_type: 'approval' | 'completion' | 'failure' | string;
+  source_type: string;
+  source_id: string;
+  session_id: string | null;
+  title: string;
+  body: string;
+  severity: 'info' | 'warning' | 'error' | string;
+  status: 'pending' | 'delivered' | 'read' | 'acknowledged' | 'dismissed' | 'superseded';
+  created_at: string;
+  updated_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  acknowledged_at: string | null;
+  dismissed_at: string | null;
+}
+
+export interface NativeNotificationTransitionPayload {
+  notification: NativeNotificationRecord;
+  claimed: boolean;
+}
+
 export interface NativeSessionAttachmentInput {
   filename: string;
   content_type: string;
@@ -310,6 +333,15 @@ export interface MobileApi {
     status?: NativePermission['status'],
   ): Promise<NativeListPayload<NativePermission>>;
   listJobs(): Promise<NativeListPayload<NativeJob>>;
+  listNotifications(): Promise<NativeListPayload<NativeNotificationRecord>>;
+  markNotificationDelivered(
+    notificationId: string,
+    csrfToken: string,
+  ): Promise<NativeNotificationTransitionPayload>;
+  markNotificationRead(
+    notificationId: string,
+    csrfToken: string,
+  ): Promise<NativeNotificationTransitionPayload>;
   sendSessionInput(
     sessionId: string,
     payload: {
@@ -395,6 +427,20 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         `/api/permissions?status=${encodeURIComponent(status)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`,
       ),
     listJobs: () => client.get<NativeListPayload<NativeJob>>('/api/jobs?limit=200'),
+    listNotifications: () =>
+      client.get<NativeListPayload<NativeNotificationRecord>>('/api/notifications?limit=200'),
+    markNotificationDelivered: (notificationId, csrfToken) =>
+      client.post<NativeNotificationTransitionPayload>(
+        `/api/notifications/${encodeURIComponent(notificationId)}/delivered`,
+        {},
+        { csrfToken },
+      ),
+    markNotificationRead: (notificationId, csrfToken) =>
+      client.post<NativeNotificationTransitionPayload>(
+        `/api/notifications/${encodeURIComponent(notificationId)}/read`,
+        {},
+        { csrfToken },
+      ),
     sendSessionInput: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/input`, payload, { csrfToken }),
     transcribeVoice: (payload, csrfToken) =>
