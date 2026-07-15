@@ -105,6 +105,22 @@ describe('mobile WebView layout guardrails', () => {
     expect(mobileBlock).toMatch(/\.rail-panel summary > span,\s*\n\s*\.rail-panel-summary > span\s*{[^}]*white-space:\s*nowrap/s);
   });
 
+  it('keeps Cockpit filters and runtime actions touch-safe without widening the viewport', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
+    const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
+
+    expect(mobileBlock).toMatch(/\.app-mode-switch\s*{[^}]*overflow-x:\s*auto/s);
+    expect(mobileBlock).toMatch(/\.runtime-cockpit\s*{[^}]*width:\s*100%[^}]*max-width:\s*100%/s);
+    expect(mobileBlock).toMatch(/\.runtime-cockpit-filters\s*{[^}]*overflow-x:\s*auto/s);
+    expect(mobileBlock).toMatch(/\.runtime-cockpit-row-main\s*{[^}]*min-height:\s*72px/s);
+    expect(mobileBlock).toMatch(/\.runtime-cockpit-task-link\s*{[^}]*width:\s*44px[^}]*height:\s*44px/s);
+    expect(mobileBlock).toMatch(/\.app-shell\.mode-cockpit,\s*\n\s*\.app-shell\.mode-workbench\s*{[^}]*padding-bottom:\s*env\(safe-area-inset-bottom, 0px\)/s);
+    expect(mobileBlock).toMatch(/\.app-shell\.mode-cockpit\s+\.runtime-cockpit\s*{[^}]*height:\s*calc\(\s*100dvh\s*-\s*var\(--mobile-topbar-height\)/s);
+    expect(mobileBlock).toMatch(/\.app-shell\.mode-workbench\s+\.workbench-layout\s*{[^}]*height:\s*calc\(\s*100dvh\s*-\s*var\(--mobile-topbar-height\)/s);
+    expect(mobileBlock).toMatch(/\.notification-toast \+ \.runtime-cockpit,\s*\n\s*\.notification-toast \+ \.workbench-layout\s*{[^}]*--mobile-toast-clearance:\s*74px/s);
+    expect(mobileBlock).toMatch(/\.app-shell\.mode-cockpit\s+\.runtime-cockpit\s*{[^}]*var\(--mobile-toast-clearance\)/s);
+  });
+
   it('lets the mobile status strip and composer expand on demand', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf-8');
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';

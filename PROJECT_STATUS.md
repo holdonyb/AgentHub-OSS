@@ -16,7 +16,7 @@ The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves 
 
 ## Unreleased
 
-The user-level notification ledger and React Native foreground integration are merged to `main`. Per-device suspended/terminated-app delivery is continuing on `feature/per-device-background-push`.
+The user-level notification ledger, React Native foreground integration, and per-device Expo delivery lifecycle are merged to `main` and deployed to production. Runtime Cockpit extends the release line as a projection over the existing session, worker, permission, and task authorities.
 
 - Sessions expose revisioned execution state separately from user-attention state, so stale discovery or sync responses cannot overwrite newer worker transitions.
 - The API owns a per-user notification ledger with pending, delivered, read, acknowledged, and dismissed lifecycle states.
@@ -26,6 +26,8 @@ The user-level notification ledger and React Native foreground integration are m
 - Older servers remain supported: Web and Android fall back to the legacy notification projection only when the notification ledger endpoint is unavailable.
 - React Native now uses the same server ledger, registers a stable per-installation Expo token, revokes it on logout/server change, and opens the target session from live or cold-start notification taps.
 - Device delivery is independent from Web delivery/read state, has bounded ticket/receipt retries, and disables stale Expo tokens without deleting inbox history.
+- Runtime Cockpit groups non-archived sessions into attention, working, done, idle, and offline lanes without adding a second runtime or transcript store.
+- Cockpit rows open the existing Session thread; rows linked to a Workbench task can open that task directly. Mobile Cockpit and Workbench omit the Session-only bottom navigation and account for notification-toast height without widening the viewport.
 - Physical Android/iOS push smoke remains required before suspended/terminated delivery is claimed as release-verified.
 
 Fresh feature-branch verification on `2026-07-15`:
@@ -37,6 +39,13 @@ Fresh feature-branch verification on `2026-07-15`:
 - Desktop: `34 passed`
 - Alembic: fresh and repeatable existing-database upgrades through `0007` passed with the legacy session projection preserved
 - `git diff --check`: passed
+
+Fresh Runtime Cockpit verification on `2026-07-15`:
+
+- Web: `208 passed`; production build passed
+- Playwright desktop `1440x900`: six runtime rows rendered, no horizontal overflow, no console errors
+- Playwright mobile `390x844`: notification toast clearance, filter projection, Session navigation, linked Workbench navigation, and no horizontal overflow verified
+- Real suspended/terminated background push remains blocked on a matching Expo/EAS project ID, Firebase `google-services.json`, FCM V1 credentials, and physical-device smoke
 
 ## Implemented Surface
 

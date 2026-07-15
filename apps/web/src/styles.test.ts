@@ -99,6 +99,14 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/@media \(max-width:\s*760px\)\s*{[\s\S]*?\.task-composer-fields\s*{[^}]*padding-bottom:\s*8px/s);
   });
 
+  it('gives the runtime cockpit a contained, keyboard-visible operational layout', () => {
+    expect(styles).toMatch(/\.runtime-cockpit\s*{[^}]*height:\s*calc\(100dvh - 60px\)[^}]*overflow:\s*auto/s);
+    expect(styles).toMatch(/\.runtime-cockpit-row\s*{[^}]*min-height:\s*72px/s);
+    expect(styles).toMatch(/\.runtime-cockpit-row-main:focus-visible\s*{[^}]*outline:\s*2px solid var\(--ah-accent\)/s);
+    expect(styles).toMatch(/\.runtime-cockpit-state-icon\s*{[^}]*width:\s*36px[^}]*height:\s*36px/s);
+    expect(styles).toMatch(/\.runtime-cockpit-row\.lane-attention\s+\.runtime-cockpit-state-icon\s*{[^}]*color:\s*var\(--ah-status-approval\)/s);
+  });
+
   it('keeps desktop dark chrome from mixing in light topbar and filter controls', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark\s*{[^}]*color-scheme:\s*dark/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.topbar\s*{[^}]*background:\s*rgba\(15,\s*23,\s*34,\s*0\.96\)[^}]*border-bottom-color:\s*rgba\(91,\s*141,\s*184,\s*0\.18\)/s);
