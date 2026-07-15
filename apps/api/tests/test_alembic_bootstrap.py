@@ -25,9 +25,16 @@ def test_fresh_sqlite_upgrade_bootstraps_current_schema(
     engine = create_engine(database_url)
     try:
         tables = set(inspect(engine).get_table_names())
-        assert {"agent_sessions", "agent_timeline", "notification_records", "spaces"}.issubset(tables)
+        assert {
+            "agent_sessions",
+            "agent_timeline",
+            "notification_records",
+            "notification_deliveries",
+            "push_devices",
+            "spaces",
+        }.issubset(tables)
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0006_runtime_attention_notifications"
+        assert revision == "0007_per_device_push_delivery"
     finally:
         engine.dispose()

@@ -242,6 +242,18 @@ def _ensure_compatible_indexes(engine: Engine) -> None:
                 {"space_id", "recipient_user_id", "created_at"},
             ),
         ],
+        "notification_deliveries": [
+            (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_delivery_record_device "
+                "ON notification_deliveries (notification_record_id, push_device_id)",
+                {"notification_record_id", "push_device_id"},
+            ),
+            (
+                "CREATE INDEX IF NOT EXISTS ix_notification_delivery_dispatch "
+                "ON notification_deliveries (status, next_attempt_at, created_at)",
+                {"status", "next_attempt_at", "created_at"},
+            ),
+        ],
     }
     with engine.begin() as conn:
         for table_name, statements in index_statements.items():

@@ -227,6 +227,52 @@ class NotificationRecord(Base):
     dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class PushDevice(Base):
+    __tablename__ = "push_devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("pde"))
+    device_id: Mapped[str] = mapped_column(String(160), unique=True, index=True, nullable=False)
+    space_id: Mapped[str] = mapped_column(ForeignKey("spaces.space_id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    transport: Mapped[str] = mapped_column(String(16), default="expo", nullable=False)
+    push_token: Mapped[str] = mapped_column(Text, nullable=False)
+    app_version: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "notification_record_id",
+            "push_device_id",
+            name="uq_notification_delivery_record_device",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("ndl"))
+    delivery_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: new_id("ndl"))
+    notification_record_id: Mapped[str] = mapped_column(
+        ForeignKey("notification_records.id"), nullable=False, index=True
+    )
+    push_device_id: Mapped[str] = mapped_column(ForeignKey("push_devices.id"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    provider_ticket_id: Mapped[str | None] = mapped_column(String(240), nullable=True, index=True)
+    provider_receipt_id: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    ticketed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AgentTask(Base):
     __tablename__ = "agent_tasks"
 

@@ -511,6 +511,33 @@ class NotificationTransitionOut(BaseModel):
     claimed: bool = False
 
 
+class PushDeviceUpsertIn(BaseModel):
+    device_id: str = Field(min_length=8, max_length=160)
+    platform: Literal["android", "ios"]
+    transport: Literal["expo"] = "expo"
+    push_token: str = Field(min_length=8, max_length=512)
+    app_version: str = Field(default="", max_length=64)
+
+
+class PushDeviceOut(BaseModel):
+    device_id: str
+    platform: str
+    transport: str
+    app_version: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    last_seen_at: datetime
+
+
+class PushDeviceListOut(BaseModel):
+    items: list[PushDeviceOut]
+
+
+class PushDeviceUpsertOut(BaseModel):
+    device: PushDeviceOut
+
+
 class AgentTaskExecutionOut(BaseModel):
     execution_id: str
     task_id: str

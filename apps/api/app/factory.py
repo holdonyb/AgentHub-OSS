@@ -21,6 +21,7 @@ from app.routers import (
     notifications,
     permissions,
     providers,
+    push_devices,
     schedules,
     secrets,
     sessions,
@@ -76,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(events.router)
     app.include_router(memory.router)
     app.include_router(notifications.router)
+    app.include_router(push_devices.router)
     app.include_router(schedules.router)
     app.include_router(secrets.router)
     app.include_router(settings_router.router)
