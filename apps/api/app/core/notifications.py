@@ -9,7 +9,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.json import dumps_json
-from app.models import AgentPermission, AgentSession, Event, Job, NotificationRecord, SpaceMembership, utcnow
+from app.models import (
+    AgentPermission,
+    AgentSession,
+    Event,
+    Job,
+    NotificationDelivery,
+    NotificationRecord,
+    PushDevice,
+    SpaceMembership,
+    utcnow,
+)
 
 
 NOTIFIABLE_EVENT_TYPES = {"job.complete", "job.fail", "permission.request"}
@@ -131,6 +141,7 @@ def _persist_notification_records(
     event_type: str,
     source_id: str,
     level: str,
+    enqueue_push: bool = True,
 ) -> None:
     if not space_id:
         return
@@ -150,20 +161,38 @@ def _persist_notification_records(
         )
         if existing is not None:
             continue
-        db.add(
-            NotificationRecord(
-                space_id=space_id,
-                recipient_user_id=membership.user_id,
-                transition_key=str(payload["transition_key"]),
-                notification_type=str(payload["notification_type"]),
-                source_type=str(payload["source_type"]),
-                source_id=str(payload["source_id"]),
-                session_id=str(payload["session_id"]) if payload["session_id"] else None,
-                title=str(payload["title"]),
-                body=str(payload["body"]),
-                severity=str(payload["severity"]),
-            )
+        record = NotificationRecord(
+            space_id=space_id,
+            recipient_user_id=membership.user_id,
+            transition_key=str(payload["transition_key"]),
+            notification_type=str(payload["notification_type"]),
+            source_type=str(payload["source_type"]),
+            source_id=str(payload["source_id"]),
+            session_id=str(payload["session_id"]) if payload["session_id"] else None,
+            title=str(payload["title"]),
+            body=str(payload["body"]),
+            severity=str(payload["severity"]),
         )
+        db.add(record)
+        if not enqueue_push:
+            continue
+        db.flush([record])
+        devices = (
+            db.query(PushDevice)
+            .filter(
+                PushDevice.space_id == space_id,
+                PushDevice.user_id == membership.user_id,
+                PushDevice.enabled.is_(True),
+            )
+            .all()
+        )
+        for device in devices:
+            db.add(
+                NotificationDelivery(
+                    notification_record_id=record.id,
+                    push_device_id=device.id,
+                )
+            )
 
 
 def acknowledge_source_notifications(
@@ -215,6 +244,7 @@ def backfill_pending_notification_records(db: Session) -> int:
             event_type="permission.request",
             source_id=permission.permission_id,
             level="warning",
+            enqueue_push=False,
         )
     return len(db.new) - before
 

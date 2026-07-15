@@ -18,13 +18,33 @@ Current supported scope:
 - API-backed worker list with online state, heartbeat, and reported capabilities
 - workspace file browsing, text editing, image/media preview, folder creation, rename, and upload
 - image attachments and native voice dictation in session replies
-- server-ledger-backed approval/session notifications while the app runtime is active, including
-  cross-client delivery claiming, cold-start notification taps, session deep links, and read state
+- server-ledger-backed approval/session notifications, per-device Expo Push registration, cold-start
+  notification taps, session deep links, and read state
 - loading, empty, error, retry, and refresh states across the API-backed lists
 
 The existing Capacitor app under `apps/mobile` remains available as the compatibility Android client while the 1.0 release also produces React Native APK and AAB artifacts. The React Native client is the forward-looking cross-platform surface.
 
-The notification ledger is authoritative across Web and mobile clients. The React Native client does not yet claim reliable delivery while the process is suspended or terminated: Android foreground/background transport and iOS APNs/Expo Push registration remain separate follow-up work. The in-app notification inbox remains available regardless of local notification permission.
+The notification ledger is authoritative across Web and mobile clients. When the app is built with an EAS project id and the server enables Expo Push, each signed-in installation registers a separate device delivery channel. Web read/delivery state does not consume phone delivery. The in-app notification inbox and foreground local-notification fallback remain available when push is not configured.
+
+## Background Push
+
+Create or link an Expo project, then build the native app with its project id:
+
+```bash
+export EXPO_PUBLIC_EAS_PROJECT_ID=your-eas-project-id
+npm run mobile:native:prebuild
+```
+
+Enable the server dispatcher separately:
+
+```env
+AGENTHUB_EXPO_PUSH_ENABLED=true
+AGENTHUB_EXPO_PUSH_ACCESS_TOKEN=
+```
+
+`AGENTHUB_EXPO_PUSH_ACCESS_TOKEN` is only required when the Expo project enables push access-token security. Device push tokens are stored server-side, redacted from API responses, and cleared when the user logs out or changes server. Notification title and body pass through Expo's push service; operators who require a fully private transport should leave this feature disabled and use the inbox/foreground fallback.
+
+An EAS project id is build-time configuration. Changing it requires rebuilding the APK/IPA. Background delivery must be verified on a physical device; Expo Go and simulators are not release evidence.
 
 Android release builds require the four `AGENTHUB_ANDROID_*` signing variables documented by the release workflow. iOS currently has source and CI support through an unsigned Simulator build. A signed IPA, real-device smoke, and App Store distribution still require Apple signing and provisioning outside this repository.
 

@@ -16,7 +16,7 @@ The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves 
 
 ## Unreleased
 
-The runtime-attention notification work was merged to `main` in `23cd94d` and is not deployed yet. React Native ledger integration is continuing on `feature/native-notification-ledger`.
+The user-level notification ledger and React Native foreground integration are merged to `main`. Per-device suspended/terminated-app delivery is continuing on `feature/per-device-background-push`.
 
 - Sessions expose revisioned execution state separately from user-attention state, so stale discovery or sync responses cannot overwrite newer worker transitions.
 - The API owns a per-user notification ledger with pending, delivered, read, acknowledged, and dismissed lifecycle states.
@@ -24,17 +24,18 @@ The runtime-attention notification work was merged to `main` in `23cd94d` and is
 - Web and compatibility Android clients claim delivery through the server ledger before showing an alert, preventing repeat notifications across refreshes and app restarts.
 - Opening an unseen session from either the notification inbox or session list marks its attention state as seen through an idempotent API transition.
 - Older servers remain supported: Web and Android fall back to the legacy notification projection only when the notification ledger endpoint is unavailable.
-- React Native now uses the same server ledger while its runtime is active, leaves records pending when OS notification permission is disabled, and opens the target session from live or cold-start notification taps.
-- Reliable notification delivery after the React Native process is suspended or terminated still requires native Android background transport and iOS push registration.
+- React Native now uses the same server ledger, registers a stable per-installation Expo token, revokes it on logout/server change, and opens the target session from live or cold-start notification taps.
+- Device delivery is independent from Web delivery/read state, has bounded ticket/receipt retries, and disables stale Expo tokens without deleting inbox history.
+- Physical Android/iOS push smoke remains required before suspended/terminated delivery is claimed as release-verified.
 
 Fresh feature-branch verification on `2026-07-15`:
 
-- API: `381 passed, 4 skipped`
+- API: `400 passed, 4 skipped`
 - Web: `201 passed`; production build passed
 - Compatibility Android: `16 passed`; JDK 21 debug APK compile passed
-- React Native ledger branch: `97 passed`; TypeScript typecheck passed
+- React Native per-device push branch: `110 passed`; TypeScript typecheck and short-path JDK 21 debug APK compile passed
 - Desktop: `34 passed`
-- Alembic: production-representative `0005 -> 0006` SQLite upgrade smoke passed with legacy session projection preserved
+- Alembic: fresh and repeatable existing-database upgrades through `0007` passed with the legacy session projection preserved
 - `git diff --check`: passed
 
 ## Implemented Surface

@@ -25,6 +25,7 @@
     "expo": "~57.0.4",
     "expo-audio": "~57.0.0",
     "expo-build-properties": "~57.0.3",
+    "expo-constants": "~57.0.3",
     "expo-file-system": "~57.0.0",
     "expo-font": "~57.0.0",
     "expo-image-picker": "~57.0.2",

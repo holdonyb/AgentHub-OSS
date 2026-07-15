@@ -71,6 +71,19 @@ apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
 apps/mobile/android/app/build/outputs/apk/release/app-release.apk
 ```
 
+For the React Native APK/IPA to receive notifications while suspended or terminated, link an Expo/EAS project and use the same project id for every build in that release line:
+
+```powershell
+$env:EXPO_PUBLIC_EAS_PROJECT_ID="your-eas-project-id"
+$env:GOOGLE_SERVICES_JSON="E:/private/firebase/google-services.json"
+npm run mobile:native:prebuild
+npm run mobile:native:build:android
+```
+
+Android background push also requires an FCM V1 service-account key uploaded to the matching EAS project (`eas credentials` > Android > production > Google Service Account > FCM V1). `google-services.json`, the EAS project, and that FCM V1 key must belong to the same Firebase project. In GitHub Actions, set repository variable `EXPO_PUBLIC_EAS_PROJECT_ID` and secret `AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64`; the workflow decodes the app configuration only on the runner. Do not commit the FCM service-account private key.
+
+Enable `AGENTHUB_EXPO_PUSH_ENABLED=true` on the API only after that configured binary is installed and one physical-device smoke test succeeds. If Expo push access-token security is enabled, also set `AGENTHUB_EXPO_PUSH_ACCESS_TOKEN` on the API host. Restart the API after changing these settings. The compatibility WebView APK does not register this Expo device channel.
+
 Use the same upload key for every APK that users install. Set these variables locally or in GitHub Actions:
 
 ```text

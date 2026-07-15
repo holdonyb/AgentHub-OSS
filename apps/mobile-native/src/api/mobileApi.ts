@@ -313,6 +313,25 @@ export interface NativeWorkerSummary {
   last_heartbeat_at: string | null;
 }
 
+export interface NativePushDeviceInput {
+  device_id: string;
+  platform: 'android' | 'ios';
+  transport: 'expo';
+  push_token: string;
+  app_version: string;
+}
+
+export interface NativePushDevice {
+  device_id: string;
+  platform: 'android' | 'ios';
+  transport: 'expo';
+  app_version: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string;
+}
+
 export interface NativeListPayload<T> {
   items: T[];
 }
@@ -320,7 +339,7 @@ export interface NativeListPayload<T> {
 export interface MobileApi {
   login(email: string, password: string): Promise<NativeAuthPayload>;
   me(): Promise<NativeAuthPayload>;
-  logout(csrfToken: string): Promise<{ ok: boolean }>;
+  logout(csrfToken: string, deviceId?: string): Promise<{ ok: boolean }>;
   listSessions(): Promise<NativeListPayload<NativeSessionSummary>>;
   getSession(sessionId: string): Promise<{ session: NativeSessionSummary }>;
   getSessionTimeline(
@@ -342,6 +361,11 @@ export interface MobileApi {
     notificationId: string,
     csrfToken: string,
   ): Promise<NativeNotificationTransitionPayload>;
+  upsertPushDevice(
+    payload: NativePushDeviceInput,
+    csrfToken: string,
+  ): Promise<{ device: NativePushDevice }>;
+  revokePushDevice(deviceId: string, csrfToken: string): Promise<{ revoked: boolean }>;
   sendSessionInput(
     sessionId: string,
     payload: {
@@ -401,8 +425,12 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
     login: (email, password) =>
       client.post<NativeAuthPayload>('/api/auth/login', { email, password }),
     me: () => client.get<NativeAuthPayload>('/api/auth/me'),
-    logout: (csrfToken) =>
-      client.post<{ ok: boolean }>('/api/auth/logout', {}, { csrfToken }),
+    logout: (csrfToken, deviceId) =>
+      client.post<{ ok: boolean }>(
+        '/api/auth/logout',
+        deviceId ? { device_id: deviceId } : {},
+        { csrfToken },
+      ),
     listSessions: () => client.get<NativeListPayload<NativeSessionSummary>>('/api/sessions'),
     getSession: (sessionId) =>
       client.get<{ session: NativeSessionSummary }>(sessionPath(sessionId)),
@@ -439,6 +467,13 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       client.post<NativeNotificationTransitionPayload>(
         `/api/notifications/${encodeURIComponent(notificationId)}/read`,
         {},
+        { csrfToken },
+      ),
+    upsertPushDevice: (payload, csrfToken) =>
+      client.post<{ device: NativePushDevice }>('/api/push/devices', payload, { csrfToken }),
+    revokePushDevice: (deviceId, csrfToken) =>
+      client.delete<{ revoked: boolean }>(
+        `/api/push/devices/${encodeURIComponent(deviceId)}`,
         { csrfToken },
       ),
     sendSessionInput: (sessionId, payload, csrfToken) =>

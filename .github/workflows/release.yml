@@ -18,6 +18,8 @@ jobs:
       AGENTHUB_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEYSTORE_PASSWORD }}
       AGENTHUB_ANDROID_KEY_ALIAS: ${{ secrets.AGENTHUB_ANDROID_KEY_ALIAS }}
       AGENTHUB_ANDROID_KEY_PASSWORD: ${{ secrets.AGENTHUB_ANDROID_KEY_PASSWORD }}
+      AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64 }}
+      EXPO_PUBLIC_EAS_PROJECT_ID: ${{ vars.EXPO_PUBLIC_EAS_PROJECT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,6 +74,13 @@ jobs:
           test -n "$AGENTHUB_ANDROID_KEY_PASSWORD" || (echo "Missing AGENTHUB_ANDROID_KEY_PASSWORD secret" && exit 1)
           echo "$AGENTHUB_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/agenthub-upload-key.jks"
           echo "AGENTHUB_ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/agenthub-upload-key.jks" >> "$GITHUB_ENV"
+
+      - name: Decode optional Firebase app configuration
+        if: env.AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64 != ''
+        shell: bash
+        run: |
+          printf '%s' "$AGENTHUB_ANDROID_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > "$RUNNER_TEMP/google-services.json"
+          echo "GOOGLE_SERVICES_JSON=$RUNNER_TEMP/google-services.json" >> "$GITHUB_ENV"
 
       - name: Build Android APK
         run: npm run mobile:build:release

@@ -134,6 +134,12 @@ def test_init_database_upgrades_legacy_sessions_and_adds_notification_ledger(tmp
         notification_table = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_records'")
         ).scalar_one()
+        push_device_table = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'push_devices'")
+        ).scalar_one()
+        delivery_table = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'notification_deliveries'")
+        ).scalar_one()
 
     assert projected.session_id == "legacy-needs-reply"
     assert projected.status == "needs_reply"
@@ -144,7 +150,17 @@ def test_init_database_upgrades_legacy_sessions_and_adds_notification_ledger(tmp
     assert projected.attention_reason == "approval"
     assert projected.attention_revision == 1
     assert notification_table == "notification_records"
+    assert push_device_table == "push_devices"
+    assert delivery_table == "notification_deliveries"
+    assert {"receipt_attempts", "receipt_next_attempt_at"}.issubset(
+        _sqlite_column_names(engine, "notification_deliveries")
+    )
     assert "uq_notification_recipient_transition" in _sqlite_index_names(engine, "notification_records")
+    assert "uq_notification_delivery_record_device" in _sqlite_index_names(engine, "notification_deliveries")
+    assert "ix_notification_delivery_receipt_dispatch" in _sqlite_index_names(
+        engine,
+        "notification_deliveries",
+    )
 
 
 def test_ensure_compatible_indexes_adds_composite_indexes_to_legacy_sqlite(tmp_path: Path) -> None:
@@ -291,6 +307,7 @@ def test_create_db_engine_configures_sqlite_for_wal_and_busy_timeout(tmp_path: P
     assert str(journal_mode).lower() == "wal"
     assert int(busy_timeout) == 30000
     assert int(foreign_keys) == 1
+    assert engine.hide_parameters is True
 
 
 def test_database_busy_operational_error_maps_to_503() -> None:

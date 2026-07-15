@@ -31,6 +31,18 @@ class Settings(BaseSettings):
     notification_max_attempts: Annotated[int, Field(ge=1, le=10)] = 3
     notification_timeout_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0
     notification_backoff_seconds: Annotated[float, Field(ge=0, le=60)] = 0.5
+    expo_push_enabled: bool = False
+    expo_push_access_token: str = ""
+    expo_push_send_url: str = "https://exp.host/--/api/v2/push/send"
+    expo_push_receipt_url: str = "https://exp.host/--/api/v2/push/getReceipts"
+    expo_push_batch_size: Annotated[int, Field(ge=1, le=100)] = 100
+    expo_push_max_attempts: Annotated[int, Field(ge=1, le=10)] = 3
+    expo_push_timeout_seconds: Annotated[float, Field(ge=0.1, le=30)] = 5.0
+    expo_push_backoff_seconds: Annotated[float, Field(ge=0, le=3600)] = 5.0
+    expo_push_receipt_delay_seconds: Annotated[int, Field(ge=0, le=3600)] = 900
+    expo_push_claim_lease_seconds: Annotated[int, Field(ge=5, le=3600)] = 60
+    expo_push_device_ttl_days: Annotated[int, Field(ge=1, le=365)] = 30
+    expo_push_dispatch_interval_seconds: Annotated[float, Field(ge=1, le=300)] = 10.0
     max_session_attachments: Annotated[int, Field(ge=1, le=20)] = 5
     max_session_attachment_bytes: Annotated[int, Field(ge=1024)] = 8 * 1024 * 1024
     max_voice_audio_bytes: Annotated[int, Field(ge=1024)] = 12 * 1024 * 1024
