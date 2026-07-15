@@ -8,13 +8,29 @@ from pathlib import Path
 from agenthub_worker import discovery
 from agenthub_worker.discovery import parse_claude_jsonl, parse_codex_jsonl, parse_kimi_session, recent_session_files
 from agenthub_worker.paths import normalize_workspace_root
-from agenthub_windows_worker.discovery import discover_sessions as discover_windows_sessions
+from agenthub_windows_worker.discovery import discover_capabilities, discover_sessions as discover_windows_sessions
 from agenthub_windows_worker.main import _session_roots, _workspace_roots
 
 
 def test_windows_path_normalization_handles_backslashes_chinese_and_spaces() -> None:
     assert normalize_workspace_root(r"E:\work\中文 项目") == "E:/work/中文 项目"
     assert normalize_workspace_root("E:/work/AgentHub") == "E:/work/AgentHub"
+
+
+def test_windows_capabilities_find_commands_from_custom_npm_prefix_when_service_path_is_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    npm_prefix = tmp_path / "npm-global"
+    home.mkdir()
+    npm_prefix.mkdir()
+    (home / ".npmrc").write_text(f"prefix={npm_prefix}\n", encoding="utf-8")
+    (npm_prefix / "codex.cmd").write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "stale-path"))
+
+    assert discover_capabilities()["codex"] is True
 
 
 def test_windows_default_workspace_roots_do_not_include_agent_session_stores(tmp_path: Path, monkeypatch) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
@@ -17,6 +17,10 @@ class AgentHubClient:
     mode: ConnectionMode = "private"
     timeout: float = 30.0
     trust_env: bool = False
+    _client: httpx.Client = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._client = httpx.Client(timeout=self.timeout, trust_env=self.trust_env)
 
     def _headers(self) -> dict[str, str]:
         if not self.worker_token.strip():
@@ -24,21 +28,20 @@ class AgentHubClient:
         return {"Authorization": f"Bearer {self.worker_token}"}
 
     def _post(self, path: str, *, json: dict[str, Any], headers: dict[str, str] | None = None) -> httpx.Response:
-        return httpx.post(
+        return self._client.post(
             f"{self.base_url}{path}",
             json=json,
             headers=headers if headers is not None else self._headers(),
-            timeout=self.timeout,
-            trust_env=self.trust_env,
         )
 
     def _get(self, path: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
-        return httpx.get(
+        return self._client.get(
             f"{self.base_url}{path}",
             headers=headers if headers is not None else self._headers(),
-            timeout=self.timeout,
-            trust_env=self.trust_env,
         )
+
+    def close(self) -> None:
+        self._client.close()
 
     def _worker_path(self, private_path: str, public_path: str) -> str:
         return public_path if self.mode == "public_relay" else private_path

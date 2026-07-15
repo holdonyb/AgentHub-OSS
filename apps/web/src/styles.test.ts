@@ -43,6 +43,7 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.app-shell\.theme-light \.reply-box textarea\s*{[^}]*background:\s*#ffffff/s);
     expect(styles).toMatch(/\.app-shell\.theme-light \.notification-inbox\s*{[^}]*background:\s*#ffffff/s);
     expect(styles).toMatch(/\.app-shell\.theme-light \.notification-inbox-item\.unread\s*{[^}]*background:\s*#eff6ff/s);
+    expect(styles).toMatch(/\.app-shell\.theme-light \.reply-mode-tabs button\.selected\s*{[^}]*background:\s*#1269d3[^}]*color:\s*#ffffff/s);
   });
 
   it('keeps the mobile topbar create and refresh actions visible instead of hiding them with desktop overflow rules', () => {
@@ -54,8 +55,9 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.topbar\s*{[^}]*grid-template-columns:\s*36px minmax\(0,\s*1fr\) auto/s);
     expect(styles).toMatch(/\.topbar \.brand-row\s*{[^}]*min-width:\s*36px/s);
     expect(styles).toMatch(/\.topbar \.brand-row > span\s*{[^}]*display:\s*none/s);
-    expect(styles).toMatch(/\.mobile-worker-signal\s*{[^}]*min-width:\s*0[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis/s);
+    expect(styles).toMatch(/\.mobile-worker-signal\s*{[^}]*display:\s*none/s);
     expect(styles).toMatch(/\.topbar-actions\s*{[^}]*min-width:\s*0/s);
+    expect(styles).toMatch(/\.mobile-mode-trigger\s*{[^}]*max-width:\s*100%[^}]*overflow:\s*hidden/s);
   });
 
   it('restores dark selected states for mobile reply and question controls', () => {

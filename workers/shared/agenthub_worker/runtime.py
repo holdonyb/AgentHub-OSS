@@ -270,6 +270,9 @@ class WorkerRuntime:
             self._executor.shutdown(wait=wait)
             if wait:
                 self._collect_finished_jobs()
+        close_client = getattr(self.client, "close", None)
+        if callable(close_client):
+            close_client()
 
     def run_once(self) -> None:
         capabilities = self.heartbeat_once()
