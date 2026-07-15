@@ -31,6 +31,7 @@ interface TestRenderer {
   root: TestInstance;
   toJSON(): unknown;
   unmount(): void;
+  update(element: ReactElement): void;
 }
 
 interface TestRendererApi {
@@ -251,6 +252,43 @@ describe('native resource screens', () => {
     });
     expect(renderedText(renderer)).toContain('SESSION INBOX');
     expect(renderedText(renderer)).toContain('修复登录问题');
+  });
+
+  it('opens a session requested by a native notification', async () => {
+    const api = createSessionsApi(jest.fn(async () => ({ items: [session] })));
+    const onRequestedSessionHandled = jest.fn();
+    const renderer = await render(
+      <SessionsScreen
+        api={api}
+        requestedSessionId="session-1"
+        onRequestedSessionHandled={onRequestedSessionHandled}
+      />,
+    );
+    await settle();
+
+    expect(api.getSession).toHaveBeenCalledWith('session-1');
+    expect(renderedText(renderer)).toContain('会话详情');
+    expect(onRequestedSessionHandled).toHaveBeenCalledWith('session-1');
+  });
+
+  it('can reopen the same session for a later notification', async () => {
+    const api = createSessionsApi(jest.fn(async () => ({ items: [session] })));
+    const props = { api, onRequestedSessionHandled: jest.fn() };
+    const renderer = await render(
+      <SessionsScreen {...props} requestedSessionId="session-1" />,
+    );
+    await settle();
+
+    await act(async () => {
+      renderer.update(<SessionsScreen {...props} requestedSessionId={null} />);
+      press(renderer.root.findByProps({ accessibilityLabel: '返回会话列表' }));
+    });
+    await act(async () => {
+      renderer.update(<SessionsScreen {...props} requestedSessionId="session-1" />);
+    });
+    await settle();
+
+    expect(props.onRequestedSessionHandled).toHaveBeenCalledTimes(2);
   });
 
   it('shows session errors, retries, and then renders an empty state', async () => {

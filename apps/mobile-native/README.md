@@ -18,10 +18,13 @@ Current supported scope:
 - API-backed worker list with online state, heartbeat, and reported capabilities
 - workspace file browsing, text editing, image/media preview, folder creation, rename, and upload
 - image attachments and native voice dictation in session replies
-- native approval/session notifications with persisted deduplication
+- server-ledger-backed approval/session notifications while the app runtime is active, including
+  cross-client delivery claiming, cold-start notification taps, session deep links, and read state
 - loading, empty, error, retry, and refresh states across the API-backed lists
 
 The existing Capacitor app under `apps/mobile` remains available as the compatibility Android client while the 1.0 release also produces React Native APK and AAB artifacts. The React Native client is the forward-looking cross-platform surface.
+
+The notification ledger is authoritative across Web and mobile clients. The React Native client does not yet claim reliable delivery while the process is suspended or terminated: Android foreground/background transport and iOS APNs/Expo Push registration remain separate follow-up work. The in-app notification inbox remains available regardless of local notification permission.
 
 Android release builds require the four `AGENTHUB_ANDROID_*` signing variables documented by the release workflow. iOS currently has source and CI support through an unsigned Simulator build. A signed IPA, real-device smoke, and App Store distribution still require Apple signing and provisioning outside this repository.
 
