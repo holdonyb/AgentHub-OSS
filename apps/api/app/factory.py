@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI, Request
@@ -11,6 +12,7 @@ from sqlalchemy.exc import OperationalError
 from app.core.config import Settings
 from app.core.database import create_db_engine, create_session_local, init_database
 from app.core.rate_limit import RateLimitMiddleware
+from app.core.push_dispatcher import PushDispatchWorker
 from app.core.security import generate_token
 from app.routers import (
     auth,
@@ -46,17 +48,29 @@ def _database_error_payload(error: OperationalError) -> tuple[int, dict[str, str
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    app = FastAPI(title=settings.app_name)
+    engine = create_db_engine(settings.database_url)
+    SessionLocal = create_session_local(engine)
+    init_database(engine)
+    push_dispatcher = PushDispatchWorker(SessionLocal, settings) if settings.expo_push_enabled else None
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if push_dispatcher is not None:
+            push_dispatcher.start()
+        try:
+            yield
+        finally:
+            if push_dispatcher is not None:
+                push_dispatcher.stop()
+
+    app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.settings = settings
     app.state.bootstrap_token = settings.bootstrap_token or generate_token("boot")
     if settings.bootstrap_token is None:
         logger.warning("AgentHub bootstrap token generated for this process: %s", app.state.bootstrap_token)
-
-    engine = create_db_engine(settings.database_url)
-    SessionLocal = create_session_local(engine)
     app.state.db_engine = engine
     app.state.SessionLocal = SessionLocal
-    init_database(engine)
+    app.state.push_dispatcher = push_dispatcher
 
     app.add_middleware(RateLimitMiddleware, settings=settings)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
