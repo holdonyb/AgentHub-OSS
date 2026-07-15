@@ -80,6 +80,41 @@ describe('mobile API', () => {
     );
   });
 
+  it('loads and transitions the authoritative notification ledger', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ items: [{ notification_id: 'notice/1', status: 'pending' }] }))
+      .mockResolvedValueOnce(jsonResponse({ claimed: true, notification: { notification_id: 'notice/1', status: 'delivered' } }))
+      .mockResolvedValueOnce(jsonResponse({ claimed: false, notification: { notification_id: 'notice/1', status: 'read' } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.listNotifications();
+    await api.markNotificationDelivered('notice/1', 'csrf-token');
+    await api.markNotificationRead('notice/1', 'csrf-token');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/notifications?limit=200',
+      { credentials: 'include' },
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/notifications/notice%2F1/delivered',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      'https://agenthub.example.com/api/notifications/notice%2F1/read',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
+
   it('filters tasks by status and loads the selected task detail', async () => {
     const fetcher = jest
       .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
