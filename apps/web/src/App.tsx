@@ -9444,45 +9444,45 @@ function MobileMePane({
       </div>
 
       <div className="me-download-channels">
-        <div className="mobile-panel-card me-update-card">
-          <div className="me-download-card-head">
-            <strong>{pickLocale(locale, '当前 WebView 客户端', 'Current WebView client')}</strong>
-            <span>{pickLocale(locale, '兼容更新', 'Compatible update')}</span>
-          </div>
-          <p>{nativeVersionLabel}</p>
-          <p>{updateLabel(apkUpdates.webview)}</p>
-          <small>{apkUrls.webview}</small>
-          <div className="me-action-row">
-            <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking'}>
-              <RefreshCw size={13} />
-              {apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
-            </button>
-            <button type="button" className="message-action-button primary-inline-action" onClick={() => onDownloadApk('webview')}>
-              <Download size={13} />
-              {pickLocale(locale, '更新当前版', 'Update current app')}
-            </button>
-            <button type="button" className="message-action-button" onClick={() => onCopyApkUrl('webview')}>
-              <Copy size={13} />
-              {t(locale, 'copyAddress')}
-            </button>
-          </div>
-        </div>
-
         <div className="mobile-panel-card me-update-card me-native-download-card">
           <div className="me-download-card-head">
             <strong>{pickLocale(locale, '原生 Workbench 客户端', 'Native Workbench client')}</strong>
-            <span>{pickLocale(locale, '独立安装', 'Separate app')}</span>
+            <span>{pickLocale(locale, '推荐', 'Recommended')}</span>
           </div>
           <p>{pickLocale(locale, '面向任务、文件和移动 Workbench 的原生体验', 'Native tasks, files, and mobile Workbench experience')}</p>
           <p>{updateLabel(apkUpdates.native)}</p>
           <p className="me-install-note">{pickLocale(locale, '会作为独立 App 安装，可与当前版共存', 'Installs as a separate app and can coexist with the current app')}</p>
           <small>{apkUrls.native}</small>
           <div className="me-action-row">
+            <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking'}>
+              <RefreshCw size={13} />
+              {apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
+            </button>
             <button type="button" className="message-action-button primary-inline-action" onClick={() => onDownloadApk('native')}>
               <Download size={13} />
               {pickLocale(locale, '安装原生版', 'Install native app')}
             </button>
             <button type="button" className="message-action-button" onClick={() => onCopyApkUrl('native')}>
+              <Copy size={13} />
+              {t(locale, 'copyAddress')}
+            </button>
+          </div>
+        </div>
+
+        <div className="mobile-panel-card me-update-card">
+          <div className="me-download-card-head">
+            <strong>{pickLocale(locale, '当前 WebView 客户端', 'Current WebView client')}</strong>
+            <span>{pickLocale(locale, '兼容版', 'Compatible')}</span>
+          </div>
+          <p>{nativeVersionLabel}</p>
+          <p>{updateLabel(apkUpdates.webview)}</p>
+          <small>{apkUrls.webview}</small>
+          <div className="me-action-row">
+            <button type="button" className="message-action-button" onClick={() => onDownloadApk('webview')}>
+              <Download size={13} />
+              {pickLocale(locale, '更新当前版', 'Update current app')}
+            </button>
+            <button type="button" className="message-action-button" onClick={() => onCopyApkUrl('webview')}>
               <Copy size={13} />
               {t(locale, 'copyAddress')}
             </button>
