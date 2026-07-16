@@ -3162,6 +3162,19 @@ textarea:disabled {
   margin-bottom: 0;
 }
 
+.me-download-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.me-download-toolbar > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .me-download-card-head {
   display: flex;
   align-items: center;
@@ -3181,20 +3194,21 @@ textarea:disabled {
 }
 
 .me-native-download-card {
-  border-color: #c4b5fd;
-  background: #faf9ff;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.12);
 }
 
 .me-native-download-card .me-download-card-head span {
-  border-color: #ddd6fe;
-  background: #f5f3ff;
-  color: #6d28d9;
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .me-install-note {
-  border-left: 3px solid #8b5cf6;
+  border-left: 3px solid #2563eb;
   padding-left: 8px;
-  color: #4c1d95 !important;
+  color: #1e3a8a !important;
   font-weight: 700;
 }
 
@@ -3211,18 +3225,19 @@ textarea:disabled {
 }
 
 .app-shell.theme-dark .me-native-download-card {
-  border-color: rgba(167, 139, 250, 0.3);
-  background: #171c2b;
+  border-color: rgba(90, 167, 255, 0.42);
+  background: #14243a;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
 }
 
 .app-shell.theme-dark .me-native-download-card .me-download-card-head span {
-  border-color: rgba(167, 139, 250, 0.34);
-  background: rgba(139, 92, 246, 0.12);
-  color: #ddd6fe;
+  border-color: #5aa7ff;
+  background: #1269d3;
+  color: #ffffff;
 }
 
 .app-shell.theme-dark .me-install-note {
-  color: #ddd6fe !important;
+  color: #b9d8ff !important;
 }
 
 .me-update-card small {

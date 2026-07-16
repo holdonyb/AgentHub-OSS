@@ -4557,7 +4557,18 @@ describe('AgentHub console', () => {
     expect(screen.getByText('原生 Workbench 客户端')).toBeInTheDocument();
     expect(screen.getByText('会作为独立 App 安装，可与当前版共存')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '检查更新' }));
+    const nativeCard = screen.getByText('原生 Workbench 客户端').closest('.me-update-card');
+    const webviewCard = screen.getByText('当前 WebView 客户端').closest('.me-update-card');
+    expect(nativeCard).not.toBeNull();
+    expect(webviewCard).not.toBeNull();
+    if (!nativeCard || !webviewCard) throw new Error('Android download cards are missing');
+    expect(within(nativeCard as HTMLElement).getByText('推荐')).toBeInTheDocument();
+    expect(nativeCard.compareDocumentPosition(webviewCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const updateToolbar = screen.getByRole('group', { name: 'Android 客户端更新' });
+    expect(within(updateToolbar).getByRole('button', { name: '检查更新' })).toBeInTheDocument();
+    expect(within(nativeCard as HTMLElement).queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(updateToolbar).getByRole('button', { name: '检查更新' }));
     expect(await within(screen.getByLabelText('我的')).findByText(/线上 APK：85 MB/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '更新当前版' }));

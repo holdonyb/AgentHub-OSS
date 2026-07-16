@@ -13,6 +13,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NGINX_TEMPLATE = REPO_ROOT / "deploy" / "nginx" / "agenthub-selfhost.conf.template"
 SYNC_SCRIPT = REPO_ROOT / "scripts" / "sync-android-release-assets.sh"
+RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+DOWNLOAD_PAGE = REPO_ROOT / "website" / "download" / "index.html"
 ASSETS = (
     "agenthub-android-release.apk",
     "agenthub-native-android-release.apk",
@@ -65,6 +67,25 @@ def test_android_release_sync_script_has_versioned_verified_atomic_contract() ->
     assert "sha256sum -c" in script
     assert "mv -f" in script
     assert 'rm -rf "$DESTINATION"' not in script
+
+
+def test_native_android_is_the_recommended_download_and_release_asset() -> None:
+    page = DOWNLOAD_PAGE.read_text(encoding="utf-8")
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+    native_heading = "AgentHub 原生客户端"
+    webview_heading = "WebView 兼容版"
+    assert native_heading in page
+    assert webview_heading in page
+    assert page.index(native_heading) < page.index(webview_heading)
+    assert "Android · Native · Recommended" in page
+    assert 'releases/download/v1.0.0/agenthub-native-android-release.apk' in page
+    assert 'releases/download/v1.0.0/agenthub-android-release.apk' in page
+
+    assert "npm run mobile:build:release" in workflow
+    assert "npm run mobile:native:build:android" in workflow
+    assert "agenthub-native-android-release.apk" in workflow
+    assert "agenthub-native-android-release.aab" in workflow
 
 
 @pytest.mark.skipif(os.name == "nt", reason="shell behavior runs in Linux CI")
