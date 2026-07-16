@@ -9444,6 +9444,14 @@ function MobileMePane({
       </div>
 
       <div className="me-download-channels">
+        <div className="me-download-toolbar" role="group" aria-label={pickLocale(locale, 'Android 客户端更新', 'Android client updates')}>
+          <span>{pickLocale(locale, 'Android 客户端', 'Android clients')}</span>
+          <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking'}>
+            <RefreshCw size={13} />
+            {apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
+          </button>
+        </div>
+
         <div className="mobile-panel-card me-update-card me-native-download-card">
           <div className="me-download-card-head">
             <strong>{pickLocale(locale, '原生 Workbench 客户端', 'Native Workbench client')}</strong>
@@ -9454,10 +9462,6 @@ function MobileMePane({
           <p className="me-install-note">{pickLocale(locale, '会作为独立 App 安装，可与当前版共存', 'Installs as a separate app and can coexist with the current app')}</p>
           <small>{apkUrls.native}</small>
           <div className="me-action-row">
-            <button type="button" className="message-action-button" onClick={onCheckApkUpdate} disabled={apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking'}>
-              <RefreshCw size={13} />
-              {apkUpdates.webview.status === 'checking' || apkUpdates.native.status === 'checking' ? t(locale, 'checking') : t(locale, 'checkUpdate')}
-            </button>
             <button type="button" className="message-action-button primary-inline-action" onClick={() => onDownloadApk('native')}>
               <Download size={13} />
               {pickLocale(locale, '安装原生版', 'Install native app')}

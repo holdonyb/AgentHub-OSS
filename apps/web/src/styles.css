@@ -3162,6 +3162,19 @@ textarea:disabled {
   margin-bottom: 0;
 }
 
+.me-download-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.me-download-toolbar > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .me-download-card-head {
   display: flex;
   align-items: center;

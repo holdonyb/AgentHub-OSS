@@ -4564,8 +4564,11 @@ describe('AgentHub console', () => {
     if (!nativeCard || !webviewCard) throw new Error('Android download cards are missing');
     expect(within(nativeCard as HTMLElement).getByText('推荐')).toBeInTheDocument();
     expect(nativeCard.compareDocumentPosition(webviewCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const updateToolbar = screen.getByRole('group', { name: 'Android 客户端更新' });
+    expect(within(updateToolbar).getByRole('button', { name: '检查更新' })).toBeInTheDocument();
+    expect(within(nativeCard as HTMLElement).queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '检查更新' }));
+    fireEvent.click(within(updateToolbar).getByRole('button', { name: '检查更新' }));
     expect(await within(screen.getByLabelText('我的')).findByText(/线上 APK：85 MB/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '更新当前版' }));
