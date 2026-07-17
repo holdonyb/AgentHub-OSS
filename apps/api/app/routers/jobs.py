@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import load_only
 
 from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role
+from app.core.file_job_retention import prune_expired_file_job_bodies
 from app.core.job_recovery import recover_stale_running_jobs_for_space
 from app.core.json import dumps_json
 from app.core.session_state import set_session_status
@@ -97,7 +98,13 @@ def create_job(payload: JobCreateIn, db: DbSession, actor: Actor = Depends(requi
 
 
 @router.get("/api/jobs")
-def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer")), limit: int = 120):
+def list_jobs(request: Request, db: DbSession, actor: Actor = Depends(require_min_role("viewer")), limit: int = 120):
+    if prune_expired_file_job_bodies(
+        db,
+        ttl_seconds=request.app.state.settings.legacy_file_job_body_ttl_seconds,
+        space_id=actor.space_id,
+    ):
+        db.commit()
     if recover_stale_running_jobs_for_space(db, actor.space_id):
         db.commit()
     bounded_limit = max(1, min(limit, 500))
@@ -110,6 +117,20 @@ def list_jobs(db: DbSession, actor: Actor = Depends(require_min_role("viewer")),
         .all()
     )
     return {"items": [job_summary_out(job) for job in jobs]}
+
+
+@router.get("/api/jobs/{job_id}")
+def get_job(job_id: str, request: Request, db: DbSession, actor: Actor = Depends(require_min_role("operator"))):
+    if prune_expired_file_job_bodies(
+        db,
+        ttl_seconds=request.app.state.settings.legacy_file_job_body_ttl_seconds,
+        space_id=actor.space_id,
+    ):
+        db.commit()
+    job = db.query(Job).filter(Job.space_id == actor.space_id, Job.job_id == job_id).one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail={"message": "Job not found", "code": "JOB_NOT_FOUND"})
+    return {"job": job_out(job)}
 
 
 @router.post("/api/jobs/{job_id}/cancel")

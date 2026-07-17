@@ -63,7 +63,7 @@ import type {
   User,
   Worker,
 } from '@agenthub/protocol';
-import { apiGet, apiPatch, apiPost } from './api';
+import { apiGet, apiPatch, apiPost, apiPutRaw } from './api';
 import {
   listenForNativeNotificationActions,
   notifyNativePendingPermission,
@@ -96,6 +96,7 @@ import {
 
 type LoadState = 'loading' | 'ready' | 'login' | 'error';
 type MobilePane = 'sessions' | 'thread' | 'controls' | 'files' | 'workers' | 'me';
+type WorkspaceView = 'explorer' | 'preview';
 type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi' | 'opencode';
 type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
@@ -374,6 +375,7 @@ interface MobileHistoryState {
   notificationInboxOpen: boolean;
   launchMode: LaunchMode;
   workerInstallOpen: boolean;
+  fileWorkspaceView: WorkspaceView;
   depth: number;
 }
 
@@ -535,6 +537,8 @@ interface WorkspaceFileReadResult {
   downloadable?: boolean;
   data_base64?: string;
   text?: string;
+  transfer_id?: string;
+  content_url?: string;
 }
 
 interface FileEditorState {
@@ -542,6 +546,14 @@ interface FileEditorState {
   filename: string;
   text: string;
   expectedModifiedAt?: string | null;
+  target: WorkspaceFileTarget;
+}
+
+interface WorkspaceFileTarget {
+  workerId: string;
+  workspaceRoot: string;
+  sessionId?: string | null;
+  direct: boolean;
 }
 
 interface WorkspaceFileMutationResult {
@@ -1828,6 +1840,7 @@ function readMobileHistoryState(value: unknown): MobileHistoryState | null {
     notificationInboxOpen: Boolean(state.notificationInboxOpen),
     launchMode: state.launchMode === 'start' || state.launchMode === 'fork' ? state.launchMode : 'none',
     workerInstallOpen: Boolean(state.workerInstallOpen),
+    fileWorkspaceView: state.fileWorkspaceView === 'preview' ? 'preview' : 'explorer',
     depth: typeof state.depth === 'number' && state.depth > 0 ? state.depth : 0,
   };
 }
@@ -1839,7 +1852,8 @@ function sameMobileHistoryState(left: MobileHistoryState | null, right: MobileHi
     left.selectedId === right.selectedId &&
     left.notificationInboxOpen === right.notificationInboxOpen &&
     left.launchMode === right.launchMode &&
-    left.workerInstallOpen === right.workerInstallOpen
+    left.workerInstallOpen === right.workerInstallOpen &&
+    left.fileWorkspaceView === right.fileWorkspaceView
   );
 }
 
@@ -2042,17 +2056,28 @@ function fileListResult(jobs: Job[]) {
 }
 
 function fileReadResult(jobs: Job[]) {
-  const result = parseJobResult<WorkspaceFileReadResult>(latestCompletedJobByKinds(jobs, ['file_read', 'file_write']));
+  const result = parseJobResult<WorkspaceFileReadResult>(
+    latestCompletedJobByKinds(jobs, ['file_read', 'file_write', 'file_transfer_prepare']),
+  );
   if (!result || typeof result.path !== 'string' || typeof result.filename !== 'string') return null;
+  const transferPreviewKind = result.content_url
+    ? workspacePreviewKind(result.path, result.content_type)
+    : undefined;
   return {
     ...result,
-    preview_kind: result.preview_kind ?? 'text',
-    downloadable: Boolean(result.downloadable),
+    preview_kind: result.preview_kind ?? transferPreviewKind ?? 'text',
+    downloadable: Boolean(result.downloadable || result.content_url),
+    truncated: Boolean(result.truncated),
     text: typeof result.text === 'string' ? result.text : '',
   };
 }
 
+const MAX_LEGACY_WORKSPACE_UPLOAD_BYTES = 16 * 1024 * 1024;
+
 async function fileToWorkspaceUploadPayload(file: File) {
+  if (file.size > MAX_LEGACY_WORKSPACE_UPLOAD_BYTES) {
+    throw new Error('当前 Worker 不支持流式上传，旧版上传仅支持 16 MB 以内文件');
+  }
   const contentType = inferReplyAttachmentContentType(file) || 'application/octet-stream';
   return {
     filename: file.name || 'upload.bin',
@@ -2063,7 +2088,9 @@ async function fileToWorkspaceUploadPayload(file: File) {
 }
 
 function fileJobBusy(jobs: Job[]) {
-  return jobs.some((job) => ['file_list', 'file_read', 'file_write'].includes(job.kind) && ['queued', 'running'].includes(job.status));
+  return jobs.some(
+    (job) => ['file_list', 'file_read', 'file_write', 'file_transfer_prepare', 'file_transfer_apply'].includes(job.kind) && ['queued', 'running'].includes(job.status),
+  );
 }
 
 function isEditableWorkspaceText(file: WorkspaceFileReadResult | null) {
@@ -2082,6 +2109,43 @@ function isMarkdownWorkspaceFile(file: WorkspaceFileReadResult | null) {
 function fileEntryCapability(entry: WorkspaceFileEntry) {
   if (entry.kind === 'directory') return 'directory';
   return entry.preview_capability ?? 'download';
+}
+
+function workspacePreviewKind(path: string, contentType = ''): 'text' | 'image' | 'audio' | 'video' | 'download' {
+  const normalizedType = contentType.toLowerCase();
+  if (normalizedType.startsWith('image/')) return 'image';
+  if (normalizedType.startsWith('audio/')) return 'audio';
+  if (normalizedType.startsWith('video/')) return 'video';
+  if (normalizedType.startsWith('text/') || normalizedType.includes('json') || normalizedType.includes('xml')) return 'text';
+  const extension = path.toLowerCase().split('.').pop() ?? '';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'].includes(extension)) return 'image';
+  if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(extension)) return 'audio';
+  if (['mp4', 'webm', 'mov', 'mkv', 'm4v'].includes(extension)) return 'video';
+  if (['txt', 'md', 'markdown', 'json', 'yaml', 'yml', 'toml', 'xml', 'csv', 'tsv', 'js', 'jsx', 'ts', 'tsx', 'py', 'go', 'rs', 'java', 'kt', 'swift', 'css', 'scss', 'html', 'env'].includes(extension)) return 'text';
+  return 'download';
+}
+
+export function isSensitiveWorkspaceFile(path: string) {
+  const filename = path.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? '';
+  const sensitiveNames = new Set([
+    '.env',
+    '.netrc',
+    '.npmrc',
+    '.pypirc',
+    'application_default_credentials.json',
+    'credentials',
+    'credentials.json',
+    'id_ed25519',
+    'id_rsa',
+    'kubeconfig',
+    'secrets.json',
+  ]);
+  return sensitiveNames.has(filename) || filename.startsWith('.env.') || /\.(key|p12|pem|pfx)$/.test(filename);
+}
+
+function shouldStreamWorkspacePreview(capability: WorkspaceFileEntry['preview_capability'] | undefined, path: string) {
+  const normalized = capability === 'markdown' ? 'text' : capability ?? workspacePreviewKind(path);
+  return ['image', 'audio', 'video', 'download'].includes(normalized);
 }
 
 function fileEntryIcon(entry: WorkspaceFileEntry) {
@@ -2129,6 +2193,7 @@ function workspaceFileBlob(file: WorkspaceFileReadResult) {
 }
 
 function workspaceFileDataUrl(file: WorkspaceFileReadResult) {
+  if (file.content_url) return file.content_url;
   if (typeof file.data_base64 === 'string' && file.data_base64) {
     return `data:${file.content_type || 'application/octet-stream'};base64,${file.data_base64}`;
   }
@@ -2437,6 +2502,21 @@ function stripLinkPathDecorations(value: string) {
 
 function normalizeWorkspacePath(value: string) {
   return value.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+}
+
+export function workspaceJobMatchesTarget(
+  job: Job,
+  workerId: string,
+  workspaceRoot: string,
+  workerOs?: string | null,
+) {
+  if (job.worker_id !== workerId) return false;
+  const jobRoot = normalizeWorkspacePath(job.workspace_root ?? '');
+  const targetRoot = normalizeWorkspacePath(workspaceRoot);
+  if (workerOs?.toLowerCase() === 'windows') {
+    return jobRoot.toLowerCase() === targetRoot.toLowerCase();
+  }
+  return jobRoot === targetRoot;
 }
 
 function workspacePathUnderRoot(absolutePath: string, workspaceRoot?: string | null) {
@@ -3227,6 +3307,10 @@ function App() {
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [fileWorkerId, setFileWorkerId] = useState('');
+  const [fileWorkspaceRoot, setFileWorkspaceRoot] = useState('');
+  const [fileWorkspaceView, setFileWorkspaceView] = useState<WorkspaceView>('explorer');
+  const [workspaceJobs, setWorkspaceJobs] = useState<Job[]>([]);
   const [fileEditor, setFileEditor] = useState<FileEditorState | null>(null);
   const [isSavingFileEditor, setIsSavingFileEditor] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -3274,6 +3358,7 @@ function App() {
   const hydratedDraftSessionIdRef = useRef<string | null>(null);
   const hydratedWorkerRuntimeIdRef = useRef<string | null>(null);
   const mobilePaneRef = useRef<MobilePane>('sessions');
+  const fileWorkspaceViewRef = useRef<WorkspaceView>('explorer');
   const notificationInboxOpenRef = useRef(false);
   const launchModeRef = useRef<LaunchMode>('none');
   const workerInstallOpenRef = useRef(false);
@@ -3395,6 +3480,25 @@ function App() {
     [filteredSessions, selectedId, sessions],
   );
   const selectedFastMode = useMemo(() => sessionFastMode(selectedSession), [selectedSession]);
+  const fileWorker = workers.find((worker) => worker.worker_id === fileWorkerId);
+
+  useEffect(() => {
+    if (workers.length === 0) return;
+    const currentWorker = workers.find((worker) => worker.worker_id === fileWorkerId);
+    if (currentWorker) {
+      if (currentWorker.workspace_roots.includes(fileWorkspaceRoot)) return;
+      setFileWorkspaceRoot(currentWorker.workspace_roots[0] ?? '');
+      return;
+    }
+    const preferredWorker =
+      workers.find((worker) => worker.worker_id === selectedSession?.worker_id) ?? workers[0];
+    const preferredRoot =
+      preferredWorker.workspace_roots.find((root) => root === selectedSession?.workspace_root) ??
+      preferredWorker.workspace_roots[0] ??
+      '';
+    setFileWorkerId(preferredWorker.worker_id);
+    setFileWorkspaceRoot(preferredRoot);
+  }, [fileWorkerId, fileWorkspaceRoot, selectedSession?.worker_id, selectedSession?.workspace_root, workers]);
 
   function updateControlsDraft(updater: ControlsDraft | ((current: ControlsDraft) => ControlsDraft)) {
     controlsDirtyRef.current = true;
@@ -3475,6 +3579,11 @@ function App() {
         .filter((job) => job.target_session_id === selectedSession.session_id)
         .sort((left, right) => jobTime(right) - jobTime(left))
     : [];
+  const fileJobs = fileWorker && fileWorkspaceRoot
+    ? workspaceJobs.filter((job) =>
+        workspaceJobMatchesTarget(job, fileWorker.worker_id, fileWorkspaceRoot, fileWorker.os),
+      )
+    : selectedJobs;
   const selectedCancelableJob = selectedSession ? cancellableSessionInputJob(selectedJobs) : null;
   const selectedTimelineWithJobs = useMemo(
     () => mergeTimelineItems(selectedTimeline, jobTimelineItems(selectedSession, selectedJobs, selectedTimeline)),
@@ -3659,6 +3768,7 @@ function App() {
       notificationInboxOpen: overrides.notificationInboxOpen ?? notificationInboxOpenRef.current,
       launchMode: overrides.launchMode ?? launchModeRef.current,
       workerInstallOpen: overrides.workerInstallOpen ?? workerInstallOpenRef.current,
+      fileWorkspaceView: overrides.fileWorkspaceView ?? fileWorkspaceViewRef.current,
       depth: overrides.depth ?? mobileHistoryDepthRef.current,
     };
   }
@@ -3699,12 +3809,14 @@ function App() {
     notificationInboxOpenRef.current = state.notificationInboxOpen;
     launchModeRef.current = state.launchMode;
     workerInstallOpenRef.current = state.workerInstallOpen;
+    fileWorkspaceViewRef.current = state.fileWorkspaceView;
     mobileHistoryDepthRef.current = state.depth;
     setSelectedId(state.selectedId);
     setMobilePane(state.mobilePane);
     setNotificationInboxOpen(state.notificationInboxOpen);
     setLaunchMode(state.launchMode);
     setWorkerInstallOpen(state.workerInstallOpen);
+    setFileWorkspaceView(state.fileWorkspaceView);
     if (state.selectedId) {
       void loadTimelineForSession(state.selectedId).catch(() => setNotice('会话详情同步失败，稍后会自动重试'));
     }
@@ -3804,6 +3916,31 @@ function App() {
         // Some Android WebViews expose Notification but reject construction.
       }
     }
+  }
+
+  function navigateRemoteWorkspace() {
+    setAppMode('session');
+    navigateMobilePane('files');
+  }
+
+  function changeFileWorkspaceView(view: WorkspaceView, push = view === 'preview') {
+    if (view === fileWorkspaceViewRef.current) return;
+    fileWorkspaceViewRef.current = view;
+    setFileWorkspaceView(view);
+    if (push) {
+      pushMobileHistoryState({ mobilePane: 'files', fileWorkspaceView: view });
+      return;
+    }
+    replaceMobileHistoryState({ mobilePane: 'files', fileWorkspaceView: view });
+  }
+
+  function returnToFileExplorer() {
+    const state = readMobileHistoryState(window.history.state);
+    if (fileWorkspaceViewRef.current === 'preview' && state && state.depth > 0) {
+      window.history.back();
+      return;
+    }
+    changeFileWorkspaceView('explorer', false);
   }
 
   function rememberDeliveredNotificationIds(ids: string[]) {
@@ -4419,6 +4556,10 @@ function App() {
   useEffect(() => {
     mobilePaneRef.current = mobilePane;
   }, [mobilePane]);
+
+  useEffect(() => {
+    fileWorkspaceViewRef.current = fileWorkspaceView;
+  }, [fileWorkspaceView]);
 
   useEffect(() => {
     notificationInboxOpenRef.current = notificationInboxOpen;
@@ -5970,6 +6111,30 @@ function App() {
     return latestPayload?.jobs.find((job) => job.job_id === jobId) ?? null;
   }
 
+  function rememberWorkspaceJob(nextJob: Job) {
+    setWorkspaceJobs((current) => {
+      const existingIndex = current.findIndex((job) => job.job_id === nextJob.job_id);
+      if (existingIndex < 0) return [nextJob, ...current];
+      return current.map((job, index) => (index === existingIndex ? { ...job, ...nextJob } : job));
+    });
+  }
+
+  async function waitForWorkspaceJobCompletion(jobId: string, options?: { attempts?: number; delayMs?: number }) {
+    const attempts = options?.attempts ?? 20;
+    const delayMs = options?.delayMs ?? 300;
+    let matched: Job | null = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const payload = await apiGet<{ job: Job }>(`/api/jobs/${jobId}`);
+      matched = payload.job;
+      rememberWorkspaceJob(matched);
+      if (!['queued', 'running'].includes(matched.status)) return matched;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      }
+    }
+    return matched;
+  }
+
   async function refreshSelectedSessionFastMode(options?: { silent?: boolean; force?: boolean }) {
     if (!selectedSession || !canOperate(user)) return;
     if (selectedSession.backend.toLowerCase() !== 'codex') return;
@@ -6228,15 +6393,29 @@ function App() {
       successNotice?: string;
       attempts?: number;
       delayMs?: number;
+      target?: WorkspaceFileTarget | null;
     },
   ) {
-    if (!selectedSession || !canOperate(user)) return null;
-    const response = await apiPost<{ job: Job }>(endpoint, body, csrfToken);
+    if (!canOperate(user)) return null;
+    const target = options.target ?? activeWorkspaceFileTarget();
+    if (!target) return null;
+    const operation = endpoint.split('/').pop() ?? '';
+    const requestEndpoint = target.direct ? `/api/workspaces/files/${operation}` : endpoint;
+    const requestBody = target.direct
+      ? { worker_id: target.workerId, workspace_root: target.workspaceRoot, ...body }
+      : body;
+    const response = await apiPost<{ job: Job }>(requestEndpoint, requestBody, csrfToken);
+    if (target.direct) rememberWorkspaceJob(response.job);
     setNotice(options.startNotice);
-    const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id, {
-      attempts: options.attempts ?? 20,
-      delayMs: options.delayMs ?? 300,
-    });
+    const finished = target.direct
+      ? await waitForWorkspaceJobCompletion(response.job.job_id, {
+          attempts: options.attempts ?? 20,
+          delayMs: options.delayMs ?? 300,
+        })
+      : await waitForSessionJobCompletion(target.sessionId || '', response.job.job_id, {
+          attempts: options.attempts ?? 20,
+          delayMs: options.delayMs ?? 300,
+        });
     if (finished?.status === 'failed') {
       throw new Error(finished.error_text || '未知错误');
     }
@@ -6248,40 +6427,129 @@ function App() {
     return parseJobResult<T>(finished);
   }
 
+  function activeWorkspaceFileTarget(): WorkspaceFileTarget | null {
+    if (fileWorker && fileWorkspaceRoot) {
+      return {
+        workerId: fileWorker.worker_id,
+        workspaceRoot: fileWorkspaceRoot,
+        direct: true,
+      };
+    }
+    if (!selectedSession) return null;
+    return {
+      workerId: selectedSession.worker_id,
+      workspaceRoot: selectedSession.workspace_root,
+      sessionId: selectedSession.session_id,
+      direct: false,
+    };
+  }
+
+  function handleFileWorkerChange(workerId: string) {
+    const worker = workers.find((item) => item.worker_id === workerId);
+    setFileWorkerId(workerId);
+    setFileWorkspaceRoot(worker?.workspace_roots[0] ?? '');
+    setWorkspaceJobs([]);
+    setFileEditor(null);
+    changeFileWorkspaceView('explorer', false);
+  }
+
+  function handleFileWorkspaceRootChange(workspaceRoot: string) {
+    setFileWorkspaceRoot(workspaceRoot);
+    setWorkspaceJobs([]);
+    setFileEditor(null);
+    changeFileWorkspaceView('explorer', false);
+  }
+
   async function handleFileList(path = '.') {
-    if (!selectedSession || !canOperate(user)) return;
+    if (!activeWorkspaceFileTarget() || !canOperate(user)) return;
     try {
-      const response = await apiPost<{ job: Job }>(
-        `/api/sessions/${selectedSession.session_id}/files/list`,
+      await runWorkspaceJob<WorkspaceFileListResult>(
+        `/api/sessions/${selectedSession?.session_id ?? ''}/files/list`,
         { path },
-        csrfToken,
+        {
+          startNotice: path === '.' ? t(locale, 'syncingWorkspaceFiles') : t(locale, 'openingPath', { path }),
+          queuedNotice: pickLocale(locale, '文件列表已入队，稍后自动同步', 'File list queued and will sync shortly'),
+          successNotice: path === '.' ? t(locale, 'workspaceFilesUpdated') : t(locale, 'pathExpanded', { path }),
+        },
       );
-      setNotice(path === '.' ? t(locale, 'syncingWorkspaceFiles') : t(locale, 'openingPath', { path }));
-      const finished = await waitForSessionJobCompletion(selectedSession.session_id, response.job.job_id);
-      if (finished?.status === 'failed') {
-        setNotice(pickLocale(locale, `文件列表失败：${finished.error_text || '未知错误'}`, `File list failed: ${finished.error_text || 'Unknown error'}`));
-        return;
-      }
-      if (!finished || ['queued', 'running'].includes(finished.status)) {
-        setNotice(pickLocale(locale, '文件列表已入队，稍后自动同步', 'File list queued and will sync shortly'));
-        return;
-      }
-      setNotice(path === '.' ? t(locale, 'workspaceFilesUpdated') : t(locale, 'pathExpanded', { path }));
     } catch (error) {
       setNotice(pickLocale(locale, `文件列表失败：${error instanceof Error ? error.message : '未知错误'}`, `File list failed: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   }
 
-  async function handleFileRead(path: string) {
-    if (!selectedSession || !canOperate(user)) return;
+  async function handleFileRead(
+    path: string,
+    target?: WorkspaceFileTarget | null,
+    previewCapability?: WorkspaceFileEntry['preview_capability'],
+  ) {
+    const resolvedTarget = target ?? activeWorkspaceFileTarget();
+    if (!resolvedTarget || !canOperate(user)) return;
+    const revealSensitive = isSensitiveWorkspaceFile(path);
+    if (
+      revealSensitive &&
+      !window.confirm(
+        pickLocale(
+          locale,
+          `“${path}”可能包含密钥或凭据。确认仅在当前预览中打开？`,
+          `“${path}” may contain keys or credentials. Open it for this preview?`,
+        ),
+      )
+    ) {
+      return;
+    }
+    const targetWorker = workers.find((worker) => worker.worker_id === resolvedTarget.workerId);
+    const canStream =
+      resolvedTarget.direct &&
+      targetWorker?.capabilities?.file_transfer_v2 === true &&
+      shouldStreamWorkspacePreview(previewCapability, path);
     try {
+      if (canStream) {
+        let response: { transfer: { transfer_id: string }; job: Job };
+        try {
+          response = await apiPost<{ transfer: { transfer_id: string }; job: Job }>(
+            '/api/workspaces/files/transfers',
+            {
+              worker_id: resolvedTarget.workerId,
+              workspace_root: resolvedTarget.workspaceRoot,
+              path,
+              ...(revealSensitive ? { reveal_sensitive: true } : {}),
+            },
+            csrfToken,
+          );
+        } catch (error) {
+          const apiError = error as { status?: number; code?: string | null };
+          if (apiError.code !== 'TRANSFER_UNSUPPORTED' && apiError.status !== 404) throw error;
+          await runWorkspaceJob<WorkspaceFileReadResult>(
+            `/api/sessions/${resolvedTarget.sessionId ?? selectedSession?.session_id ?? ''}/files/read`,
+            { path, max_bytes: 512_000, ...(revealSensitive ? { reveal_sensitive: true } : {}) },
+            {
+              startNotice: `正在读取 ${path}`,
+              queuedNotice: `文件读取已入队：${path}`,
+              successNotice: `文件已就绪：${path}`,
+              target: resolvedTarget,
+            },
+          );
+          return;
+        }
+        rememberWorkspaceJob(response.job);
+        setNotice(`正在准备 ${path}`);
+        const finished = await waitForWorkspaceJobCompletion(response.job.job_id, { attempts: 30, delayMs: 300 });
+        if (finished?.status === 'failed') throw new Error(finished.error_text || '文件传输失败');
+        if (!finished || ['queued', 'running'].includes(finished.status)) {
+          setNotice(`文件仍在准备：${path}`);
+          return;
+        }
+        setNotice(`文件已就绪：${path}`);
+        return;
+      }
       await runWorkspaceJob<WorkspaceFileReadResult>(
-        `/api/sessions/${selectedSession.session_id}/files/read`,
-        { path, max_bytes: 5_000_000 },
+        `/api/sessions/${resolvedTarget.sessionId ?? selectedSession?.session_id ?? ''}/files/read`,
+        { path, max_bytes: 512_000, ...(revealSensitive ? { reveal_sensitive: true } : {}) },
         {
           startNotice: `正在读取 ${path}`,
           queuedNotice: `文件读取已入队：${path}`,
           successNotice: `文件已就绪：${path}`,
+          target: resolvedTarget,
         },
       );
     } catch (error) {
@@ -6293,8 +6561,25 @@ function App() {
     if (!selectedSession || !canOperate(user)) return false;
     const path = workspaceFilePathFromLink(href, selectedSession.workspace_root);
     if (!path) return false;
+    const matchingWorker = workers.find((worker) => worker.worker_id === selectedSession.worker_id);
+    const target: WorkspaceFileTarget = matchingWorker
+      ? {
+          workerId: matchingWorker.worker_id,
+          workspaceRoot: selectedSession.workspace_root,
+          direct: true,
+        }
+      : {
+          workerId: selectedSession.worker_id,
+          workspaceRoot: selectedSession.workspace_root,
+          sessionId: selectedSession.session_id,
+          direct: false,
+        };
+    setFileWorkerId(target.workerId);
+    setFileWorkspaceRoot(target.workspaceRoot);
+    setWorkspaceJobs([]);
     navigateMobilePane('files', selectedSession.session_id);
-    void handleFileRead(path);
+    changeFileWorkspaceView('preview', true);
+    void handleFileRead(path, target);
     return true;
   }
 
@@ -6311,25 +6596,29 @@ function App() {
       setNotice('超过 1 MB 的文本先下载到本地编辑更稳');
       return;
     }
+    const target = activeWorkspaceFileTarget();
+    if (!target) return;
     setFileEditor({
       path: file.path,
       filename: file.filename,
       text: file.text || '',
       expectedModifiedAt: file.modified_at,
+      target,
     });
   }
 
-  async function handleFileWrite(path: string, textValue: string, expectedModifiedAt?: string | null) {
-    if (!selectedSession || !canOperate(user) || isSavingFileEditor) return false;
+  async function handleFileWrite(path: string, textValue: string, expectedModifiedAt?: string | null, target?: WorkspaceFileTarget | null) {
+    if (!(target ?? activeWorkspaceFileTarget()) || !canOperate(user) || isSavingFileEditor) return false;
     setIsSavingFileEditor(true);
     try {
       const saved = await runWorkspaceJob<WorkspaceFileReadResult>(
-        `/api/sessions/${selectedSession.session_id}/files/write`,
+        `/api/sessions/${target?.sessionId ?? selectedSession?.session_id ?? ''}/files/write`,
         { path, text: textValue, expected_modified_at: expectedModifiedAt ?? null },
         {
           startNotice: `正在保存 ${path}`,
           queuedNotice: `保存已入队：${path}`,
           successNotice: `已保存 ${path}`,
+          target,
         },
       );
       if (!saved) return false;
@@ -6339,6 +6628,7 @@ function App() {
           filename: saved.filename,
           text: saved.text,
           expectedModifiedAt: saved.modified_at,
+          target: target ?? activeWorkspaceFileTarget()!,
         });
       }
       return true;
@@ -6351,11 +6641,55 @@ function App() {
   }
 
   async function handleFileUpload(path: string, file: File, overwrite = false) {
-    if (!selectedSession || !canOperate(user)) return null;
-    const upload = await fileToWorkspaceUploadPayload(file);
+    const target = activeWorkspaceFileTarget();
+    if (!target || !canOperate(user)) return null;
+    const filename = file.name || 'upload.bin';
+    const contentType = inferReplyAttachmentContentType(file) || 'application/octet-stream';
+    const targetWorker = workers.find((worker) => worker.worker_id === target.workerId);
+    const canStream = target.direct && targetWorker?.capabilities?.file_transfer_v2 === true;
     try {
+      if (canStream) {
+        try {
+          const created = await apiPost<{
+            transfer: { transfer_id: string; content_url?: string };
+          }>(
+            '/api/workspaces/files/upload-transfers',
+            {
+              worker_id: target.workerId,
+              workspace_root: target.workspaceRoot,
+              path,
+              filename,
+              content_type: contentType,
+              overwrite,
+            },
+            csrfToken,
+          );
+          const contentUrl = created.transfer.content_url || `/api/workspaces/files/transfers/${created.transfer.transfer_id}/content`;
+          setNotice(`正在上传 ${filename}`);
+          const uploaded = await apiPutRaw<{ transfer: { transfer_id: string }; job: Job }>(
+            contentUrl,
+            file,
+            contentType,
+            csrfToken,
+          );
+          rememberWorkspaceJob(uploaded.job);
+          const finished = await waitForWorkspaceJobCompletion(uploaded.job.job_id, { attempts: 30, delayMs: 350 });
+          if (finished?.status === 'failed') throw new Error(finished.error_text || '文件写入失败');
+          if (!finished || ['queued', 'running'].includes(finished.status)) {
+            setNotice(`上传已入队：${filename}`);
+            return null;
+          }
+          const saved = parseJobResult<WorkspaceFileMutationResult>(finished);
+          setNotice(`已上传 ${filename}`);
+          return saved;
+        } catch (error) {
+          const apiError = error as { status?: number; code?: string | null };
+          if (apiError.code !== 'TRANSFER_UNSUPPORTED' && apiError.status !== 404) throw error;
+        }
+      }
+      const upload = await fileToWorkspaceUploadPayload(file);
       const saved = await runWorkspaceJob<WorkspaceFileMutationResult>(
-        `/api/sessions/${selectedSession.session_id}/files/upload`,
+        `/api/sessions/${selectedSession?.session_id ?? ''}/files/upload`,
         { path, ...upload, overwrite },
         {
           startNotice: `正在上传 ${upload.filename}`,
@@ -6373,10 +6707,10 @@ function App() {
   }
 
   async function handleFileCreate(path: string, textValue = '', overwrite = false) {
-    if (!selectedSession || !canOperate(user)) return null;
+    if (!activeWorkspaceFileTarget() || !canOperate(user)) return null;
     try {
       const created = await runWorkspaceJob<WorkspaceFileMutationResult>(
-        `/api/sessions/${selectedSession.session_id}/files/create`,
+        `/api/sessions/${selectedSession?.session_id ?? ''}/files/create`,
         { path, text: textValue, overwrite },
         {
           startNotice: `正在新建 ${path}`,
@@ -6392,10 +6726,10 @@ function App() {
   }
 
   async function handleFileMkdir(path: string) {
-    if (!selectedSession || !canOperate(user)) return null;
+    if (!activeWorkspaceFileTarget() || !canOperate(user)) return null;
     try {
       const created = await runWorkspaceJob<WorkspaceFileMutationResult>(
-        `/api/sessions/${selectedSession.session_id}/files/mkdir`,
+        `/api/sessions/${selectedSession?.session_id ?? ''}/files/mkdir`,
         { path },
         {
           startNotice: `正在创建目录 ${path}`,
@@ -6411,10 +6745,10 @@ function App() {
   }
 
   async function handleFileRename(path: string, newPath: string, expectedModifiedAt?: string | null) {
-    if (!selectedSession || !canOperate(user)) return null;
+    if (!activeWorkspaceFileTarget() || !canOperate(user)) return null;
     try {
       const renamed = await runWorkspaceJob<WorkspaceFileMutationResult>(
-        `/api/sessions/${selectedSession.session_id}/files/rename`,
+        `/api/sessions/${selectedSession?.session_id ?? ''}/files/rename`,
         { path, new_path: newPath, expected_modified_at: expectedModifiedAt ?? null },
         {
           startNotice: `正在重命名 ${path}`,
@@ -6430,6 +6764,17 @@ function App() {
   }
 
   function handleDownloadWorkspaceFile(file: WorkspaceFileReadResult) {
+    if (file.content_url) {
+      const anchor = document.createElement('a');
+      anchor.href = file.content_url;
+      anchor.download = file.filename || file.path.split('/').pop() || 'agenthub-file';
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setNotice(`已开始下载 ${file.filename || file.path}`);
+      return;
+    }
     const blob = workspaceFileBlob(file);
     if (!blob) {
       setNotice('这个文件当前还不能直接下载');
@@ -6797,6 +7142,15 @@ function App() {
           </button>
         </div>
         <div className="topbar-actions">
+          <button
+            className="icon-button desktop-workspace-action"
+            type="button"
+            aria-label={pickLocale(locale, '远程工作区', 'Remote workspace')}
+            title={pickLocale(locale, '远程工作区', 'Remote workspace')}
+            onClick={navigateRemoteWorkspace}
+          >
+            <Folder size={17} />
+          </button>
           <button
             className="icon-button primary-top-action"
             type="button"
@@ -8105,15 +8459,23 @@ function App() {
         {mobilePane === 'files' && (
         <MobileFilesPane
           session={selectedSession}
-          jobs={selectedJobs}
+          workers={workers}
+          workerId={fileWorkerId}
+          workspaceRoot={fileWorkspaceRoot || selectedSession?.workspace_root || ''}
+          workspaceView={fileWorkspaceView}
+          jobs={fileJobs}
           attachments={replyAttachments}
           locale={locale}
+          onWorkerChange={handleFileWorkerChange}
+          onWorkspaceRootChange={handleFileWorkspaceRootChange}
+          onWorkspaceViewChange={changeFileWorkspaceView}
+          onWorkspaceBack={returnToFileExplorer}
           onCopyPath={(value) => void copyTextToClipboard(value, 'file path 已复制')}
           onCopyText={(value) => void copyTextToClipboard(value, '文件内容已复制')}
           onDownload={handleDownloadWorkspaceFile}
           onEdit={handleOpenFileEditor}
           onList={(path) => void handleFileList(path)}
-          onRead={(path) => void handleFileRead(path)}
+          onRead={(path, capability) => void handleFileRead(path, undefined, capability)}
           onUpload={(path, file, overwrite) => handleFileUpload(path, file, overwrite)}
           onCreate={(path, text, overwrite) => handleFileCreate(path, text, overwrite)}
           onMkdir={(path) => handleFileMkdir(path)}
@@ -8403,7 +8765,7 @@ function App() {
           state={fileEditor}
           saving={isSavingFileEditor}
           onClose={() => setFileEditor(null)}
-          onSave={(nextText) => handleFileWrite(fileEditor.path, nextText, fileEditor.expectedModifiedAt)}
+          onSave={(nextText) => handleFileWrite(fileEditor.path, nextText, fileEditor.expectedModifiedAt, fileEditor.target)}
         />
       )}
     </main>
@@ -8470,9 +8832,17 @@ function NotificationInbox({
 
 function MobileFilesPane({
   session,
+  workers,
+  workerId,
+  workspaceRoot,
+  workspaceView,
   jobs,
   attachments,
   locale,
+  onWorkerChange,
+  onWorkspaceRootChange,
+  onWorkspaceViewChange,
+  onWorkspaceBack,
   onCopyPath,
   onCopyText,
   onDownload,
@@ -8485,21 +8855,30 @@ function MobileFilesPane({
   onRename,
 }: {
   session?: AgentSession | null;
+  workers: Worker[];
+  workerId: string;
+  workspaceRoot: string;
+  workspaceView: WorkspaceView;
   jobs: Job[];
   attachments?: ReplyAttachment[];
   locale: LocaleCode;
+  onWorkerChange: (workerId: string) => void;
+  onWorkspaceRootChange: (workspaceRoot: string) => void;
+  onWorkspaceViewChange: (view: WorkspaceView, push?: boolean) => void;
+  onWorkspaceBack: () => void;
   onCopyPath: (value: string) => void;
   onCopyText: (value: string) => void;
   onDownload: (file: WorkspaceFileReadResult) => void;
   onEdit: (file: WorkspaceFileReadResult) => void;
   onList: (path: string) => void;
-  onRead: (path: string) => void;
+  onRead: (path: string, capability?: WorkspaceFileEntry['preview_capability']) => void;
   onUpload: (path: string, file: File, overwrite?: boolean) => Promise<WorkspaceFileMutationResult | null>;
   onCreate: (path: string, text: string, overwrite?: boolean) => Promise<WorkspaceFileMutationResult | null>;
   onMkdir: (path: string) => Promise<WorkspaceFileMutationResult | null>;
   onRename: (path: string, newPath: string, expectedModifiedAt?: string | null) => Promise<WorkspaceFileMutationResult | null>;
 }) {
-  const workspaceRoot = session?.workspace_root || '';
+  const selectedFileWorker = workers.find((worker) => worker.worker_id === workerId);
+  const workspaceRoots = selectedFileWorker?.workspace_roots ?? (workspaceRoot ? [workspaceRoot] : []);
   const listResult = fileListResult(jobs);
   const readResult = fileReadResult(jobs);
   const busy = fileJobBusy(jobs);
@@ -8538,6 +8917,22 @@ function MobileFilesPane({
     setRecentPaths((current) => [readResult.path, ...current.filter((item) => item !== readResult.path)].slice(0, 8));
     if (!isMarkdownWorkspaceFile(readResult)) setMarkdownPreview(true);
   }, [readResult?.path, readResult?.filename, readResult?.modified_at]);
+
+  useEffect(() => {
+    onWorkspaceViewChange('explorer', false);
+    setQuery('');
+    setDetailsTarget(null);
+  }, [workerId, workspaceRoot]);
+
+  function openDirectory(path: string) {
+    onWorkspaceViewChange('explorer', false);
+    onList(path);
+  }
+
+  function openFile(path: string, capability?: WorkspaceFileEntry['preview_capability']) {
+    onWorkspaceViewChange('preview', true);
+    onRead(path, capability);
+  }
 
   function openDetailsForEntry(entry: WorkspaceFileEntry) {
     setDetailsTarget({
@@ -8578,7 +8973,7 @@ function MobileFilesPane({
     if (!created?.path) return;
     setShowCreateFile(false);
     onList(currentPath);
-    onRead(created.path);
+    openFile(created.path);
   }
 
   async function handleCreateFolderSubmit(event: FormEvent<HTMLFormElement>) {
@@ -8606,7 +9001,7 @@ function MobileFilesPane({
     setShowRename(false);
     setDetailsTarget(null);
     onList(parent === '.' ? '.' : parent);
-    if (detailsTarget.kind === 'file') onRead(renamed.path);
+    if (detailsTarget.kind === 'file') openFile(renamed.path);
   }
 
   async function handleUploadInput(event: ChangeEvent<HTMLInputElement>) {
@@ -8623,16 +9018,47 @@ function MobileFilesPane({
       <input ref={fileInputRef} type="file" hidden onChange={handleUploadInput} />
       <div className="mobile-panel-head">
         <div>
-          <p>{session ? sessionTitle(session) : t(locale, 'currentNoSession')}</p>
+          <p>{selectedFileWorker?.machine_name || selectedFileWorker?.worker_id || (session ? sessionTitle(session) : t(locale, 'currentNoSession'))}</p>
           <h2>{t(locale, 'fileBrowser')}</h2>
         </div>
-        <button type="button" className={`native-icon-button ${busy ? 'loading' : ''}`} disabled={!session} onClick={() => onList(currentPath)}>
+        <button type="button" className={`native-icon-button ${busy ? 'loading' : ''}`} disabled={!workspaceRoot} onClick={() => onList(currentPath)} aria-label={pickLocale(locale, '刷新文件', 'Refresh files')}>
           <RefreshCw size={18} />
         </button>
       </div>
       <div className="file-context-card">
-        <span>{t(locale, 'workspace')}</span>
-        <code>{workspaceRoot || t(locale, 'workspaceUnbound')}</code>
+        {workers.length > 0 && (
+          <div className="file-target-grid">
+            <label>
+              <span>{pickLocale(locale, '文件 Worker', 'File worker')}</span>
+              <select aria-label={pickLocale(locale, '文件 Worker', 'File worker')} value={workerId} onChange={(event) => onWorkerChange(event.target.value)}>
+                {workers.map((worker) => (
+                  <option key={worker.worker_id} value={worker.worker_id}>
+                    {worker.machine_name || worker.worker_id} · {worker.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>{pickLocale(locale, '工作区根目录', 'Workspace root')}</span>
+              <select
+                aria-label={pickLocale(locale, '工作区根目录', 'Workspace root')}
+                value={workspaceRoot}
+                disabled={workspaceRoots.length === 0}
+                onChange={(event) => onWorkspaceRootChange(event.target.value)}
+              >
+                {workspaceRoots.map((root) => (
+                  <option key={root} value={root}>{root}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+        {workers.length === 0 && (
+          <>
+            <span>{t(locale, 'workspace')}</span>
+            <code>{workspaceRoot || t(locale, 'workspaceUnbound')}</code>
+          </>
+        )}
         <div className="file-toolbar">
           <button
             type="button"
@@ -8644,24 +9070,32 @@ function MobileFilesPane({
             <Copy size={13} />
             {t(locale, 'copyPath')}
           </button>
-          <button type="button" className="message-action-button" disabled={!session} onClick={() => onList('.')}>
+          <button
+            type="button"
+            className="message-action-button"
+            aria-label={pickLocale(locale, '浏览工作区', 'Browse workspace')}
+            disabled={!workspaceRoot}
+            onClick={() => openDirectory('.')}
+          >
             <Folder size={13} />
             {t(locale, 'browseWorkspace')}
           </button>
-          <button type="button" className="message-action-button" disabled={!session} onClick={() => setShowCreateFile(true)}>
+          <button type="button" className="message-action-button" disabled={!workspaceRoot} onClick={() => setShowCreateFile(true)}>
             <Plus size={13} />
             {pickLocale(locale, '新建文件', 'New file')}
           </button>
-          <button type="button" className="message-action-button" disabled={!session} onClick={() => setShowCreateFolder(true)}>
+          <button type="button" className="message-action-button" disabled={!workspaceRoot} onClick={() => setShowCreateFolder(true)}>
             <Folder size={13} />
             {pickLocale(locale, '新建文件夹', 'New folder')}
           </button>
-          <button type="button" className="message-action-button" disabled={!session} onClick={() => fileInputRef.current?.click()}>
+          <button type="button" className="message-action-button" disabled={!workspaceRoot} onClick={() => fileInputRef.current?.click()}>
             <Download size={13} />
             {pickLocale(locale, '上传文件', 'Upload file')}
           </button>
         </div>
       </div>
+      <div className={`remote-workspace-layout view-${workspaceView}`}>
+      <div className="remote-workspace-explorer">
       <div className="file-browser-card">
         <div className="file-browser-title">
           <span>{currentPath === '.' ? t(locale, 'workspaceRoot') : currentPath}</span>
@@ -8678,7 +9112,7 @@ function MobileFilesPane({
           />
         </label>
         {parentPath && (
-          <button type="button" className="message-action-button" onClick={() => onList(parentPath)}>
+          <button type="button" className="message-action-button" onClick={() => openDirectory(parentPath)}>
             <RotateCcw size={13} />
             {t(locale, 'goParent')}
           </button>
@@ -8693,7 +9127,7 @@ function MobileFilesPane({
               type="button"
               className="file-row-main"
               aria-label={entry.kind === 'directory' ? t(locale, 'enterDirectory', { name: entry.name }) : t(locale, 'previewFile', { name: entry.name })}
-              onClick={() => (entry.kind === 'directory' ? onList(entry.path) : onRead(entry.path))}
+              onClick={() => (entry.kind === 'directory' ? openDirectory(entry.path) : openFile(entry.path, entry.preview_capability))}
             >
               <EntryIcon size={17} />
               <span>
@@ -8720,7 +9154,7 @@ function MobileFilesPane({
             <small>{pickLocale(locale, '最近打开', 'Recent')}</small>
             <div className="file-recent-chips">
               {recentPaths.map((path) => (
-                <button key={path} type="button" className="file-recent-chip" onClick={() => onRead(path)}>
+                <button key={path} type="button" className="file-recent-chip" onClick={() => openFile(path)}>
                   {path.split('/').pop() || path}
                 </button>
               ))}
@@ -8728,9 +9162,19 @@ function MobileFilesPane({
           </div>
         )}
       </div>
-      {readResult && (
+      </div>
+      <div className="remote-workspace-preview">
+      {readResult ? (
         <div className="file-preview-card">
           <div className="file-preview-head">
+            <button
+              type="button"
+              className="native-icon-button small file-mobile-back"
+              aria-label={pickLocale(locale, '返回文件列表', 'Back to files')}
+                onClick={onWorkspaceBack}
+            >
+              <ArrowLeft size={15} />
+            </button>
             <span>
               <strong>{readResult.filename || readResult.path}</strong>
               <small>
@@ -8810,7 +9254,15 @@ function MobileFilesPane({
           )}
           {readResult.preview_kind === 'download' && <p className="empty">{t(locale, 'nonTextDownload')}</p>}
         </div>
+      ) : (
+        <div className="file-preview-card remote-workspace-empty-preview">
+          <FileText size={24} />
+          <strong>{pickLocale(locale, '选择文件查看内容', 'Select a file to preview')}</strong>
+          <small>{pickLocale(locale, '图片、Markdown、文本和媒体会在这里打开。', 'Images, Markdown, text, and media open here.')}</small>
+        </div>
       )}
+      </div>
+      </div>
       {attachments && attachments.length > 0 && (
         <div className="mobile-panel-card attached-file-card">
           <strong>{t(locale, 'pendingAttachments')}</strong>
@@ -8853,7 +9305,7 @@ function MobileFilesPane({
                   className="message-action-button"
                   onClick={() => {
                     setDetailsTarget(null);
-                    onRead(detailsTarget.path);
+                    openFile(detailsTarget.path);
                   }}
                 >
                   <FileText size={13} />

@@ -910,7 +910,11 @@ def read_session_file(
         backend=session.backend,
         workspace_root=session.workspace_root,
         namespace=session.namespace,
-        payload={"path": payload.path.strip(), "max_bytes": payload.max_bytes},
+        payload={
+            "path": payload.path.strip(),
+            "max_bytes": payload.max_bytes,
+            **({"reveal_sensitive": True} if payload.reveal_sensitive else {}),
+        },
     )
     write_event(
         db,
@@ -920,7 +924,12 @@ def read_session_file(
         source_type="job",
         source_id=job.job_id,
         event_type="file.read",
-        payload={"session_id": session.session_id, "path": payload.path, "max_bytes": payload.max_bytes},
+        payload={
+            "session_id": session.session_id,
+            "path": payload.path,
+            "max_bytes": payload.max_bytes,
+            **({"reveal_sensitive": True} if payload.reveal_sensitive else {}),
+        },
     )
     db.commit()
     return {"job": job_out(job)}

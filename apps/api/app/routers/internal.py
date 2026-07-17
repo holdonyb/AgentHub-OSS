@@ -28,6 +28,8 @@ SIDECAR_JOB_KINDS = {
     "file_create",
     "file_mkdir",
     "file_rename",
+    "file_transfer_prepare",
+    "file_transfer_apply",
     "session_btw",
     "session_fast_state_refresh",
     "session_fast_toggle",

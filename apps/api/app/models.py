@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -416,6 +416,31 @@ class Job(Base):
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
+class FileTransfer(Base):
+    __tablename__ = "file_transfers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("xfr"))
+    transfer_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, default=lambda: new_id("xfr"))
+    space_id: Mapped[str | None] = mapped_column(ForeignKey("spaces.space_id"), nullable=True, index=True)
+    worker_id: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
+    workspace_root: Mapped[str] = mapped_column(Text, nullable=False)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    direction: Mapped[str] = mapped_column(String(24), default="download", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    filename: Mapped[str] = mapped_column(String(240), default="", nullable=False)
+    content_type: Mapped[str] = mapped_column(String(160), default="application/octet-stream", nullable=False)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    source_modified_at: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    overwrite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    temp_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

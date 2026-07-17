@@ -60,6 +60,24 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.mobile-mode-trigger\s*{[^}]*max-width:\s*100%[^}]*overflow:\s*hidden/s);
   });
 
+  it('keeps tablet and foldable topbars compact before the phone layout takes over', () => {
+    expect(styles).toMatch(/@media \(min-width:\s*761px\) and \(max-width:\s*1100px\)\s*{[\s\S]*?\.topbar\s*{[^}]*padding:\s*0 12px/s);
+    expect(styles).toMatch(/@media \(min-width:\s*761px\) and \(max-width:\s*1100px\)\s*{[\s\S]*?\.topbar \.sync-chip,[\s\S]*?\.topbar \.role-chip,[\s\S]*?\.topbar \.theme-switch-button,[\s\S]*?\.topbar-actions > \.icon-button:last-child\s*{[^}]*display:\s*none/s);
+    expect(styles).toMatch(/@media \(min-width:\s*761px\) and \(max-width:\s*1100px\)\s*{[\s\S]*?\.topbar \.primary-top-action span,[\s\S]*?\.topbar \.refresh-button span\s*{[^}]*display:\s*none/s);
+  });
+
+  it('gives remote workspace commands phone-sized touch targets on compact screens', () => {
+    expect(styles).toMatch(/@media \(max-width:\s*1100px\)\s*{[\s\S]*?\.file-toolbar \.message-action-button\s*{[^}]*min-height:\s*40px/s);
+  });
+
+  it('keeps remote workspace surfaces on the active tonal theme at every viewport', () => {
+    expect(styles).toMatch(/\.file-context-card,[\s\S]*?\.worker-diagnostic-card\s*{[^}]*border:\s*1px solid var\(--ah-border[^}]*background:\s*var\(--ah-surface[^}]*color:\s*var\(--ah-text/s);
+    expect(styles).toMatch(/\.file-browser-card,[\s\S]*?\.file-preview-card\s*{[^}]*border:\s*1px solid var\(--ah-border[^}]*background:\s*var\(--ah-surface[^}]*color:\s*var\(--ah-text/s);
+    expect(styles).toMatch(/\.file-search-row\s*{[^}]*border:\s*1px solid var\(--ah-border[^}]*background:\s*var\(--ah-surface-soft/s);
+    expect(styles).toMatch(/\.file-browser-title span,[\s\S]*?\.file-preview-title\s*{[^}]*color:\s*var\(--ah-text/s);
+    expect(styles).toMatch(/\.file-browser-title small,[\s\S]*?\.file-preview-summary\s*{[^}]*color:\s*var\(--ah-muted/s);
+  });
+
   it('restores dark selected states for mobile reply and question controls', () => {
     expect(styles).toMatch(/\.reply-mode-tabs button\s*{[^}]*background:\s*#1b2736[^}]*color:\s*#d6e0ec/s);
     expect(styles).toMatch(/\.reply-mode-tabs button\.selected\s*{[^}]*background:\s*rgba\(90,\s*167,\s*255,\s*0\.2\)[^}]*color:\s*#dcebff/s);
@@ -176,5 +194,12 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.rich-preview h1,\s*\n\.rich-preview h2,\s*\n\.rich-preview h3\s*{[^}]*font-weight:\s*800/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview code,\s*\n\.app-shell\.theme-dark \.rich-preview pre\s*{[^}]*background:\s*#0a1018/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.rich-preview th,\s*\n\.app-shell\.theme-dark \.rich-preview td\s*{[^}]*border-color:\s*rgba\(91,\s*141,\s*184,\s*0\.18\)/s);
+  });
+
+  it('uses one Files navigation stack on phones and a list-detail workspace on larger screens', () => {
+    expect(styles).toMatch(/\.remote-workspace-layout\s*{[^}]*display:\s*grid/s);
+    expect(styles).toMatch(/@media \(min-width:\s*761px\)[\s\S]*?\.remote-workspace-layout\s*{[^}]*grid-template-columns:\s*minmax\(280px,\s*0\.85fr\) minmax\(0,\s*1\.4fr\)/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.remote-workspace-layout\.view-preview \.remote-workspace-explorer\s*{[^}]*display:\s*none/s);
+    expect(styles).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.remote-workspace-layout\.view-explorer \.remote-workspace-preview\s*{[^}]*display:\s*none/s);
   });
 });

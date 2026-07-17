@@ -44,6 +44,29 @@ The reverse proxy must set:
 - forwarded headers
 - access logs
 
+## Remote Workspace File Security
+
+Remote Workspace file access remains an operator action scoped to the active space, selected worker, and one of that worker's registered workspace roots. Workers resolve the requested path under the registered root and reject traversal and symlink escape. Streamed transfers are additionally bound to their worker and expiry and are carried over the worker's existing outbound authenticated HTTPS channel; no SSH service or direct client-to-worker connection is introduced.
+
+### Temporary bodies and low-cache behavior
+
+- Transfer metadata, hashes, sizes, and audit state are stored in the database. File bodies are staged under `AGENTHUB_FILE_TRANSFER_DIR`, not in the transfer row.
+- Upload body acceptance is single-use. The API atomically claims the transfer before accepting bytes, so replay and concurrent writers receive a conflict. Download bodies remain repeatable and range-capable until expiry for media playback and worker retries, while retaining actor, space, and worker binding on every request.
+- User content responses set `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Proxies and clients must not add persistent caching for these routes.
+- Active document formats such as HTML, SVG, and XML are forced to download and receive a restrictive CSP sandbox instead of being rendered inline under the AgentHub origin.
+- Ranged responses set `Content-Encoding: identity` so intermediaries cannot transform bytes and invalidate the authorized Range boundaries.
+- Transfer responses include the stored complete-body SHA-256 digest. Workers verify the digest before replacing a workspace file and remove the downloaded temporary file on mismatch.
+- Transfer expiry is enforced on access. A background maintenance pass removes expired bodies even on idle installations, while new-transfer requests also perform scoped cleanup. TTL remains an authorization lifetime and cleanup target, not a secure-erase deadline.
+- Legacy file jobs may contain bounded `text` or `data_base64` fields until `AGENTHUB_LEGACY_FILE_JOB_BODY_TTL_SECONDS` elapses and a job-list/detail request runs the lazy pruner.
+- The Web legacy binary fallback refuses responses larger than 16 MiB before materializing the body. This is defense in depth for rolling upgrades, not a replacement for worker/API limits.
+- Treat both the transfer directory and the database as sensitive storage. Restrict filesystem access, exclude the transfer directory from static serving and backups where practical, and size reverse-proxy limits consistently with `AGENTHUB_MAX_FILE_TRANSFER_BYTES`.
+
+### Protected-file reveal policy
+
+Protected files such as `.env` variants, credential files, and private keys are denied by default. Reading or downloading one requires an explicit reveal confirmation for that request. The reveal is authorized as an operator action and audited without persisting the file body in events or the session timeline; a previous reveal does not make later requests implicitly readable.
+
+The current built-in policy covers `.env` and `.env.*`, common credential filenames, SSH private-key filenames, kubeconfig, and `.key`, `.p12`, `.pem`, and `.pfx` suffixes. Web and WebView clients show a per-request confirmation, the API propagates only the reveal boolean, and the worker independently enforces the same built-in policy. Operator-configurable sensitive globs are a later hardening option rather than part of the current release contract.
+
 ## Threat Controls
 
 | Threat | Control |
@@ -82,4 +105,6 @@ The APK can be hosted publicly because it contains only the console URL, but it 
 - SQLite is the default. Use PostgreSQL before multi-user or high-concurrency operation.
 - Transcript storage is not end-to-end encrypted.
 - Fine-grained per-project ACL is not implemented.
+- Sensitive-file rules are built in. Installations that require organization-specific patterns must keep those workspaces out of scope until configurable sensitive globs are added.
+- Transfer bodies are removed by a periodic server cleanup pass and request-time cleanup. Legacy inline file-job bodies remain request-pruned, so an idle installation can retain those database payloads past their configured TTL.
 - Public relay is still polling-first. Long-lived relay transport is a later step.

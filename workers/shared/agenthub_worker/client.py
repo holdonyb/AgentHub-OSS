@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import hmac
+from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -83,6 +87,55 @@ class AgentHubClient:
         path = self._worker_path(f"/api/internal/jobs/{job_id}/fail", f"/api/worker/jobs/{job_id}/fail")
         response = self._post(path, json={"worker_id": self.worker_id, "error_text": error_text})
         response.raise_for_status()
+
+    def upload_transfer(
+        self,
+        transfer_id: str,
+        path: Path,
+        *,
+        content_type: str,
+        filename: str,
+        modified_at: str,
+    ) -> dict[str, Any]:
+        endpoint = self._worker_path(
+            f"/api/internal/transfers/{transfer_id}/content",
+            f"/api/worker/transfers/{transfer_id}/content",
+        )
+        headers = {
+            **self._headers(),
+            "Content-Type": content_type,
+            "Content-Length": str(path.stat().st_size),
+            "X-AgentHub-Filename": quote(filename, safe=""),
+            "X-AgentHub-Modified-At": modified_at,
+        }
+        with path.open("rb") as stream:
+            response = self._client.put(f"{self.base_url}{endpoint}", content=stream, headers=headers)
+        response.raise_for_status()
+        payload = response.json().get("transfer", {})
+        return payload if isinstance(payload, dict) else {}
+
+    def download_transfer(self, transfer_id: str, destination: Path) -> dict[str, Any]:
+        endpoint = self._worker_path(
+            f"/api/internal/transfers/{transfer_id}/content",
+            f"/api/worker/transfers/{transfer_id}/content",
+        )
+        digest = hashlib.sha256()
+        size_bytes = 0
+        with self._client.stream("GET", f"{self.base_url}{endpoint}", headers=self._headers()) as response:
+            response.raise_for_status()
+            expected_sha256 = response.headers.get("X-AgentHub-SHA256", "").strip().lower()
+            if len(expected_sha256) != 64 or any(character not in "0123456789abcdef" for character in expected_sha256):
+                raise ValueError("Downloaded file checksum metadata is missing or invalid")
+            with destination.open("wb") as stream:
+                for chunk in response.iter_bytes():
+                    size_bytes += len(chunk)
+                    digest.update(chunk)
+                    stream.write(chunk)
+        actual_sha256 = digest.hexdigest()
+        if not hmac.compare_digest(actual_sha256, expected_sha256):
+            destination.unlink(missing_ok=True)
+            raise ValueError("Downloaded file checksum does not match transfer metadata")
+        return {"size_bytes": size_bytes, "sha256": actual_sha256}
 
     def publish_sessions(self, sessions: list[dict[str, Any]]) -> None:
         path = self._worker_path("/api/internal/sessions/discovered", "/api/worker/sessions/discovered")

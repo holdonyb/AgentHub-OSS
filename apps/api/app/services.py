@@ -38,6 +38,8 @@ ALLOWED_JOB_KINDS = {
     "file_create",
     "file_mkdir",
     "file_rename",
+    "file_transfer_prepare",
+    "file_transfer_apply",
 }
 TIMELINE_ACTIVITY_SKEW_TOLERANCE = timedelta(hours=14)
 EMPTY_ACTIVITY_SUMMARIES = {"", "当前空闲"}

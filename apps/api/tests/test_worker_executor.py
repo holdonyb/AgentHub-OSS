@@ -678,6 +678,236 @@ def test_file_read_returns_bounded_text_preview(tmp_path: Path) -> None:
     assert payload["size_bytes"] > 18
 
 
+def test_file_read_requires_explicit_reveal_for_sensitive_files(tmp_path: Path) -> None:
+    secret = tmp_path / ".env"
+    secret.write_text("API_KEY=secret\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Sensitive file requires explicit reveal"):
+        execute_job(
+            {
+                "kind": "file_read",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": ".env"},
+            }
+        )
+
+    payload = json.loads(
+        execute_job(
+            {
+                "kind": "file_read",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": ".env", "reveal_sensitive": True},
+            }
+        )
+    )
+
+    assert payload["text"].splitlines() == ["API_KEY=secret"]
+
+
+def test_file_read_does_not_load_the_entire_file_with_read_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "large.log"
+    target.write_bytes(b"a" * 2_000_000)
+
+    def reject_unbounded_read(_path: Path) -> bytes:
+        raise AssertionError("file_read must use a bounded stream read")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-bounded-stream",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "large.log", "max_bytes": 64},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["truncated"] is True
+    assert payload["text"] == "a" * 64
+    assert payload["size_bytes"] == 2_000_000
+
+
+def test_file_read_returns_offset_and_next_page_metadata(tmp_path: Path) -> None:
+    target = tmp_path / "paged.log"
+    target.write_bytes(b"0123456789")
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-page",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "paged.log", "offset_bytes": 3, "max_bytes": 4},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["text"] == "3456"
+    assert payload["offset_bytes"] == 3
+    assert payload["length_bytes"] == 4
+    assert payload["next_offset_bytes"] == 7
+    assert payload["truncated"] is True
+    assert payload["downloadable"] is False
+    assert "data_base64" not in payload
+
+
+def test_file_read_does_not_inline_oversized_binary_results(tmp_path: Path) -> None:
+    target = tmp_path / "large.bin"
+    target.write_bytes(b"\x00" * 600_000)
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-large-binary",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "large.bin", "max_bytes": 1_000_000},
+        }
+    )
+
+    payload = json.loads(result)
+    assert payload["preview_kind"] == "download"
+    assert payload["downloadable"] is False
+    assert payload["length_bytes"] == 600_000
+    assert "data_base64" not in payload
+
+
+def test_file_transfer_prepare_streams_file_through_worker_client(tmp_path: Path) -> None:
+    target = tmp_path / "renders" / "preview.png"
+    target.parent.mkdir()
+    target.write_bytes(VALID_PNG_BYTES)
+
+    class TransferClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Path, str, str, str]] = []
+
+        def upload_transfer(
+            self,
+            transfer_id: str,
+            path: Path,
+            *,
+            content_type: str,
+            filename: str,
+            modified_at: str,
+        ) -> dict:
+            self.calls.append((transfer_id, path, content_type, filename, modified_at))
+            return {"transfer_id": transfer_id, "status": "ready", "size_bytes": path.stat().st_size}
+
+    client = TransferClient()
+    result = execute_job(
+        {
+            "job_id": "job-transfer-prepare",
+            "kind": "file_transfer_prepare",
+            "workspace_root": str(tmp_path),
+            "payload": {"transfer_id": "xfr-demo", "path": "renders/preview.png"},
+        },
+        client=client,
+    )
+
+    payload = json.loads(result)
+    assert payload == {"transfer_id": "xfr-demo", "status": "ready", "size_bytes": len(VALID_PNG_BYTES)}
+    assert client.calls[0][0] == "xfr-demo"
+    assert client.calls[0][1] == target
+    assert client.calls[0][2] == "image/png"
+    assert client.calls[0][3] == "preview.png"
+    assert client.calls[0][4].endswith("Z")
+
+
+def test_file_transfer_prepare_requires_explicit_reveal_for_private_keys(tmp_path: Path) -> None:
+    private_key = tmp_path / "deploy.key"
+    private_key.write_text("private", encoding="utf-8")
+
+    class TransferClient:
+        def upload_transfer(self, *_args, **_kwargs):
+            raise AssertionError("sensitive file must not be uploaded before explicit reveal")
+
+    with pytest.raises(ValueError, match="Sensitive file requires explicit reveal"):
+        execute_job(
+            {
+                "kind": "file_transfer_prepare",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "deploy.key", "transfer_id": "xfr-secret"},
+            },
+            client=TransferClient(),
+        )
+
+
+def test_file_transfer_apply_streams_to_a_temp_file_then_moves_into_workspace(tmp_path: Path) -> None:
+    target_dir = tmp_path / "assets"
+    target_dir.mkdir()
+
+    class TransferClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Path]] = []
+
+        def download_transfer(self, transfer_id: str, destination: Path) -> dict:
+            self.calls.append((transfer_id, destination))
+            destination.write_bytes(b"streamed from AgentHub")
+            return {"size_bytes": destination.stat().st_size, "sha256": "demo-sha"}
+
+    client = TransferClient()
+    result = execute_job(
+        {
+            "job_id": "job-transfer-apply",
+            "kind": "file_transfer_apply",
+            "workspace_root": str(tmp_path),
+            "payload": {
+                "transfer_id": "xfr-upload",
+                "path": "assets",
+                "filename": "diagram.png",
+                "content_type": "image/png",
+                "overwrite": False,
+            },
+        },
+        client=client,
+    )
+
+    payload = json.loads(result)
+    target = target_dir / "diagram.png"
+    assert target.read_bytes() == b"streamed from AgentHub"
+    assert payload["path"] == "assets/diagram.png"
+    assert payload["filename"] == "diagram.png"
+    assert payload["size_bytes"] == len(b"streamed from AgentHub")
+    assert payload["preview_capability"] == "image"
+    assert client.calls[0][0] == "xfr-upload"
+    assert client.calls[0][1] != target
+    assert not client.calls[0][1].exists()
+
+
+def test_file_transfer_apply_does_not_overwrite_a_file_created_during_download(tmp_path: Path) -> None:
+    target_dir = tmp_path / "assets"
+    target_dir.mkdir()
+    target = target_dir / "diagram.png"
+
+    class RacingTransferClient:
+        def download_transfer(self, _transfer_id: str, destination: Path) -> dict:
+            destination.write_bytes(b"downloaded content")
+            target.write_bytes(b"created by another process")
+            return {"size_bytes": destination.stat().st_size}
+
+    with pytest.raises(ValueError, match="File already exists"):
+        execute_job(
+            {
+                "job_id": "job-transfer-apply-race",
+                "kind": "file_transfer_apply",
+                "workspace_root": str(tmp_path),
+                "payload": {
+                    "transfer_id": "xfr-race",
+                    "path": "assets",
+                    "filename": "diagram.png",
+                    "content_type": "image/png",
+                    "overwrite": False,
+                },
+            },
+            client=RacingTransferClient(),
+        )
+
+    assert target.read_bytes() == b"created by another process"
+    assert not list(target_dir.glob("*.part"))
+
+
 def test_file_read_returns_inline_download_data_for_small_images(tmp_path: Path) -> None:
     target = tmp_path / "diagram.png"
     target.write_bytes(VALID_PNG_BYTES)
@@ -711,6 +941,26 @@ def test_file_read_rejects_paths_outside_workspace(tmp_path: Path) -> None:
                 "kind": "file_read",
                 "workspace_root": str(tmp_path),
                 "payload": {"path": "../secret.txt"},
+            }
+        )
+
+
+def test_file_read_rejects_symlink_escape_from_workspace(tmp_path: Path) -> None:
+    outside = tmp_path.parent / "outside-symlink-target.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = tmp_path / "linked-secret.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="outside workspace"):
+        execute_job(
+            {
+                "job_id": "job-file-read-symlink-outside",
+                "kind": "file_read",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": "linked-secret.txt"},
             }
         )
 

@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     claimed_job_stale_seconds: Annotated[int, Field(ge=1)] = 900
     orphaned_claimed_job_grace_seconds: Annotated[int, Field(ge=1)] = 120
     default_session_job_timeout_seconds: Annotated[int, Field(ge=60)] = 3600
+    legacy_file_job_body_ttl_seconds: Annotated[int, Field(ge=60)] = 86400
+    file_transfer_dir: str = ".runtime/file-transfers"
+    file_transfer_ttl_seconds: Annotated[int, Field(ge=60, le=86400)] = 900
+    file_transfer_cleanup_interval_seconds: Annotated[float, Field(ge=5, le=3600)] = 60.0
+    max_file_transfer_bytes: Annotated[int, Field(ge=1024)] = 64 * 1024 * 1024
     notification_webhook_url: str = ""
     notification_max_attempts: Annotated[int, Field(ge=1, le=10)] = 3
     notification_timeout_seconds: Annotated[float, Field(ge=0.1, le=30)] = 2.0

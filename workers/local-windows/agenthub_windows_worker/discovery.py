@@ -53,6 +53,7 @@ def discover_capabilities() -> dict[str, bool]:
         "kimi": _command_available("kimi"),
         "opencode": _command_available("opencode"),
         "psmux": _command_available("psmux"),
+        "file_transfer_v2": True,
     }
 
 
