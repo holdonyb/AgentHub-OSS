@@ -50,6 +50,18 @@ class WorkerClient(Protocol):
 
     def fail_job(self, job_id: str, error_text: str) -> None: ...
 
+    def upload_transfer(
+        self,
+        transfer_id: str,
+        path: Path,
+        *,
+        content_type: str,
+        filename: str,
+        modified_at: str,
+    ) -> dict[str, Any]: ...
+
+    def download_transfer(self, transfer_id: str, destination: Path) -> dict[str, Any]: ...
+
 
 @dataclass
 class WorkerRuntime:

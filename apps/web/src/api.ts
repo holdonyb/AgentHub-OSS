@@ -13,3 +13,10 @@ export function apiPost<T>(url: string, body: unknown, csrfToken?: string): Prom
 export function apiPatch<T>(url: string, body: unknown, csrfToken?: string): Promise<T> {
   return client.patch<T>(url, body, { csrfToken });
 }
+
+export function apiPutRaw<T>(url: string, body: BodyInit, contentType: string, csrfToken?: string): Promise<T> {
+  return client.putRaw<T>(url, body, {
+    csrfToken,
+    headers: { 'Content-Type': contentType || 'application/octet-stream' },
+  });
+}

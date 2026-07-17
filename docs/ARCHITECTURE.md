@@ -55,6 +55,39 @@
 
 所以 AgentHub 的设计重点不是“托管你的 agent”，而是“统一控制和同步这些已经在你机器上运行的 agent”。
 
+## Remote Workspace 文件传输数据面
+
+Remote Workspace v2 不引入 SSH、SFTP、RDP，也不要求 worker 开放新的入站端口。文件传输复用现有控制面和 worker 的出站认证链路：
+
+```text
+Web / App
+    | 1. authenticated HTTPS: create transfer
+    v
+AgentHub API + temporary transfer directory
+    ^
+    | 2. worker polls an authorized job
+    | 3. worker uploads/downloads bytes over authenticated HTTPS
+    |
+Worker -> registered workspace root
+```
+
+- API 先按用户空间、worker、workspace root 和操作创建短期 transfer，并把 transfer 元数据记录到数据库。
+- worker 继续通过 `/api/internal/*` 或 public relay 的 `/api/worker/*` 主动轮询；下载由 worker 向 API 上传文件，上传则由 worker 从 API 拉取临时文件后原子落盘。
+- 文件正文临时存放在 API 主机的 `AGENTHUB_FILE_TRANSFER_DIR`，不会写入 `file_transfers` 数据库行；目录、TTL 和单次大小上限见 [Configuration Reference](CONFIGURATION_REFERENCE.md#remote-workspace-file-transfer)。
+- 面向用户的读取支持 HTTP byte ranges，并返回 `Cache-Control: private, no-store` 和 `Content-Encoding: identity`。禁用内容编码可确保 Range 字节偏移对应原始文件；这是低缓存策略，不代表客户端内存或 API 临时目录中完全没有短期副本。
+- API 在响应头 `X-AgentHub-SHA256` 中返回完整临时正文的 SHA-256。worker 拉取上传正文后必须核对该摘要；不匹配时删除本地临时结果并拒绝落盘。
+- 上传正文只允许被原子领取一次，重复或并发写入会被拒绝。下载正文则在 ticket 有效期内允许重复和 Range 读取，以支持媒体预览、断点请求与 worker 重试；每次读取仍受用户/worker 绑定和过期时间约束。
+- API 后台维护器周期清理过期正文和崩溃遗留的传输分片；创建新 transfer 时也会执行当前空间的即时清理。
+
+能力协商用于滚动升级：
+
+- 新 worker 明确上报 `file_transfer_v2: true` 后，客户端才会为图片、音视频、下载和上传使用 transfer 数据面。
+- 文本和 Markdown 预览当前仍使用有大小上限的 legacy file job，以保留编辑兼容性。
+- 未声明能力的旧 worker 继续使用 legacy file job。创建 transfer 返回 `TRANSFER_UNSUPPORTED`，或旧 API 尚无 transfer 路由时，客户端回退到该路径。
+- Web 的 legacy 二进制回退在读取响应体前还有 16 MiB 客户端上限，避免旧 worker 的 Base64 响应把浏览器内存无界放大。worker 和 API 的服务端上限仍然是主边界。
+- 超时、过期、权限、完整性或大小错误不会自动回退，避免同一操作绕过 transfer 的失败状态和限制。
+- React Native 客户端当前仍使用有界 session file API；`file_transfer_v2` 的原生缓存和流式传输属于后续兼容层扩展。
+
 ## 两种推荐拓扑
 
 ### 1. 本机 Self-Host

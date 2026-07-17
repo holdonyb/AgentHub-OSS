@@ -1,7 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentSession } from '@agenthub/protocol';
-import App, { mergeRevisionedSession, mergeTimelineItems, parseApiDate } from './App';
+import type { AgentSession, Job } from '@agenthub/protocol';
+import App, {
+  isSensitiveWorkspaceFile,
+  mergeRevisionedSession,
+  mergeTimelineItems,
+  parseApiDate,
+  workspaceJobMatchesTarget,
+} from './App';
 import type { MessageRenderKind } from './messageRenderPreview';
 
 const capacitorApp = vi.hoisted(() => ({
@@ -64,6 +70,29 @@ const sessionPayload = {
     },
   ],
 };
+
+it('identifies workspace files that require explicit reveal', () => {
+  expect(isSensitiveWorkspaceFile('.env')).toBe(true);
+  expect(isSensitiveWorkspaceFile('config/.env.production')).toBe(true);
+  expect(isSensitiveWorkspaceFile('keys/deploy.pem')).toBe(true);
+  expect(isSensitiveWorkspaceFile('README.md')).toBe(false);
+  expect(isSensitiveWorkspaceFile('src/monkey.ts')).toBe(false);
+});
+
+it('keeps workspace jobs scoped to the active worker and root', () => {
+  const job = {
+    worker_id: 'win-main',
+    workspace_root: 'E:/Work/AgentHub',
+  } as Job;
+
+  expect(workspaceJobMatchesTarget(job, 'win-main', 'e:\\work\\agenthub\\', 'windows')).toBe(true);
+  expect(workspaceJobMatchesTarget(job, 'render-worker', 'E:/Work/AgentHub', 'windows')).toBe(false);
+  expect(workspaceJobMatchesTarget(job, 'win-main', 'E:/Work/Other', 'windows')).toBe(false);
+
+  const linuxJob = { ...job, worker_id: 'linux-main', workspace_root: '/srv/AgentHub' } as Job;
+  expect(workspaceJobMatchesTarget(linuxJob, 'linux-main', '/srv/AgentHub/', 'linux')).toBe(true);
+  expect(workspaceJobMatchesTarget(linuxJob, 'linux-main', '/srv/agenthub', 'linux')).toBe(false);
+});
 
 it('keeps newer execution and attention revisions when a stale sync response arrives', () => {
   const current: AgentSession = {
@@ -3391,7 +3420,7 @@ describe('AgentHub console', () => {
       ...completedCommandJob,
       job_id: 'job-file-read-linked-plan',
       kind: 'file_read',
-      payload: { path: linkedPath, max_bytes: 5000000 },
+      payload: { path: linkedPath, max_bytes: 512000 },
       result_text: JSON.stringify({
         path: linkedPath,
         filename: linkedPath,
@@ -3435,7 +3464,7 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/sessions/sess-1/files/read')) {
         expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
-        expect(init?.body).toBe(JSON.stringify({ path: linkedPath, max_bytes: 5000000 }));
+        expect(init?.body).toBe(JSON.stringify({ path: linkedPath, max_bytes: 512000 }));
         currentJobs = [linkedFileReadJob, ...currentJobs];
         return jsonResponse({ job: { ...linkedFileReadJob, status: 'queued', result_text: null } });
       }
@@ -4809,7 +4838,7 @@ describe('AgentHub console', () => {
       }
       if (url.endsWith('/api/sessions/sess-1/files/read')) {
         expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
-        expect(init?.body).toBe(JSON.stringify({ path: 'src/diagram.png', max_bytes: 5000000 }));
+        expect(init?.body).toBe(JSON.stringify({ path: 'src/diagram.png', max_bytes: 512000 }));
         currentJobs = [imageFileReadJob, ...currentJobs];
         return jsonResponse({ job: { ...imageFileReadJob, status: 'queued', result_text: null } });
       }
@@ -4839,6 +4868,506 @@ describe('AgentHub console', () => {
     fireEvent.click(screen.getByRole('button', { name: '预览 diagram.png' }));
     expect(await screen.findByAltText('diagram.png')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '下载原图' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '返回文件列表' })).toBeInTheDocument();
+
+    window.history.back();
+    await waitFor(() => expect(document.querySelector('.remote-workspace-layout')?.className).toContain('view-explorer'));
+  });
+
+  it('keeps the remote workspace target independent from the selected chat session', async () => {
+    const remoteWorkers = {
+      items: [
+        workersPayload.items[0],
+        {
+          ...workersPayload.items[0],
+          worker_id: 'render-worker',
+          machine_name: 'Render VM',
+          os: 'linux',
+          workspace_roots: ['/srv/renders', '/srv/assets'],
+        },
+      ],
+    };
+    const completedWorkspaceListJob = {
+      ...completedCommandJob,
+      job_id: 'job-workspace-list-render',
+      kind: 'file_list',
+      target_session_id: null,
+      worker_id: 'render-worker',
+      backend: null,
+      workspace_root: '/srv/renders',
+      payload: { path: '.' },
+      result_text: JSON.stringify({
+        path: '.',
+        workspace_root: '/srv/renders',
+        entries: [{ name: 'hero.png', path: 'hero.png', kind: 'file', size_bytes: 2048 }],
+        truncated: false,
+      }),
+      status: 'succeeded',
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse(remoteWorkers);
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/list')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({ worker_id: 'render-worker', workspace_root: '/srv/renders', path: '.' }),
+        );
+        return jsonResponse({ job: { ...completedWorkspaceListJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/jobs/job-workspace-list-render')) {
+        return jsonResponse({ job: completedWorkspaceListJob });
+      }
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    fireEvent.change(await screen.findByLabelText('文件 Worker'), { target: { value: 'render-worker' } });
+
+    expect(screen.getByLabelText('工作区根目录')).toHaveValue('/srv/renders');
+    fireEvent.click(screen.getByRole('button', { name: '浏览工作区' }));
+
+    expect(await screen.findByText('hero.png')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '文件浏览器' })).toBeInTheDocument();
+    expect(screen.getAllByText('修复移动控制台').length).toBeGreaterThan(0);
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).includes('/api/sessions/sess-1/files/')),
+    ).toBe(false);
+  });
+
+  it('streams binary previews through an ephemeral transfer when the worker supports it', async () => {
+    const transferWorker = {
+      ...workersPayload.items[0],
+      capabilities: { ...workersPayload.items[0].capabilities, file_transfer_v2: true },
+    };
+    const fileListJob = {
+      ...completedCommandJob,
+      job_id: 'job-transfer-list',
+      kind: 'file_list',
+      target_session_id: null,
+      worker_id: transferWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { path: '.' },
+      result_text: JSON.stringify({
+        path: '.',
+        workspace_root: 'E:/work/AgentHub',
+        entries: [
+          {
+            name: 'diagram.png',
+            path: 'diagram.png',
+            kind: 'file',
+            content_type: 'image/png',
+            size_bytes: 4096,
+            preview_capability: 'image',
+          },
+        ],
+        truncated: false,
+      }),
+      status: 'succeeded',
+    };
+    const completedTransferJob = {
+      ...completedCommandJob,
+      job_id: 'job-transfer-image',
+      kind: 'file_transfer_prepare',
+      target_session_id: null,
+      worker_id: transferWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { transfer_id: 'xfr-image-1', path: 'diagram.png' },
+      result_text: JSON.stringify({
+        transfer_id: 'xfr-image-1',
+        worker_id: transferWorker.worker_id,
+        workspace_root: 'E:/work/AgentHub',
+        path: 'diagram.png',
+        status: 'ready',
+        filename: 'diagram.png',
+        content_type: 'image/png',
+        size_bytes: 4096,
+        content_url: '/api/workspaces/files/transfers/xfr-image-1/content',
+      }),
+      status: 'succeeded',
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [transferWorker] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/list')) {
+        return jsonResponse({ job: { ...fileListJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/jobs/job-transfer-list')) return jsonResponse({ job: fileListJob });
+      if (url.endsWith('/api/workspaces/files/transfers')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({
+            worker_id: transferWorker.worker_id,
+            workspace_root: 'E:/work/AgentHub',
+            path: 'diagram.png',
+          }),
+        );
+        return jsonResponse({
+          transfer: { transfer_id: 'xfr-image-1', status: 'queued' },
+          job: { ...completedTransferJob, status: 'queued', result_text: null },
+        });
+      }
+      if (url.endsWith('/api/jobs/job-transfer-image')) return jsonResponse({ job: completedTransferJob });
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    fireEvent.click(screen.getByRole('button', { name: '浏览工作区' }));
+    fireEvent.click(await screen.findByRole('button', { name: '预览 diagram.png' }));
+
+    const preview = await screen.findByAltText('diagram.png');
+    expect(preview).toHaveAttribute('src', '/api/workspaces/files/transfers/xfr-image-1/content');
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/api/workspaces/files/read')),
+    ).toBe(false);
+  });
+
+  it('requires explicit confirmation before streaming a sensitive workspace file', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const transferWorker = {
+      ...workersPayload.items[0],
+      capabilities: { ...workersPayload.items[0].capabilities, file_transfer_v2: true },
+    };
+    const fileListJob = {
+      ...completedCommandJob,
+      job_id: 'job-sensitive-list',
+      kind: 'file_list',
+      target_session_id: null,
+      worker_id: transferWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { path: '.' },
+      result_text: JSON.stringify({
+        path: '.',
+        workspace_root: 'E:/work/AgentHub',
+        entries: [
+          {
+            name: 'deploy.pem',
+            path: 'deploy.pem',
+            kind: 'file',
+            content_type: 'application/x-pem-file',
+            size_bytes: 2048,
+            preview_capability: 'download',
+          },
+        ],
+        truncated: false,
+      }),
+      status: 'succeeded',
+    };
+    const completedTransferJob = {
+      ...completedCommandJob,
+      job_id: 'job-sensitive-transfer',
+      kind: 'file_transfer_prepare',
+      target_session_id: null,
+      worker_id: transferWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { transfer_id: 'xfr-sensitive-1', path: 'deploy.pem', reveal_sensitive: true },
+      result_text: JSON.stringify({
+        transfer_id: 'xfr-sensitive-1',
+        worker_id: transferWorker.worker_id,
+        workspace_root: 'E:/work/AgentHub',
+        path: 'deploy.pem',
+        status: 'ready',
+        filename: 'deploy.pem',
+        content_type: 'application/x-pem-file',
+        size_bytes: 2048,
+        content_url: '/api/workspaces/files/transfers/xfr-sensitive-1/content',
+      }),
+      status: 'succeeded',
+    };
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [transferWorker] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/list')) {
+        return jsonResponse({ job: { ...fileListJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/jobs/job-sensitive-list')) return jsonResponse({ job: fileListJob });
+      if (url.endsWith('/api/workspaces/files/transfers')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({
+            worker_id: transferWorker.worker_id,
+            workspace_root: 'E:/work/AgentHub',
+            path: 'deploy.pem',
+            reveal_sensitive: true,
+          }),
+        );
+        return jsonResponse({
+          transfer: { transfer_id: 'xfr-sensitive-1', status: 'queued' },
+          job: { ...completedTransferJob, status: 'queued', result_text: null },
+        });
+      }
+      if (url.endsWith('/api/jobs/job-sensitive-transfer')) return jsonResponse({ job: completedTransferJob });
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    fireEvent.click(screen.getByRole('button', { name: '浏览工作区' }));
+    fireEvent.click(await screen.findByRole('button', { name: '预览 deploy.pem' }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('deploy.pem'));
+    expect(await screen.findByRole('button', { name: '下载文件' })).toBeInTheDocument();
+  });
+
+  it('streams workspace uploads without encoding the file into a job payload', async () => {
+    const transferWorker = {
+      ...workersPayload.items[0],
+      capabilities: { ...workersPayload.items[0].capabilities, file_transfer_v2: true },
+    };
+    const completedUploadJob = {
+      ...completedCommandJob,
+      job_id: 'job-transfer-upload',
+      kind: 'file_transfer_apply',
+      target_session_id: null,
+      worker_id: transferWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { transfer_id: 'xfr-upload-1', path: '.', filename: 'notes.txt' },
+      result_text: JSON.stringify({
+        path: 'notes.txt',
+        filename: 'notes.txt',
+        kind: 'file',
+        content_type: 'text/plain',
+        size_bytes: 12,
+      }),
+      status: 'succeeded',
+    };
+    const uploadedFile = new File(['hello mobile'], 'notes.txt', { type: 'text/plain' });
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [transferWorker] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/upload-transfers')) {
+        expect(init?.headers).toMatchObject({ 'X-CSRF-Token': 'csrf-1' });
+        expect(init?.body).toBe(
+          JSON.stringify({
+            worker_id: transferWorker.worker_id,
+            workspace_root: 'E:/work/AgentHub',
+            path: '.',
+            filename: 'notes.txt',
+            content_type: 'text/plain',
+            overwrite: false,
+          }),
+        );
+        return jsonResponse({
+          transfer: {
+            transfer_id: 'xfr-upload-1',
+            status: 'awaiting_upload',
+            content_url: '/api/workspaces/files/transfers/xfr-upload-1/content',
+          },
+        });
+      }
+      if (url.endsWith('/api/workspaces/files/transfers/xfr-upload-1/content') && init?.method === 'PUT') {
+        expect(init?.headers).toMatchObject({
+          'Content-Type': 'text/plain',
+          'X-CSRF-Token': 'csrf-1',
+        });
+        expect(init?.body).toBe(uploadedFile);
+        return jsonResponse({
+          transfer: { transfer_id: 'xfr-upload-1', status: 'queued' },
+          job: { ...completedUploadJob, status: 'queued', result_text: null },
+        });
+      }
+      if (url.endsWith('/api/jobs/job-transfer-upload')) return jsonResponse({ job: completedUploadJob });
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    const uploadInput = document.querySelector<HTMLInputElement>('.files-pane input[type="file"]');
+    expect(uploadInput).not.toBeNull();
+    fireEvent.change(uploadInput!, { target: { files: [uploadedFile] } });
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/api/jobs/job-transfer-upload')),
+      ).toBe(true);
+    });
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/api/workspaces/files/upload')),
+    ).toBe(false);
+  });
+
+  it('falls back to the bounded legacy workspace upload when transfer endpoints are unavailable', async () => {
+    const advertisedWorker = {
+      ...workersPayload.items[0],
+      capabilities: { ...workersPayload.items[0].capabilities, file_transfer_v2: true },
+    };
+    const completedUploadJob = {
+      ...completedCommandJob,
+      job_id: 'job-legacy-upload',
+      kind: 'file_upload',
+      target_session_id: null,
+      worker_id: advertisedWorker.worker_id,
+      workspace_root: 'E:/work/AgentHub',
+      payload: { path: '.', filename: 'legacy.txt' },
+      result_text: JSON.stringify({ path: 'legacy.txt', filename: 'legacy.txt', kind: 'file', size_bytes: 12 }),
+      status: 'succeeded',
+    };
+    const uploadedFile = new File(['hello mobile'], 'legacy.txt', { type: 'text/plain' });
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [advertisedWorker] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/upload-transfers')) return jsonResponse({}, 404);
+      if (url.endsWith('/api/workspaces/files/upload')) {
+        expect(init?.body).toBe(
+          JSON.stringify({
+            worker_id: advertisedWorker.worker_id,
+            workspace_root: 'E:/work/AgentHub',
+            path: '.',
+            filename: 'legacy.txt',
+            content_type: 'text/plain',
+            data_base64: 'aGVsbG8gbW9iaWxl',
+            size_bytes: 12,
+            overwrite: false,
+          }),
+        );
+        return jsonResponse({ job: { ...completedUploadJob, status: 'queued', result_text: null } });
+      }
+      if (url.endsWith('/api/jobs/job-legacy-upload')) return jsonResponse({ job: completedUploadJob });
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    const uploadInput = document.querySelector<HTMLInputElement>('.files-pane input[type="file"]');
+    expect(uploadInput).not.toBeNull();
+    fireEvent.change(uploadInput!, { target: { files: [uploadedFile] } });
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/api/jobs/job-legacy-upload')),
+      ).toBe(true);
+    });
+  });
+
+  it('rejects an oversized legacy upload before reading the file into memory', async () => {
+    const advertisedWorker = {
+      ...workersPayload.items[0],
+      capabilities: { ...workersPayload.items[0].capabilities, file_transfer_v2: true },
+    };
+    const uploadedFile = new File(['small fixture'], 'large.bin', { type: 'application/octet-stream' });
+    Object.defineProperty(uploadedFile, 'size', { value: 16 * 1024 * 1024 + 1 });
+    const arrayBufferSpy = vi.spyOn(uploadedFile, 'arrayBuffer');
+
+    vi.mocked(globalThis.fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/me')) {
+        return jsonResponse({ user: { email: 'owner@example.com', role: 'owner' }, csrf_token: 'csrf-1' });
+      }
+      if (url.endsWith('/api/sessions')) return jsonResponse(sessionPayload);
+      if (url.endsWith('/api/workers')) return jsonResponse({ items: [advertisedWorker] });
+      if (url.endsWith('/api/jobs')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/events')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/schedules')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/providers')) return jsonResponse(providersPayload);
+      if (url.endsWith('/api/permissions')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/secrets')) return jsonResponse({ items: [] });
+      if (url.endsWith('/api/sessions/sess-1/timeline')) return jsonResponse(timelinePayload);
+      if (url.endsWith('/api/workspaces/files/upload-transfers')) return jsonResponse({}, 404);
+      if (url.includes('/api/sync/inbox')) return jsonResponse(inboxSyncPayload);
+      if (url.includes('/api/sync/permissions')) return jsonResponse(permissionSyncPayload);
+      if (url.includes('/api/sync/session/sess-1')) return jsonResponse(sessionSyncPayload);
+      return jsonResponse({}, 404);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '远程工作区' }));
+    const uploadInput = document.querySelector<HTMLInputElement>('.files-pane input[type="file"]');
+    expect(uploadInput).not.toBeNull();
+    fireEvent.change(uploadInput!, { target: { files: [uploadedFile] } });
+
+    expect(await screen.findByText(/旧版上传仅支持 16 MB 以内文件/)).toBeInTheDocument();
+    expect(arrayBufferSpy).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url).endsWith('/api/workspaces/files/upload')),
+    ).toBe(false);
   });
 
   it('edits and saves a text file from the mobile Files pane', async () => {

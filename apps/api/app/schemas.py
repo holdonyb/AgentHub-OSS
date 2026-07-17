@@ -591,6 +591,7 @@ class SessionFileListIn(BaseModel):
 class SessionFileReadIn(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
     max_bytes: int = Field(default=200_000, ge=1, le=5_000_000)
+    reveal_sensitive: bool = False
 
 
 class SessionFileWriteIn(BaseModel):
@@ -618,6 +619,64 @@ class SessionFileMkdirIn(BaseModel):
 
 
 class SessionFileRenameIn(BaseModel):
+    path: str = Field(min_length=1, max_length=1000)
+    new_path: str = Field(min_length=1, max_length=1000)
+    expected_modified_at: str | None = Field(default=None, max_length=80)
+
+
+class WorkspaceFileTargetIn(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=160)
+    workspace_root: str = Field(min_length=1, max_length=1000)
+
+
+class WorkspaceFileListIn(WorkspaceFileTargetIn):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+
+
+class WorkspaceFileReadIn(WorkspaceFileTargetIn):
+    path: str = Field(min_length=1, max_length=1000)
+    offset_bytes: int = Field(default=0, ge=0)
+    max_bytes: int = Field(default=200_000, ge=1, le=5_000_000)
+    reveal_sensitive: bool = False
+
+
+class WorkspaceFileTransferCreateIn(WorkspaceFileTargetIn):
+    path: str = Field(min_length=1, max_length=1000)
+    reveal_sensitive: bool = False
+
+
+class WorkspaceFileTransferUploadCreateIn(WorkspaceFileTargetIn):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+    filename: str = Field(min_length=1, max_length=180)
+    content_type: str = Field(default="application/octet-stream", min_length=1, max_length=120)
+    overwrite: bool = False
+
+
+class WorkspaceFileWriteIn(WorkspaceFileTargetIn):
+    path: str = Field(min_length=1, max_length=1000)
+    text: str = Field(max_length=1_000_000)
+    expected_modified_at: str | None = Field(default=None, max_length=80)
+
+
+class WorkspaceFileUploadIn(WorkspaceFileTargetIn):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+    filename: str = Field(min_length=1, max_length=180)
+    content_type: str = Field(min_length=1, max_length=120)
+    data_base64: str = Field(min_length=1, max_length=24_000_000)
+    overwrite: bool = False
+
+
+class WorkspaceFileCreateIn(WorkspaceFileTargetIn):
+    path: str = Field(min_length=1, max_length=1000)
+    text: str = Field(default="", max_length=1_000_000)
+    overwrite: bool = False
+
+
+class WorkspaceFileMkdirIn(WorkspaceFileTargetIn):
+    path: str = Field(min_length=1, max_length=1000)
+
+
+class WorkspaceFileRenameIn(WorkspaceFileTargetIn):
     path: str = Field(min_length=1, max_length=1000)
     new_path: str = Field(min_length=1, max_length=1000)
     expected_modified_at: str | None = Field(default=None, max_length=80)

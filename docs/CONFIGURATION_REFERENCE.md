@@ -66,6 +66,40 @@ AGENTHUB_COOKIE_SECURE=true
 AGENTHUB_CORS_ORIGINS=https://agenthub.example.com
 ```
 
+## Remote Workspace File Transfer
+
+Remote Workspace v2 uses short-lived files on the API host for streamed downloads and uploads. These settings are server-side only:
+
+```env
+AGENTHUB_FILE_TRANSFER_DIR=.runtime/file-transfers
+AGENTHUB_FILE_TRANSFER_TTL_SECONDS=900
+AGENTHUB_MAX_FILE_TRANSFER_BYTES=67108864
+AGENTHUB_LEGACY_FILE_JOB_BODY_TTL_SECONDS=86400
+```
+
+| Setting | Default | Constraint | Behavior |
+| --- | ---: | ---: | --- |
+| `AGENTHUB_FILE_TRANSFER_DIR` | `.runtime/file-transfers` | writable directory | Holds temporary transfer bodies. A relative path is resolved from the API process working directory. |
+| `AGENTHUB_FILE_TRANSFER_TTL_SECONDS` | `900` | `60` to `86400` seconds | Sets the expiry of download and upload transfers. |
+| `AGENTHUB_FILE_TRANSFER_CLEANUP_INTERVAL_SECONDS` | `60` | `5` to `3600` seconds | Controls the background pass that removes expired transfer bodies even when no later file request arrives. |
+| `AGENTHUB_MAX_FILE_TRANSFER_BYTES` | `67108864` (64 MiB) | at least `1024` bytes | Rejects oversized streamed request bodies using both declared and observed byte counts. |
+| `AGENTHUB_LEGACY_FILE_JOB_BODY_TTL_SECONDS` | `86400` | at least `60` seconds | Removes `text` and `data_base64` fields from completed legacy file jobs after the compatibility TTL. |
+
+Operational notes:
+
+- The database stores transfer metadata, hashes, byte counts, and state; the transfer body is stored under `AGENTHUB_FILE_TRANSFER_DIR` until expiry cleanup.
+- Expiry cleanup is lazy, not a periodic scheduler. Accessing an expired transfer deletes its temporary body, and creating another transfer prunes up to 100 expired transfers in the same space. An idle install can therefore retain expired files past their nominal TTL; monitor the directory's disk use.
+- Legacy job-body pruning is also lazy. It runs when `/api/jobs` or `/api/jobs/{job_id}` is read and preserves non-body metadata with `body_expired: true`.
+- Keep the transfer directory private to the API account, outside any static-file root, and provision enough disk for the configured size limit and expected concurrency.
+- Transfer content responses use `Cache-Control: private, no-store`. This reduces browser/proxy caching but does not remove the server-side temporary file before expiry.
+- Transfer content responses expose the complete-body digest as `X-AgentHub-SHA256`. Workers verify that digest before committing an uploaded file to its workspace and delete mismatched temporary results.
+- Upload body acceptance is single-use and atomically claimed. Retrying a failed upload requires creating a new transfer ticket. Download bodies remain repeatable and range-capable until expiry so media clients and workers can retry reads.
+- Active document types such as HTML, SVG, and XML are returned as attachments with a restrictive sandbox policy. Raster images, audio, video, and plain text may be served inline with `X-Content-Type-Options: nosniff`.
+- Ranged download responses use `Content-Encoding: identity`; reverse proxies must preserve this header and byte ranges rather than applying compression.
+- A worker must advertise `file_transfer_v2: true`. Otherwise the server returns `TRANSFER_UNSUPPORTED`, and current clients use the bounded legacy file-job path. The Web client also falls back when the transfer routes are absent during a rolling API upgrade; other transfer errors are surfaced instead of silently retrying through jobs.
+- The compatibility Android WebView shares the Web transfer implementation. The React Native client currently remains on the bounded session-file API and does not yet negotiate `file_transfer_v2`.
+- The Web legacy binary fallback rejects bodies larger than 16 MiB before calling `arrayBuffer()`. Operators should still keep worker and API limits lower when their clients have tighter memory budgets.
+
 ## Claude Interaction Bridge
 
 Claude now supports two execution styles inside AgentHub:

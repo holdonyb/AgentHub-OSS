@@ -19,6 +19,7 @@ def discover_capabilities() -> dict[str, bool]:
         "kimi": shutil.which("kimi") is not None,
         "opencode": shutil.which("opencode") is not None,
         "tmux": shutil.which("tmux") is not None,
+        "file_transfer_v2": True,
     }
 
 

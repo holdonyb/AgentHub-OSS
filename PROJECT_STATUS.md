@@ -30,6 +30,28 @@ The user-level notification ledger, React Native foreground integration, and per
 - Cockpit rows open the existing Session thread; rows linked to a Workbench task can open that task directly. Mobile Cockpit and Workbench omit the Session-only bottom navigation and account for notification-toast height without widening the viewport.
 - Physical Android/iOS push smoke remains required before suspended/terminated delivery is claimed as release-verified.
 
+Remote Workspace v2 is implemented on `feature/remote-workspace-v2` and awaits PR review:
+
+- The Files surface selects a worker and registered workspace root independently from the active chat session, then supports browsing, bounded text editing, folder creation, rename, upload, and media preview.
+- Workers advertise `file_transfer_v2` on Windows, Linux, and macOS. Binary previews and uploads use short-lived server transfer records instead of embedding large payloads in jobs.
+- Transfer content is size-bounded, SHA-256 verified on worker downloads, scoped to the creating user or bound worker, and removed after expiry. Active HTML, SVG, and XML content is forced to download under a sandbox policy.
+- Sensitive filenames such as `.env`, private keys, and certificates require explicit reveal before content is requested.
+- Legacy workers remain usable through bounded text/file jobs; React Native continues to use the bounded client API until native transfer streaming is implemented.
+- File-job projections are filtered by the active worker and normalized workspace root so an in-flight job from a previous target cannot replace the current preview.
+
+Fresh Remote Workspace v2 verification on `2026-07-17`:
+
+- API: `439 passed, 4 skipped`
+- Web: `221 passed`; production build passed
+- Compatibility Android: `16 passed`; JDK 21 debug APK build passed (`139` Gradle tasks)
+- React Native: `110 passed`; TypeScript typecheck passed
+- Desktop: `34 passed`
+- Client core: `7 passed`
+- Worker CLI: `21 passed`
+- macOS worker: `10 passed`
+- Release and worker version checks: `1.0.0`
+- Public export audit: no blockers
+
 Fresh feature-branch verification on `2026-07-15`:
 
 - API: `400 passed, 4 skipped`

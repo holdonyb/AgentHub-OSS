@@ -59,6 +59,37 @@ describe('client-core HTTP transport', () => {
     );
   });
 
+  it('uploads raw bodies without JSON encoding them', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const client = createAgentHubClient({ fetcher });
+    const file = new Blob(['remote workspace'], { type: 'text/plain' });
+
+    await expect(
+      client.putRaw<{ ok: boolean }>('/api/workspaces/files/transfers/xfr-1/content', file, {
+        csrfToken: 'csrf-token',
+        headers: { 'Content-Type': 'text/plain' },
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/workspaces/files/transfers/xfr-1/content',
+      expect.objectContaining({
+        method: 'PUT',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'Content-Type': 'text/plain',
+          'X-CSRF-Token': 'csrf-token',
+        }),
+        body: file,
+      }),
+    );
+  });
+
   it('resolves the global fetch implementation at request time', async () => {
     const originalFetch = globalThis.fetch;
     const client = createAgentHubClient();

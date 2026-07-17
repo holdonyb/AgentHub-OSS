@@ -91,10 +91,29 @@ export function createAgentHubClient(options: AgentHubClientOptions = {}) {
     return response.json() as Promise<T>;
   }
 
+  async function requestRaw<T>(method: string, path: string, body: BodyInit, requestOptions: RequestOptions = {}): Promise<T> {
+    const token = options.getBearerToken ? await options.getBearerToken() : null;
+    const headers: Record<string, string> = { ...requestOptions.headers };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (requestOptions.csrfToken) headers['X-CSRF-Token'] = requestOptions.csrfToken;
+    const init: RequestInit = {
+      method,
+      body,
+      credentials: options.getBearerToken ? 'omit' : 'include',
+    };
+    if (Object.keys(headers).length > 0) init.headers = headers;
+    if (requestOptions.signal) init.signal = requestOptions.signal;
+    const response = await (options.fetcher ?? globalThis.fetch)(endpointUrl(baseUrl, path), init);
+    if (!response.ok) throw await errorFromResponse(response);
+    if (response.status === 204) return undefined as T;
+    return response.json() as Promise<T>;
+  }
+
   return {
     get: <T>(path: string, requestOptions?: RequestOptions) => request<T>('GET', path, undefined, requestOptions),
     post: <T>(path: string, body: unknown, requestOptions?: RequestOptions) => request<T>('POST', path, body, requestOptions),
     patch: <T>(path: string, body: unknown, requestOptions?: RequestOptions) => request<T>('PATCH', path, body, requestOptions),
+    putRaw: <T>(path: string, body: BodyInit, requestOptions?: RequestOptions) => requestRaw<T>('PUT', path, body, requestOptions),
     delete: <T>(path: string, requestOptions?: RequestOptions) => request<T>('DELETE', path, undefined, requestOptions),
   };
 }

@@ -29,6 +29,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("AGENTHUB_RATE_LIMIT_ENABLED", "true")
     monkeypatch.setenv("AGENTHUB_LOGIN_RATE_LIMIT_COUNT", "3")
     monkeypatch.setenv("AGENTHUB_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("AGENTHUB_FILE_TRANSFER_DIR", str(tmp_path / "transfers"))
 
     from app.core.database import reset_database
     from app.factory import create_app

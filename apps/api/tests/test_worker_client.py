@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
+from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 
 from agenthub_worker.client import AgentHubClient
 
@@ -92,4 +96,100 @@ def test_worker_client_reuses_one_http_connection_pool(monkeypatch) -> None:
         "https://agenthub.example.com/api/internal/jobs/claim",
         "https://agenthub.example.com/api/internal/jobs/claim",
     ]
+
+
+def test_worker_client_encodes_unicode_transfer_filename_header(monkeypatch, tmp_path: Path) -> None:
+    captured_headers: dict[str, str] = {}
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def put(self, url: str, **kwargs) -> httpx.Response:
+            captured_headers.update(kwargs["headers"])
+            return httpx.Response(
+                200,
+                request=httpx.Request("PUT", url),
+                json={"transfer": {"transfer_id": "xfr-test"}},
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    source = tmp_path / "设计 %.png"
+    source.write_bytes(b"png")
+    client = AgentHubClient("https://agenthub.example.com", "win-pj-redmi", "worker-token")
+
+    client.upload_transfer(
+        "xfr-test",
+        source,
+        content_type="image/png",
+        filename=source.name,
+        modified_at="2026-07-17T01:00:00Z",
+    )
+
+    assert captured_headers["X-AgentHub-Filename"] == "%E8%AE%BE%E8%AE%A1%20%25.png"
+
+
+def test_worker_client_rejects_transfer_with_wrong_server_checksum(monkeypatch, tmp_path: Path) -> None:
+    expected = hashlib.sha256(b"expected bytes").hexdigest()
+
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        @contextmanager
+        def stream(self, method: str, url: str, **_kwargs):
+            yield httpx.Response(
+                200,
+                request=httpx.Request(method, url),
+                headers={"X-AgentHub-SHA256": expected},
+                content=b"tampered bytes",
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    destination = tmp_path / "download.part"
+    client = AgentHubClient("https://agenthub.example.com", "win-pj-redmi", "worker-token")
+
+    with pytest.raises(ValueError, match="checksum"):
+        client.download_transfer("xfr-test", destination)
+
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("checksum", ["", "not-a-sha256"])
+def test_worker_client_rejects_transfer_without_valid_server_checksum(
+    monkeypatch,
+    tmp_path: Path,
+    checksum: str,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        @contextmanager
+        def stream(self, method: str, url: str, **_kwargs):
+            headers = {"X-AgentHub-SHA256": checksum} if checksum else {}
+            yield httpx.Response(
+                200,
+                request=httpx.Request(method, url),
+                headers=headers,
+                content=b"downloaded bytes",
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    destination = tmp_path / "download.part"
+    client = AgentHubClient("https://agenthub.example.com", "win-pj-redmi", "worker-token")
+
+    with pytest.raises(ValueError, match="checksum"):
+        client.download_transfer("xfr-test", destination)
+
+    assert not destination.exists()
 

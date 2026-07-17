@@ -75,6 +75,12 @@ def test_macos_worker_only_advertises_agent_backends() -> None:
     ) == ["codex", "kimi", "opencode"]
 
 
+def test_macos_worker_advertises_streamed_file_transfer_capability() -> None:
+    module = _load_main_module()
+
+    assert module.discover_capabilities()["file_transfer_v2"] is True
+
+
 def test_macos_heartbeat_keeps_tmux_as_capability_only() -> None:
     module = _load_main_module()
     payloads: list[dict] = []

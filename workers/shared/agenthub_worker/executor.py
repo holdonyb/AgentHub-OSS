@@ -58,7 +58,7 @@ IMAGE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".web
 MAX_FILE_LIST_ENTRIES = 300
 DEFAULT_FILE_READ_BYTES = 200_000
 MAX_FILE_READ_BYTES = 5_000_000
-MAX_INLINE_FILE_BYTES = 5_000_000
+MAX_INLINE_FILE_BYTES = 512_000
 TEXT_WRITEABLE_MIME_TYPES = {
     "application/json",
     "application/javascript",
@@ -70,6 +70,20 @@ TEXT_WRITEABLE_MIME_TYPES = {
     "text/xml",
 }
 MEDIA_INLINE_MIME_PREFIXES = ("audio/", "video/")
+SENSITIVE_FILE_NAMES = {
+    ".env",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "application_default_credentials.json",
+    "credentials",
+    "credentials.json",
+    "id_ed25519",
+    "id_rsa",
+    "kubeconfig",
+    "secrets.json",
+}
+SENSITIVE_FILE_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
 CLAUDE_INTERACTIVE_BRIDGE_ENV = "AGENTHUB_CLAUDE_INTERACTIVE_BRIDGE"
 CLAUDE_INTERACTIVE_BRIDGE_READY_TEXT = "已送达 Claude 交互会话，等待 transcript 同步"
 
@@ -138,6 +152,20 @@ def _modified_at(path: Path) -> str | None:
         return None
 
 
+def _is_sensitive_file(path: Path) -> bool:
+    name = path.name.casefold()
+    return (
+        name in SENSITIVE_FILE_NAMES
+        or name.startswith(".env.")
+        or path.suffix.casefold() in SENSITIVE_FILE_SUFFIXES
+    )
+
+
+def _require_sensitive_file_reveal(path: Path, payload: dict[str, Any]) -> None:
+    if _is_sensitive_file(path) and payload.get("reveal_sensitive") is not True:
+        raise ValueError("Sensitive file requires explicit reveal")
+
+
 def _execute_file_list(job: dict[str, Any]) -> str:
     payload = _payload(job)
     root = _workspace_root(job)
@@ -190,25 +218,39 @@ def _execute_file_read(job: dict[str, Any]) -> str:
         raise ValueError("File does not exist")
     if not target.is_file():
         raise ValueError("Requested path is not a file")
+    _require_sensitive_file_reveal(target, payload)
     try:
         max_bytes = int(payload.get("max_bytes", DEFAULT_FILE_READ_BYTES))
     except (TypeError, ValueError):
         max_bytes = DEFAULT_FILE_READ_BYTES
     max_bytes = max(1, min(max_bytes, MAX_FILE_READ_BYTES))
+    try:
+        offset_bytes = int(payload.get("offset_bytes", 0))
+    except (TypeError, ValueError):
+        offset_bytes = 0
+    offset_bytes = max(0, offset_bytes)
     size_bytes = target.stat().st_size
-    data = target.read_bytes()[: max_bytes + 1]
-    truncated = size_bytes > max_bytes
+    with target.open("rb") as stream:
+        stream.seek(min(offset_bytes, size_bytes))
+        data = stream.read(max_bytes + 1)
+    effective_offset = min(offset_bytes, size_bytes)
     preview = data[:max_bytes]
+    length_bytes = len(preview)
+    next_offset_bytes = effective_offset + length_bytes
+    truncated = next_offset_bytes < size_bytes
     content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     base_payload = {
         "path": relative_text,
         "filename": target.name,
         "content_type": content_type,
         "size_bytes": size_bytes,
+        "offset_bytes": effective_offset,
+        "length_bytes": length_bytes,
+        "next_offset_bytes": next_offset_bytes if truncated else None,
         "truncated": truncated,
         "modified_at": _modified_at(target),
     }
-    inline_downloadable = size_bytes <= min(max_bytes, MAX_INLINE_FILE_BYTES)
+    inline_downloadable = effective_offset == 0 and not truncated and size_bytes <= MAX_INLINE_FILE_BYTES
     if content_type.startswith("image/"):
         payload = {
             **base_payload,
@@ -243,6 +285,86 @@ def _execute_file_read(job: dict[str, Any]) -> str:
             "downloadable": inline_downloadable,
             "text": preview.decode("utf-8", errors="replace"),
             **({"data_base64": base64.b64encode(preview).decode("ascii")} if inline_downloadable else {}),
+        }
+    )
+
+
+def _execute_file_transfer_prepare(job: dict[str, Any], *, client: Any | None) -> str:
+    if client is None or not callable(getattr(client, "upload_transfer", None)):
+        raise ValueError("Worker client does not support streamed file transfers")
+    payload = _payload(job)
+    transfer_id = str(payload.get("transfer_id") or "").strip()
+    if not transfer_id:
+        raise ValueError("File transfer id is required")
+    root = _workspace_root(job)
+    target, _relative_text = _relative_workspace_path(root, payload.get("path"))
+    if not target.exists():
+        raise ValueError("File does not exist")
+    if not target.is_file():
+        raise ValueError("Requested path is not a file")
+    _require_sensitive_file_reveal(target, payload)
+    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    result = client.upload_transfer(
+        transfer_id,
+        target,
+        content_type=content_type,
+        filename=target.name,
+        modified_at=_modified_at(target),
+    )
+    return _json_result(result)
+
+
+def _execute_file_transfer_apply(job: dict[str, Any], *, client: Any | None) -> str:
+    if client is None or not callable(getattr(client, "download_transfer", None)):
+        raise ValueError("Worker client does not support streamed file transfers")
+    payload = _payload(job)
+    transfer_id = str(payload.get("transfer_id") or "").strip()
+    if not transfer_id:
+        raise ValueError("File transfer id is required")
+    root = _workspace_root(job)
+    target_dir, relative_dir = _relative_workspace_path(root, payload.get("path", "."))
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise ValueError("Upload target is not a directory")
+    filename = str(payload.get("filename") or "").replace("\\", "/").split("/")[-1].strip()
+    if not filename or filename in {".", ".."}:
+        raise ValueError("Invalid upload filename")
+    target = (target_dir / filename).resolve(strict=False)
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise ValueError("Requested path is outside workspace") from None
+    if target.exists() and not bool(payload.get("overwrite")):
+        raise ValueError("File already exists")
+    partial = target.with_name(f".{target.name}.agenthub-{transfer_id}.part")
+    try:
+        metadata = client.download_transfer(transfer_id, partial)
+        size_bytes = partial.stat().st_size
+        expected_size = metadata.get("size_bytes") if isinstance(metadata, dict) else None
+        if isinstance(expected_size, int) and expected_size != size_bytes:
+            raise ValueError("Downloaded file size does not match transfer metadata")
+        if bool(payload.get("overwrite")):
+            os.replace(partial, target)
+        else:
+            try:
+                os.link(partial, target)
+            except FileExistsError:
+                raise ValueError("File already exists") from None
+            except OSError as exc:
+                raise ValueError("Unable to create file without overwriting an existing path") from exc
+    finally:
+        partial.unlink(missing_ok=True)
+    content_type = str(payload.get("content_type") or mimetypes.guess_type(target.name)[0] or "application/octet-stream")
+    relative_path = filename if relative_dir == "." else f"{relative_dir}/{filename}"
+    return _json_result(
+        {
+            "path": relative_path,
+            "parent_path": relative_dir,
+            "filename": target.name,
+            "content_type": content_type,
+            "size_bytes": target.stat().st_size,
+            "modified_at": _modified_at(target),
+            "preview_capability": _preview_capability_for_file(target.name, content_type),
+            "downloadable": True,
         }
     )
 
@@ -2005,6 +2127,10 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
         return _execute_file_list(job)
     if kind == "file_read":
         return _execute_file_read(job)
+    if kind == "file_transfer_prepare":
+        return _execute_file_transfer_prepare(job, client=client)
+    if kind == "file_transfer_apply":
+        return _execute_file_transfer_apply(job, client=client)
     if kind == "file_write":
         return _execute_file_write(job)
     if kind == "file_upload":
