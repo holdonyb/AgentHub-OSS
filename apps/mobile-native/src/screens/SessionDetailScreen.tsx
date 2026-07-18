@@ -6,9 +6,11 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -97,6 +99,30 @@ function sendStateText(job: NativeJob | null, sending: boolean, sendError: strin
   }
   if (job.status === 'cancelled') return { kind: 'error' as const, text: '已取消' };
   return { kind: 'success' as const, text: '已完成' };
+}
+
+function isMarkdownText(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  return /(^#\s)|(^[-*]\s)|(^\d+\.\s)|(```)|(\[[^\]]+\]\([^)]+\))|(\*\*[^*]+\*\*)/m.test(text);
+}
+
+function toolSummary(item: NativeTimelineItem) {
+  if (typeof item.payload?.summary === 'string' && item.payload.summary.trim()) return item.payload.summary.trim();
+  if (typeof item.text === 'string' && item.text.trim()) return item.text.trim();
+  return '工具执行完成';
+}
+
+function toolOutput(item: NativeTimelineItem) {
+  if (typeof item.payload?.output === 'string' && item.payload.output.trim()) return item.payload.output.trim();
+  if (typeof item.payload?.result === 'string' && item.payload.result.trim()) return item.payload.result.trim();
+  return '';
+}
+
+function extractLocalPaths(text: string): string[] {
+  const matches = text.match(/[A-Za-z]:[\\/][^\s)\]]+/g) ?? [];
+  const normalized = matches.map((value) => value.replace(/\\/g, '/').replace(/[)>.,]+$/g, ''));
+  return [...new Set(normalized)];
 }
 
 function PermissionCard({
@@ -312,6 +338,7 @@ export function SessionDetailScreen({
   csrfToken,
   canTerminate,
   onBack,
+  onOpenFile,
   onRequestError,
 }: {
   api: SessionDetailApi;
@@ -319,6 +346,7 @@ export function SessionDetailScreen({
   csrfToken: string;
   canTerminate: boolean;
   onBack(): void;
+  onOpenFile?(sessionId: string, path: string): void;
   onRequestError?(error: unknown): void;
 }) {
   const [reply, setReply] = useState('');
@@ -338,8 +366,12 @@ export function SessionDetailScreen({
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
+  const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
+  const [readerItem, setReaderItem] = useState<NativeTimelineItem | null>(null);
+  const [readerTab, setReaderTab] = useState<'text' | 'markdown'>('text');
   const permissionSubmitting = useRef(new Set<string>());
   const listRef = useRef<FlatList<NativeTimelineItem>>(null);
+  const lastTimelineKey = useRef<string | null>(null);
   const voiceRecorder = useNativeVoiceRecorder();
 
   const loadThread = useCallback(async (): Promise<SessionThreadData> => {
@@ -385,6 +417,8 @@ export function SessionDetailScreen({
     setOlderHasMore(null);
     setOlderError(null);
     setResolvedPermissionIds(new Set());
+    setReplyMode('direct');
+    setReaderItem(null);
   }, [session.session_id]);
 
   useEffect(() => {
@@ -409,6 +443,16 @@ export function SessionDetailScreen({
     return () => clearInterval(timer);
   }, [currentJob?.status, currentSession.status, resource.reload]);
 
+  useEffect(() => {
+    if (timelineItems.length === 0) return;
+    const latest = timelineItems[timelineItems.length - 1];
+    if (!latest) return;
+    const latestKey = `${latest.session_id}:${latest.seq}:${latest.created_at}`;
+    if (lastTimelineKey.current === latestKey) return;
+    lastTimelineKey.current = latestKey;
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+  }, [timelineItems]);
+
   async function sendReply() {
     const prompt = reply.trim();
     if ((!prompt && attachments.length === 0) || sending || currentSession.status === 'terminated') return;
@@ -419,6 +463,7 @@ export function SessionDetailScreen({
         session.session_id,
         {
           prompt,
+          reply_mode: replyMode,
           ...(attachments.length > 0
             ? {
                 attachments: attachments.map(({ filename, content_type, data_base64 }) => ({
@@ -434,6 +479,7 @@ export function SessionDetailScreen({
       setSentJob(response.job);
       setReply('');
       setAttachments([]);
+      setReplyMode('direct');
       await resource.reload();
     } catch (error) {
       onRequestError?.(error);
@@ -562,6 +608,73 @@ export function SessionDetailScreen({
     } finally {
       setTerminating(false);
     }
+  }
+
+  function openReader(item: NativeTimelineItem) {
+    const text = item.text || '';
+    setReaderItem(item);
+    setReaderTab(isMarkdownText(text) ? 'markdown' : 'text');
+  }
+
+  function renderTimelineItem(item: NativeTimelineItem) {
+    const isTool = item.item_type === 'tool_call';
+    const text = item.text || '';
+    const supportsMarkdown = !isTool && isMarkdownText(text);
+    const canOpenReader = Boolean(text.trim()) && (text.length > 120 || supportsMarkdown);
+    const fileLinks = !isTool ? extractLocalPaths(text) : [];
+    return (
+      <View style={[
+        styles.timelineItem,
+        item.role === 'user' && styles.timelineItemUser,
+        item.item_type === 'error' && styles.timelineItemError,
+      ]}>
+        <View style={styles.timelineMeta}>
+          <Text style={styles.timelineRole}>{timelineLabel(item)}</Text>
+          <Text style={styles.timelineTime}>{timelineTime(item.created_at)}</Text>
+        </View>
+        {isTool ? (
+          <View style={styles.toolCard}>
+            <Text style={styles.toolName}>{item.tool_name || 'tool_call'}</Text>
+            <Text selectable style={styles.timelineText}>{toolSummary(item)}</Text>
+            {toolOutput(item) ? (
+              <Text selectable style={styles.toolOutput}>{toolOutput(item)}</Text>
+            ) : null}
+          </View>
+        ) : (
+          <Text selectable style={styles.timelineText}>{text || '暂无内容'}</Text>
+        )}
+        {fileLinks.length > 0 ? (
+          <View style={styles.fileLinkRow}>
+            {fileLinks.slice(0, 3).map((path) => (
+              <Pressable
+                accessibilityLabel={`打开文件 ${path.split('/').pop() || path}`}
+                accessibilityRole="button"
+                key={path}
+                onPress={() => onOpenFile?.(session.session_id, path)}
+                style={({ pressed }) => [styles.fileLinkButton, pressed && styles.pressed]}
+              >
+                <Ionicons color={colors.accent} name="document-text-outline" size={15} />
+                <Text numberOfLines={1} style={styles.fileLinkText}>{path.split('/').pop() || path}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        <View style={styles.timelineFooter}>
+          {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : <View />}
+          {canOpenReader ? (
+            <Pressable
+              accessibilityLabel="全文阅读"
+              accessibilityRole="button"
+              onPress={() => openReader(item)}
+              style={({ pressed }) => [styles.readerButton, pressed && styles.pressed]}
+            >
+              <Ionicons color={colors.accent} name="expand-outline" size={15} />
+              <Text style={styles.readerButtonText}>全文阅读</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
   }
 
   const detailHeader = data ? (
@@ -749,7 +862,6 @@ export function SessionDetailScreen({
               </View>
             )}
             ListHeaderComponent={detailHeader}
-            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             ref={listRef}
             refreshControl={(
               <RefreshControl
@@ -759,20 +871,7 @@ export function SessionDetailScreen({
                 tintColor={colors.accent}
               />
             )}
-            renderItem={({ item }) => (
-              <View style={[
-                styles.timelineItem,
-                item.role === 'user' && styles.timelineItemUser,
-                item.item_type === 'error' && styles.timelineItemError,
-              ]}>
-                <View style={styles.timelineMeta}>
-                  <Text style={styles.timelineRole}>{timelineLabel(item)}</Text>
-                  <Text style={styles.timelineTime}>{timelineTime(item.created_at)}</Text>
-                </View>
-                <Text selectable style={styles.timelineText}>{item.text || '暂无内容'}</Text>
-                {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : null}
-              </View>
-            )}
+            renderItem={({ item }) => renderTimelineItem(item)}
           />
         )}
 
@@ -817,6 +916,48 @@ export function SessionDetailScreen({
               </Text>
             </View>
           ) : null}
+          <View style={styles.modeRow}>
+            <Pressable
+              accessibilityLabel="切换到直接模式"
+              accessibilityRole="button"
+              accessibilityState={{ selected: replyMode === 'direct' }}
+              onPress={() => setReplyMode('direct')}
+              style={({ pressed }) => [
+                styles.modeButton,
+                replyMode === 'direct' && styles.modeButtonSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.modeButtonText, replyMode === 'direct' && styles.modeButtonTextSelected]}>直接</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="切换到计划模式"
+              accessibilityRole="button"
+              accessibilityState={{ selected: replyMode === 'plan' }}
+              onPress={() => setReplyMode('plan')}
+              style={({ pressed }) => [
+                styles.modeButton,
+                replyMode === 'plan' && styles.modeButtonSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.modeButtonText, replyMode === 'plan' && styles.modeButtonTextSelected]}>计划</Text>
+            </Pressable>
+            {(['继续', 'Implement the plan', '不对，重新来'] as const).map((quickReply) => (
+              <Pressable
+                accessibilityLabel={`快捷回复 ${quickReply}`}
+                accessibilityRole="button"
+                key={quickReply}
+                onPress={() => {
+                  setReply(quickReply);
+                  setSendError(null);
+                }}
+                style={({ pressed }) => [styles.quickReplyButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.quickReplyText}>{quickReply}</Text>
+              </Pressable>
+            ))}
+          </View>
           <View style={styles.composerRow}>
             <Pressable
               accessibilityLabel="添加图片"
@@ -881,6 +1022,59 @@ export function SessionDetailScreen({
             </Pressable>
           </View>
         </View>
+        <Modal
+          animationType="slide"
+          onRequestClose={() => setReaderItem(null)}
+          transparent
+          visible={Boolean(readerItem)}
+        >
+          <View style={styles.readerBackdrop}>
+            <View style={styles.readerSheet}>
+              <View style={styles.readerHeader}>
+                <Text style={styles.readerTitle}>全文阅读</Text>
+                <Pressable
+                  accessibilityLabel="关闭全文阅读"
+                  accessibilityRole="button"
+                  onPress={() => setReaderItem(null)}
+                  style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+                >
+                  <Ionicons color={colors.text} name="close" size={20} />
+                </Pressable>
+              </View>
+              <View style={styles.readerTabs}>
+                <Pressable
+                  accessibilityLabel="原文"
+                  accessibilityRole="button"
+                  onPress={() => setReaderTab('text')}
+                  style={({ pressed }) => [
+                    styles.readerTab,
+                    readerTab === 'text' && styles.readerTabSelected,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={[styles.readerTabText, readerTab === 'text' && styles.readerTabTextSelected]}>原文</Text>
+                </Pressable>
+                {readerItem && isMarkdownText(readerItem.text || '') ? (
+                  <Pressable
+                    accessibilityLabel="Markdown"
+                    accessibilityRole="button"
+                    onPress={() => setReaderTab('markdown')}
+                    style={({ pressed }) => [
+                      styles.readerTab,
+                      readerTab === 'markdown' && styles.readerTabSelected,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={[styles.readerTabText, readerTab === 'markdown' && styles.readerTabTextSelected]}>Markdown</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              <ScrollView contentContainerStyle={styles.readerScroll}>
+                <Text selectable style={styles.readerBody}>{readerItem?.text || ''}</Text>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1035,6 +1229,35 @@ const styles = StyleSheet.create({
   timelineTime: { color: colors.muted, fontSize: 11 },
   timelineText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   timelineStatus: { color: colors.muted, fontSize: 11 },
+  timelineFooter: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  toolCard: { gap: 6 },
+  toolName: { color: colors.accent, fontSize: 12, fontWeight: '800' },
+  toolOutput: {
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    color: colors.muted,
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+    padding: 10,
+  },
+  fileLinkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  fileLinkButton: {
+    alignItems: 'center',
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 34,
+    paddingHorizontal: 12,
+  },
+  fileLinkText: { color: colors.accent, fontSize: 12, fontWeight: '700', maxWidth: 180 },
+  readerButton: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 32 },
+  readerButtonText: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   emptyTimeline: { alignItems: 'center', gap: 7, paddingBottom: 40, paddingTop: 34 },
   emptyText: { color: colors.muted, fontSize: 13 },
   composer: {
@@ -1064,6 +1287,31 @@ const styles = StyleSheet.create({
   recordingState: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 24 },
   recordingDot: { backgroundColor: colors.danger, borderRadius: 4, height: 8, width: 8 },
   recordingText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+  modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  modeButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 34,
+    paddingHorizontal: 14,
+  },
+  modeButtonSelected: { backgroundColor: '#EEF6FF', borderColor: colors.accent },
+  modeButtonText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  modeButtonTextSelected: { color: colors.accent },
+  quickReplyButton: {
+    alignItems: 'center',
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 34,
+    paddingHorizontal: 12,
+  },
+  quickReplyText: { color: colors.text, fontSize: 12, fontWeight: '600' },
   composerRow: { alignItems: 'flex-end', flexDirection: 'row', gap: 9 },
   attachButton: {
     alignItems: 'center',
@@ -1093,6 +1341,37 @@ const styles = StyleSheet.create({
   sendState: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   sendStateError: { color: colors.danger },
   sendStateSuccess: { color: colors.success },
+  readerBackdrop: {
+    backgroundColor: 'rgba(11, 18, 32, 0.42)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  readerSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '86%',
+    paddingBottom: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  readerHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  readerTitle: { color: colors.text, fontSize: 20, fontWeight: '800' },
+  readerTabs: { flexDirection: 'row', gap: 8, paddingBottom: 12, paddingTop: 14 },
+  readerTab: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 38,
+    paddingHorizontal: 16,
+  },
+  readerTabSelected: { backgroundColor: '#EEF6FF', borderColor: colors.accent },
+  readerTabText: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  readerTabTextSelected: { color: colors.accent },
+  readerScroll: { paddingBottom: 28 },
+  readerBody: { color: colors.text, fontSize: 15, lineHeight: 24 },
   pressed: { opacity: 0.68 },
   disabled: { opacity: 0.45 },
 });

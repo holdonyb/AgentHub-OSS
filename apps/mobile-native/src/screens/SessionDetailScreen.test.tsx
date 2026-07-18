@@ -134,6 +134,21 @@ const timeline: NativeTimelineItem[] = [
   },
 ];
 
+const markdownTimeline: NativeTimelineItem[] = [
+  {
+    session_id: 'session-1',
+    seq: 3,
+    item_type: 'assistant_message',
+    role: 'assistant',
+    text: '# 计划\n\n- 第一步\n- 第二步\n\n[E:/Work/AgentHub-OSS/README.md](E:/Work/AgentHub-OSS/README.md)',
+    tool_call_id: null,
+    tool_name: null,
+    status: 'completed',
+    payload: {},
+    created_at: '2026-07-11T12:03:00Z',
+  },
+];
+
 const questionPermission: NativePermission = {
   permission_id: 'permission-question',
   session_id: 'session-1',
@@ -243,6 +258,87 @@ describe('native session detail', () => {
     expect(() => renderer.root.findByProps({ accessibilityLabel: '加载更早消息' })).toThrow();
   });
 
+  it('opens a full reader for long assistant messages and only exposes markdown mode for markdown content', async () => {
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: markdownTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('全文阅读');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '全文阅读' })));
+    await settle();
+
+    expect(renderedText(renderer)).toContain('原文');
+    expect(renderedText(renderer)).toContain('Markdown');
+    expect(renderedText(renderer)).toContain('# 计划');
+  });
+
+  it('opens local file links from a timeline message', async () => {
+    const onOpenFile = jest.fn();
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: markdownTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        onOpenFile={onOpenFile}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开文件 README.md' })));
+    expect(onOpenFile).toHaveBeenCalledWith('session-1', 'E:/Work/AgentHub-OSS/README.md');
+  });
+
+  it('does not expose a markdown reader tab for completed tool output cards', async () => {
+    const toolTimeline: NativeTimelineItem[] = [
+      {
+        session_id: 'session-1',
+        seq: 3,
+        item_type: 'tool_call',
+        role: 'tool',
+        text: '',
+        tool_call_id: 'tool-1',
+        tool_name: 'shell_command',
+        status: 'completed',
+        payload: {
+          summary: 'Exit code: 0',
+          output: 'build finished',
+        },
+        created_at: '2026-07-11T12:03:00Z',
+      },
+    ];
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: toolTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('shell_command');
+    expect(() => renderer.root.findByProps({ accessibilityLabel: 'Markdown' })).toThrow();
+  });
+
   it('preserves multiline replies and exposes sending, queued, running, and failed states', async () => {
     const sendRequest = deferred<{ job: NativeJob }>();
     let jobs: NativeJob[] = [];
@@ -286,7 +382,7 @@ describe('native session detail', () => {
 
     expect(api.sendSessionInput).toHaveBeenCalledWith(
       'session-1',
-      { prompt: '第一行\n第二行' },
+      { prompt: '第一行\n第二行', reply_mode: 'direct' },
       'csrf-token',
     );
     expect(renderedText(renderer)).toContain('排队中');
@@ -300,6 +396,42 @@ describe('native session detail', () => {
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '刷新会话详情' })));
     await settle();
     expect(renderedText(renderer)).toContain('失败：模型容量不足');
+  });
+
+  it('sends reply mode and quick replies from the native composer', async () => {
+    const queuedJob = {
+      job_id: 'job-plan',
+      kind: 'session_input',
+      target_session_id: 'session-1',
+      worker_id: 'worker-main',
+      backend: 'codex',
+      status: 'queued',
+      error_text: null,
+    } as NativeJob;
+    const api = createDetailApi({
+      sendSessionInput: jest.fn(async () => ({ job: queuedJob })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '切换到计划模式' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '快捷回复 继续' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '发送回复' })));
+    await settle();
+
+    expect(api.sendSessionInput).toHaveBeenCalledWith(
+      'session-1',
+      { prompt: '继续', reply_mode: 'plan' },
+      'csrf-token',
+    );
   });
 
   it('selects an image and sends it without requiring prompt text', async () => {
@@ -343,6 +475,7 @@ describe('native session detail', () => {
       'session-1',
       {
         prompt: '',
+        reply_mode: 'direct',
         attachments: [{ filename: 'screen.png', content_type: 'image/png', data_base64: 'aW1hZ2U=' }],
       },
       'csrf-token',

@@ -190,6 +190,42 @@ function createSessionsApi(listSessions: jest.Mock) {
 }
 
 describe('native resource screens', () => {
+  it('filters sessions with a native inbox search box and distinguishes empty matches from empty data', async () => {
+    const listSessions = jest.fn(async () => ({
+      items: [
+        session,
+        {
+          ...session,
+          session_id: 'session-2',
+          title: '处理 Claude API 报错',
+          backend: 'claude',
+          worker_id: 'worker-claude',
+          project_name: 'CourseAgent',
+          workspace_root: 'E:/Work/CourseAgent',
+          activity_summary: 'Invalid API key',
+          last_message: '请检查 API key',
+        },
+      ],
+    }));
+    const renderer = await render(<SessionsScreen api={createSessionsApi(listSessions)} />);
+    await settle();
+
+    expect(renderedText(renderer)).toContain('修复登录问题');
+    expect(renderedText(renderer)).toContain('处理 Claude API 报错');
+
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '搜索会话' }), 'claude');
+    });
+    expect(renderedText(renderer)).not.toContain('修复登录问题');
+    expect(renderedText(renderer)).toContain('处理 Claude API 报错');
+
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '搜索会话' }), '不存在的会话');
+    });
+    expect(renderedText(renderer)).toContain('没有匹配的会话');
+    expect(renderedText(renderer)).not.toContain('处理 Claude API 报错');
+  });
+
   it('loads and refreshes sessions without hiding current data', async () => {
     const initialRequest = deferred<{ items: NativeSessionSummary[] }>();
     const refreshRequest = deferred<{ items: NativeSessionSummary[] }>();
@@ -567,5 +603,66 @@ describe('native resource screens', () => {
       'csrf-token',
     );
     expect(renderedText(renderer)).toContain('更新内容');
+  });
+
+  it('opens a requested local file target directly from a session path', async () => {
+    const workspaceSession = { ...session, workspace_root: 'E:/Work/AgentHub-OSS' };
+    const listSessions = jest.fn(async () => ({ items: [workspaceSession] }));
+    const listSessionFiles = jest.fn(async () => ({ job: queuedJob('list-job', 'file_list') }));
+    const readSessionFile = jest.fn(async () => ({ job: queuedJob('read-job', 'file_read') }));
+    const writeSessionFile = jest.fn(async () => ({ job: queuedJob('write-job', 'file_write') }));
+    const getSessionSync = jest
+      .fn()
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'list-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({
+            path: '.',
+            workspace_root: 'E:/Work/AgentHub-OSS',
+            entries: [],
+          }),
+        }],
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'read-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({
+            path: 'README.md',
+            filename: 'README.md',
+            content_type: 'text/markdown',
+            size_bytes: 64,
+            truncated: false,
+            modified_at: '2026-07-18T00:00:00Z',
+            preview_kind: 'text',
+            text: '# AgentHub\n来自消息跳转',
+          }),
+        }],
+        has_more: false,
+      });
+
+    const renderer = await render(
+      <FilesScreen
+        api={{ getSessionSync, listSessionFiles, listSessions, readSessionFile, writeSessionFile }}
+        canEdit
+        csrfToken="csrf-token"
+        requestedTarget={{ sessionId: 'session-1', path: 'E:/Work/AgentHub-OSS/README.md' }}
+      />,
+    );
+    await settle();
+    await settle();
+    await settle();
+
+    expect(readSessionFile).toHaveBeenCalledWith(
+      'session-1',
+      { path: 'README.md', max_bytes: 5_000_000 },
+      'csrf-token',
+    );
   });
 });

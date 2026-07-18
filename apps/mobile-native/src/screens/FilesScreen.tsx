@@ -37,11 +37,15 @@ export function FilesScreen({
   api,
   csrfToken,
   canEdit = false,
+  requestedTarget = null,
+  onRequestedTargetHandled,
   onRequestError,
 }: {
   api: FilesApi;
   csrfToken: string;
   canEdit?: boolean;
+  requestedTarget?: { sessionId: string; path: string } | null;
+  onRequestedTargetHandled?(target: { sessionId: string; path: string }): void;
   onRequestError?(error: unknown): void;
 }) {
   const loadSessions = useCallback(async () => {
@@ -60,6 +64,11 @@ export function FilesScreen({
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === selectedSessionId) ?? null,
     [selectedSessionId, sessions],
+  );
+  const previewSession = useMemo(
+    () => selectedSession
+      ?? (requestedTarget ? sessions.find((session) => session.session_id === requestedTarget.sessionId) ?? null : null),
+    [requestedTarget, selectedSession, sessions],
   );
 
   useEffect(() => {
@@ -85,7 +94,52 @@ export function FilesScreen({
   });
   const entries = fileResource.data?.entries ?? [];
 
-  if (preview && selectedSession) {
+  async function openEntry(entry: NativeWorkspaceFileEntry) {
+    if (!selectedSession) return;
+    if (entry.kind === 'directory') {
+      setPath(entry.path);
+      return;
+    }
+    await openFilePath(selectedSession, entry.path);
+  }
+
+  async function openFilePath(session: NativeSessionSummary, filePath: string) {
+    setPreviewBusy(true);
+    setPreviewError(null);
+    try {
+      const response = await api.readSessionFile(
+        session.session_id,
+        { path: filePath, max_bytes: 5_000_000 },
+        csrfToken,
+      );
+      const job = await waitForSessionJob(api, session.session_id, response.job.job_id);
+      const result = parseJobResult<NativeWorkspaceFileReadResult>(job, '文件读取失败');
+      setPreview(result);
+      setEditorText(result.text ?? '');
+      setEditing(false);
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : '文件读取失败');
+      onRequestError?.(error);
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!requestedTarget || sessions.length === 0) return;
+    if (fileResource.loading || fileResource.refreshing) return;
+    const targetSession = sessions.find((session) => session.session_id === requestedTarget.sessionId);
+    if (!targetSession) return;
+    const relativePath = toRelativeWorkspacePath(targetSession.workspace_root, requestedTarget.path);
+    if (!relativePath) return;
+    setSelectedSessionId(targetSession.session_id);
+    setPath(parentPath(relativePath));
+    void openFilePath(targetSession, relativePath).finally(() => {
+      onRequestedTargetHandled?.(requestedTarget);
+    });
+  }, [fileResource.loading, fileResource.refreshing, onRequestedTargetHandled, requestedTarget, sessions]);
+
+  if (preview && previewSession) {
     return (
       <FilePreview
         canEdit={canEdit}
@@ -100,37 +154,10 @@ export function FilesScreen({
         }}
         onChangeText={setEditorText}
         onEdit={() => setEditing(true)}
-        onSave={() => void saveFile(selectedSession)}
+        onSave={() => void saveFile(previewSession)}
         saving={previewBusy}
       />
     );
-  }
-
-  async function openEntry(entry: NativeWorkspaceFileEntry) {
-    if (!selectedSession) return;
-    if (entry.kind === 'directory') {
-      setPath(entry.path);
-      return;
-    }
-    setPreviewBusy(true);
-    setPreviewError(null);
-    try {
-      const response = await api.readSessionFile(
-        selectedSession.session_id,
-        { path: entry.path, max_bytes: 5_000_000 },
-        csrfToken,
-      );
-      const job = await waitForSessionJob(api, selectedSession.session_id, response.job.job_id);
-      const result = parseJobResult<NativeWorkspaceFileReadResult>(job, '文件读取失败');
-      setPreview(result);
-      setEditorText(result.text ?? '');
-      setEditing(false);
-    } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : '文件读取失败');
-      onRequestError?.(error);
-    } finally {
-      setPreviewBusy(false);
-    }
   }
 
   async function saveFile(session: NativeSessionSummary) {
@@ -466,6 +493,15 @@ function parentPath(path: string) {
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
   parts.pop();
   return parts.join('/') || '.';
+}
+
+function toRelativeWorkspacePath(workspaceRoot: string | undefined, filePath: string) {
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const normalizedRoot = (workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalizedRoot) return normalizedPath;
+  if (!normalizedPath.toLowerCase().startsWith(normalizedRoot.toLowerCase())) return normalizedPath;
+  const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '');
+  return relative || '.';
 }
 
 function formatFileSize(value?: number | null) {

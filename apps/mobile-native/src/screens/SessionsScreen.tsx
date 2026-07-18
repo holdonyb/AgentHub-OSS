@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { MobileApi, NativeSessionSummary } from '../api/mobileApi';
 import { useAsyncResource } from '../state/asyncResource';
@@ -22,6 +22,11 @@ type SessionsApi = Pick<
   | 'terminateSession'
 >;
 
+interface RequestedFileTarget {
+  sessionId: string;
+  path: string;
+}
+
 export function SessionsScreen({
   api,
   onRequestError,
@@ -29,6 +34,7 @@ export function SessionsScreen({
   canTerminate = false,
   requestedSessionId = null,
   onRequestedSessionHandled,
+  onOpenFile,
 }: {
   api: SessionsApi;
   onRequestError?(error: unknown): void;
@@ -36,11 +42,29 @@ export function SessionsScreen({
   canTerminate?: boolean;
   requestedSessionId?: string | null;
   onRequestedSessionHandled?(sessionId: string): void;
+  onOpenFile?(target: RequestedFileTarget): void;
 }) {
   const [selectedSession, setSelectedSession] = useState<NativeSessionSummary | null>(null);
+  const [query, setQuery] = useState('');
   const loadSessions = useCallback(async () => (await api.listSessions()).items, [api]);
   const resource = useAsyncResource(loadSessions, { onError: onRequestError });
   const sessions = resource.data ?? [];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredSessions = useMemo(() => {
+    if (!normalizedQuery) return sessions;
+    return sessions.filter((session) => {
+      const haystack = [
+        session.title,
+        session.backend,
+        session.worker_id,
+        session.project_name,
+        session.workspace_root,
+        session.last_message,
+        session.activity_summary,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [normalizedQuery, sessions]);
 
   useEffect(() => {
     if (!requestedSessionId) return;
@@ -67,6 +91,7 @@ export function SessionsScreen({
           void resource.reload();
         }}
         onRequestError={onRequestError}
+        onOpenFile={(sessionId, path) => onOpenFile?.({ sessionId, path })}
         session={selectedSession}
       />
     );
@@ -99,7 +124,8 @@ export function SessionsScreen({
     );
   }
 
-  const fullState = resource.loading || (resource.error !== null && resource.data === null) || sessions.length === 0;
+  const showEmptyMatches = Boolean(normalizedQuery) && sessions.length > 0 && filteredSessions.length === 0;
+  const fullState = resource.loading || (resource.error !== null && resource.data === null) || (sessions.length === 0 && !normalizedQuery);
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
       <ResourceHeader
@@ -109,6 +135,29 @@ export function SessionsScreen({
         refreshing={resource.loading || resource.refreshing}
         title="会话"
       />
+      <View style={styles.searchWrap}>
+        <Ionicons color={colors.muted} name="search-outline" size={18} />
+        <TextInput
+          accessibilityLabel="搜索会话"
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setQuery}
+          placeholder="搜索会话、项目或 worker"
+          placeholderTextColor={colors.muted}
+          style={styles.searchInput}
+          value={query}
+        />
+        {query ? (
+          <Pressable
+            accessibilityLabel="清空搜索"
+            accessibilityRole="button"
+            onPress={() => setQuery('')}
+            style={({ pressed }) => [styles.clearButton, pressed && styles.cardPressed]}
+          >
+            <Ionicons color={colors.muted} name="close-circle" size={18} />
+          </Pressable>
+        ) : null}
+      </View>
       {fullState ? (
         <ResourceState
           empty={sessions.length === 0}
@@ -123,8 +172,14 @@ export function SessionsScreen({
       ) : (
         <FlatList
           contentContainerStyle={styles.list}
-          data={sessions}
+          data={filteredSessions}
           keyExtractor={(item) => item.session_id}
+          ListEmptyComponent={showEmptyMatches ? (
+            <View style={styles.emptyMatch}>
+              <Ionicons color={colors.muted} name="search-outline" size={22} />
+              <Text style={styles.emptyMatchText}>没有匹配的会话</Text>
+            </View>
+          ) : null}
           ListHeaderComponent={resource.error ? (
             <ResourceErrorBanner
               error={resource.error}
@@ -150,6 +205,30 @@ export function SessionsScreen({
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.canvas, flex: 1 },
   list: { gap: 10, paddingBottom: 28, paddingHorizontal: 16 },
+  searchWrap: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+    marginHorizontal: 16,
+    paddingHorizontal: 12,
+  },
+  searchInput: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 14,
+    minHeight: 46,
+  },
+  clearButton: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
   card: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -168,4 +247,6 @@ const styles = StyleSheet.create({
   footerRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   statusText: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   activityText: { color: colors.muted, fontSize: 12 },
+  emptyMatch: { alignItems: 'center', gap: 8, paddingTop: 36 },
+  emptyMatchText: { color: colors.muted, fontSize: 13 },
 });
