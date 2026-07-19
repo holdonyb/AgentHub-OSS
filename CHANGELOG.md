@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.2 - 2026-07-19
+
+- Expanded the React Native console into a complete mobile control surface: session search and reply, approvals, full-message reader, image and voice input, task creation and review, worker diagnostics, notification inbox, and update checks.
+- Added scoped workspace browsing, image preview, text editing, file creation, rename, directory creation, and image upload through the session's assigned worker.
+- Made task artifacts open directly in the matching session workspace instead of requiring manual path lookup.
+- Reduced mobile timeline noise by collapsing completed tool output until the user explicitly opens it.
+- Added GitHub Release metadata lookup with a stable signed-APK fallback and raised Android versionCode for in-place updates.
+
 ## v1.0.0 - 2026-07-12
 
 - Added Workbench Mode beside the existing Session console, including structured task briefs, worker dispatch, attempts, artifacts, review, approval, and rework.
