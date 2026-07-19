@@ -116,12 +116,22 @@ export function MainTabs({
 }: MainTabsProps) {
   const navigationRef = useRef(createNavigationContainerRef<RootTabParamList>()).current;
   const [requestedSessionId, setRequestedSessionId] = useState<string | null>(null);
+  const [requestedFileTarget, setRequestedFileTarget] = useState<{ sessionId: string; path: string } | null>(null);
   const openNotificationSession = useCallback((sessionId: string) => {
     setRequestedSessionId(sessionId);
     if (navigationRef.isReady()) navigationRef.navigate('sessions');
   }, [navigationRef]);
+  const openSessionFile = useCallback((target: { sessionId: string; path: string }) => {
+    setRequestedFileTarget(target);
+    if (navigationRef.isReady()) navigationRef.navigate('files');
+  }, [navigationRef]);
   const handleRequestedSessionHandled = useCallback((sessionId: string) => {
     setRequestedSessionId((current) => current === sessionId ? null : current);
+  }, []);
+  const handleRequestedFileHandled = useCallback((target: { sessionId: string; path: string }) => {
+    setRequestedFileTarget((current) => (
+      current?.sessionId === target.sessionId && current?.path === target.path ? null : current
+    ));
   }, []);
   const notificationGuard = useNativeNotificationGuard(api, csrfToken, onRequestError, openNotificationSession);
   return (
@@ -155,6 +165,7 @@ export function MainTabs({
                     csrfToken={csrfToken}
                     onRequestError={onRequestError}
                     onRequestedSessionHandled={handleRequestedSessionHandled}
+                    onOpenFile={openSessionFile}
                     requestedSessionId={requestedSessionId}
                   />
                 );
@@ -179,6 +190,8 @@ export function MainTabs({
                     canEdit={user.role !== 'viewer'}
                     csrfToken={csrfToken}
                     onRequestError={onRequestError}
+                    onRequestedTargetHandled={handleRequestedFileHandled}
+                    requestedTarget={requestedFileTarget}
                   />
                 );
               }
