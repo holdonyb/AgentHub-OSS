@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import * as Clipboard from 'expo-clipboard';
 import type {
   NativeJob,
   NativePermission,
@@ -10,6 +11,7 @@ import { pickSessionImage } from './nativeImagePicker';
 import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
+jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => undefined) }));
 jest.mock('./nativeImagePicker', () => ({ pickSessionImage: jest.fn() }));
 jest.mock('./useNativeVoiceRecorder', () => ({ useNativeVoiceRecorder: jest.fn() }));
 
@@ -280,6 +282,49 @@ describe('native session detail', () => {
     expect(renderedText(renderer)).toContain('原文');
     expect(renderedText(renderer)).toContain('Markdown');
     expect(renderedText(renderer)).toContain('# 计划');
+  });
+
+  it('supports inline expand, collapse, and copy for long assistant messages', async () => {
+    const longMessage = '第一段总结。'.repeat(30);
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({
+        items: [{
+          session_id: 'session-1',
+          seq: 4,
+          item_type: 'assistant_message',
+          role: 'assistant',
+          text: longMessage,
+          tool_call_id: null,
+          tool_name: null,
+          status: 'completed',
+          payload: {},
+          created_at: '2026-07-11T12:04:00Z',
+        }],
+        has_more: false,
+      })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('展开全文');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '展开全文' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('收起');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '复制全文' })));
+    expect(Clipboard.setStringAsync).toHaveBeenCalledWith(longMessage);
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '收起全文' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('展开全文');
   });
 
   it('opens local file links from a timeline message', async () => {

@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import {
   useCallback,
+  useMemo,
   useState,
   type ComponentProps,
   type Dispatch,
@@ -51,6 +52,8 @@ interface TaskDraft {
   authorityPreset: NativeTaskAuthorityPreset;
 }
 
+type TaskInboxFilter = 'all' | 'ready_to_review' | 'blocked' | 'working';
+
 const emptyTaskDraft: TaskDraft = {
   title: '',
   brief: '',
@@ -63,19 +66,20 @@ const emptyTaskDraft: TaskDraft = {
   authorityPreset: 'feature',
 };
 
-const taskFilters: ReadonlyArray<{ label: string; status: NativeTaskStatus | undefined }> = [
-  { label: '全部', status: undefined },
-  { label: '草稿', status: 'draft' },
-  { label: '排队中', status: 'queued' },
-  { label: '执行中', status: 'working' },
-  { label: '受阻', status: 'blocked' },
-  { label: '待审批', status: 'needs_approval' },
-  { label: '待验收', status: 'ready_to_review' },
-  { label: '已完成', status: 'accepted' },
-  { label: '已拒绝', status: 'rejected' },
-  { label: '失败', status: 'failed' },
-  { label: '已取消', status: 'cancelled' },
+const inboxFilters: ReadonlyArray<{ key: TaskInboxFilter; label: string; description: string }> = [
+  { key: 'ready_to_review', label: '待验收', description: '等待你确认交付结果' },
+  { key: 'blocked', label: '已阻塞', description: '需要审批或人工处理' },
+  { key: 'working', label: '执行中', description: '排队或正在执行' },
+  { key: 'all', label: '全部任务', description: '查看完整任务列表' },
 ];
+
+function matchesInboxFilter(task: NativeTaskSummary, filter: TaskInboxFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'ready_to_review') return task.status === 'ready_to_review';
+  if (filter === 'blocked') return task.status === 'blocked' || task.status === 'needs_approval';
+  if (filter === 'working') return task.status === 'working' || task.status === 'queued';
+  return true;
+}
 
 export function TasksScreen({
   api,
@@ -88,18 +92,28 @@ export function TasksScreen({
   csrfToken?: string;
   onRequestError?(error: unknown): void;
 }) {
-  const [status, setStatus] = useState<NativeTaskStatus | undefined>(undefined);
+  const [filterKey, setFilterKey] = useState<TaskInboxFilter>('all');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState<TaskDraft>(emptyTaskDraft);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const loadTasks = useCallback(async () => (await api.listTasks(status)).items, [api, status]);
+  const loadTasks = useCallback(async () => (await api.listTasks(undefined)).items, [api]);
   const resource = useAsyncResource(loadTasks, {
     onError: onRequestError,
-    resetKey: status ?? 'all',
+    resetKey: 'all',
   });
   const tasks = resource.data ?? [];
+  const counts = useMemo(() => ({
+    ready_to_review: tasks.filter((task) => matchesInboxFilter(task, 'ready_to_review')).length,
+    blocked: tasks.filter((task) => matchesInboxFilter(task, 'blocked')).length,
+    working: tasks.filter((task) => matchesInboxFilter(task, 'working')).length,
+    all: tasks.length,
+  }), [tasks]);
+  const filteredTasks = useMemo(
+    () => tasks.filter((task) => matchesInboxFilter(task, filterKey)),
+    [filterKey, tasks],
+  );
 
   if (selectedTaskId) {
     return (
@@ -189,7 +203,7 @@ export function TasksScreen({
         onRefresh={resource.reload}
         refreshLabel="刷新任务"
         refreshing={resource.loading || resource.refreshing}
-        title="任务"
+        title="任务收件箱"
       />
       {canOperate ? (
         <View style={styles.actionBar}>
@@ -207,36 +221,37 @@ export function TasksScreen({
           </Pressable>
         </View>
       ) : null}
-      <ScrollView
-        contentContainerStyle={styles.filterContent}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filters}
-      >
-        {taskFilters.map((filter) => {
-          const selected = filter.status === status;
+      <View style={styles.inboxRail}>
+        {inboxFilters.map((filter) => {
+          const selected = filter.key === filterKey;
           return (
             <Pressable
               accessibilityLabel={`筛选任务：${filter.label}`}
               accessibilityRole="button"
               accessibilityState={{ selected }}
-              key={filter.status ?? 'all'}
-              onPress={() => setStatus(filter.status)}
+              key={filter.key}
+              onPress={() => setFilterKey(filter.key)}
               style={({ pressed }) => [
-                styles.filter,
-                selected && styles.filterSelected,
+                styles.inboxCard,
+                selected && styles.inboxCardSelected,
                 pressed && styles.cardPressed,
               ]}
             >
-              <Text style={[styles.filterText, selected && styles.filterTextSelected]}>{filter.label}</Text>
+              <Text style={[styles.inboxCardTitle, selected && styles.inboxCardTitleSelected]}>{filter.label}</Text>
+              <Text style={[styles.inboxCardCount, selected && styles.inboxCardCountSelected]}>
+                {counts[filter.key]}
+              </Text>
+              <Text style={[styles.inboxCardDescription, selected && styles.inboxCardDescriptionSelected]}>
+                {filter.description}
+              </Text>
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
       {fullState ? (
         <ResourceState
-          empty={tasks.length === 0}
-          emptyText="当前筛选下暂无任务"
+          empty={filteredTasks.length === 0}
+          emptyText={tasks.length === 0 ? '当前暂无任务' : '当前分组下暂无任务'}
           error={resource.error}
           failureTitle="任务加载失败"
           loading={resource.loading}
@@ -247,7 +262,7 @@ export function TasksScreen({
       ) : (
         <FlatList
           contentContainerStyle={styles.list}
-          data={tasks}
+          data={filteredTasks}
           keyExtractor={(item) => item.task_id}
           ListHeaderComponent={resource.error ? (
             <ResourceErrorBanner
@@ -806,21 +821,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
   },
   primaryActionText: { color: colors.surface, fontSize: 14, fontWeight: '700' },
-  filters: { flexGrow: 0, maxHeight: 48 },
-  filterContent: { gap: 7, paddingHorizontal: 16, paddingBottom: 10 },
-  filter: {
-    alignItems: 'center',
+  inboxRail: { gap: 10, paddingBottom: 10, paddingHorizontal: 16 },
+  inboxCard: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: 6,
+    borderRadius: 7,
     borderWidth: 1,
-    height: 36,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
+    gap: 4,
+    minHeight: 84,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  filterSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
-  filterText: { color: colors.muted, fontSize: 13, fontWeight: '600' },
-  filterTextSelected: { color: colors.surface },
+  inboxCardSelected: { backgroundColor: '#E8F1FD', borderColor: colors.accent },
+  inboxCardTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  inboxCardTitleSelected: { color: colors.accent },
+  inboxCardCount: { color: colors.muted, fontSize: 22, fontWeight: '800' },
+  inboxCardCountSelected: { color: colors.accent },
+  inboxCardDescription: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  inboxCardDescriptionSelected: { color: colors.accent },
   list: { gap: 10, paddingBottom: 28, paddingHorizontal: 16, paddingTop: 4 },
   card: {
     backgroundColor: colors.surface,

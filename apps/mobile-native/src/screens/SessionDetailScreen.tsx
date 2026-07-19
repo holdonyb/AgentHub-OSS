@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -123,6 +124,10 @@ function extractLocalPaths(text: string): string[] {
   const matches = text.match(/[A-Za-z]:[\\/][^\s)\]]+/g) ?? [];
   const normalized = matches.map((value) => value.replace(/\\/g, '/').replace(/[)>.,]+$/g, ''));
   return [...new Set(normalized)];
+}
+
+function itemKey(item: NativeTimelineItem): string {
+  return `${item.session_id}:${item.seq}`;
 }
 
 function PermissionCard({
@@ -369,6 +374,7 @@ export function SessionDetailScreen({
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
   const [readerItem, setReaderItem] = useState<NativeTimelineItem | null>(null);
   const [readerTab, setReaderTab] = useState<'text' | 'markdown'>('text');
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
   const permissionSubmitting = useRef(new Set<string>());
   const listRef = useRef<FlatList<NativeTimelineItem>>(null);
   const lastTimelineKey = useRef<string | null>(null);
@@ -419,6 +425,7 @@ export function SessionDetailScreen({
     setResolvedPermissionIds(new Set());
     setReplyMode('direct');
     setReaderItem(null);
+    setExpandedItems(new Set());
   }, [session.session_id]);
 
   useEffect(() => {
@@ -616,11 +623,23 @@ export function SessionDetailScreen({
     setReaderTab(isMarkdownText(text) ? 'markdown' : 'text');
   }
 
+  async function copyTimelineText(text: string) {
+    if (!text.trim()) return;
+    try {
+      await Clipboard.setStringAsync(text);
+    } catch (error) {
+      onRequestError?.(error);
+      setSendError(errorMessage(error));
+    }
+  }
+
   function renderTimelineItem(item: NativeTimelineItem) {
     const isTool = item.item_type === 'tool_call';
     const text = item.text || '';
     const supportsMarkdown = !isTool && isMarkdownText(text);
     const canOpenReader = Boolean(text.trim()) && (text.length > 120 || supportsMarkdown);
+    const canExpandInline = !isTool && text.trim().length > 120;
+    const expanded = expandedItems.has(itemKey(item));
     const fileLinks = !isTool ? extractLocalPaths(text) : [];
     return (
       <View style={[
@@ -641,7 +660,9 @@ export function SessionDetailScreen({
             ) : null}
           </View>
         ) : (
-          <Text selectable style={styles.timelineText}>{text || '暂无内容'}</Text>
+          <Text numberOfLines={canExpandInline && !expanded ? 6 : undefined} selectable style={styles.timelineText}>
+            {text || '暂无内容'}
+          </Text>
         )}
         {fileLinks.length > 0 ? (
           <View style={styles.fileLinkRow}>
@@ -659,8 +680,34 @@ export function SessionDetailScreen({
             ))}
           </View>
         ) : null}
-        <View style={styles.timelineFooter}>
-          {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : <View />}
+        <View style={styles.timelineActions}>
+          {canExpandInline ? (
+            <Pressable
+              accessibilityLabel={expanded ? '收起全文' : '展开全文'}
+              accessibilityRole="button"
+              onPress={() => setExpandedItems((current) => {
+                const next = new Set(current);
+                if (expanded) next.delete(itemKey(item));
+                else next.add(itemKey(item));
+                return next;
+              })}
+              style={({ pressed }) => [styles.readerButton, pressed && styles.pressed]}
+            >
+              <Ionicons color={colors.accent} name={expanded ? 'chevron-up-outline' : 'chevron-down-outline'} size={15} />
+              <Text style={styles.readerButtonText}>{expanded ? '收起' : '展开全文'}</Text>
+            </Pressable>
+          ) : null}
+          {!isTool && text.trim() ? (
+            <Pressable
+              accessibilityLabel="复制全文"
+              accessibilityRole="button"
+              onPress={() => void copyTimelineText(text)}
+              style={({ pressed }) => [styles.readerButton, pressed && styles.pressed]}
+            >
+              <Ionicons color={colors.accent} name="copy-outline" size={15} />
+              <Text style={styles.readerButtonText}>复制全文</Text>
+            </Pressable>
+          ) : null}
           {canOpenReader ? (
             <Pressable
               accessibilityLabel="全文阅读"
@@ -672,6 +719,9 @@ export function SessionDetailScreen({
               <Text style={styles.readerButtonText}>全文阅读</Text>
             </Pressable>
           ) : null}
+        </View>
+        <View style={styles.timelineFooter}>
+          {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : <View />}
         </View>
       </View>
     );
@@ -1229,7 +1279,8 @@ const styles = StyleSheet.create({
   timelineTime: { color: colors.muted, fontSize: 11 },
   timelineText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   timelineStatus: { color: colors.muted, fontSize: 11 },
-  timelineFooter: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
+  timelineActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  timelineFooter: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 20 },
   toolCard: { gap: 6 },
   toolName: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   toolOutput: {

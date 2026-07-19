@@ -362,7 +362,9 @@ describe('native resource screens', () => {
   });
 
   it('filters tasks and retries the selected task detail', async () => {
-    const listTasks = jest.fn(async () => ({ items: [task] }));
+    const readyTask = { ...task, task_id: 'task-ready', title: '处理验收反馈', status: 'ready_to_review' as const };
+    const blockedTask = { ...task, task_id: 'task-blocked', title: '等待用户审批', status: 'needs_approval' as const };
+    const listTasks = jest.fn(async () => ({ items: [task, readyTask, blockedTask] }));
     const getTask = jest
       .fn()
       .mockRejectedValueOnce(new Error('详情暂不可用'))
@@ -373,9 +375,15 @@ describe('native resource screens', () => {
     await settle();
 
     expect(listTasks).toHaveBeenCalledWith(undefined);
+    expect(renderedText(renderer)).toContain('任务收件箱');
+    expect(renderedText(renderer)).toContain('待验收');
+    expect(renderedText(renderer)).toContain('已阻塞');
+    expect(renderedText(renderer)).toContain('执行中');
+
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选任务：执行中' })));
     await settle();
-    expect(listTasks).toHaveBeenLastCalledWith('working');
+    expect(renderedText(renderer)).toContain('实现原生列表');
+    expect(renderedText(renderer)).not.toContain('处理验收反馈');
 
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看任务 实现原生列表' })));
     await settle();
@@ -393,7 +401,7 @@ describe('native resource screens', () => {
     const listTasks = jest
       .fn()
       .mockResolvedValueOnce({ items: [task] })
-      .mockRejectedValueOnce(new Error('筛选请求失败'));
+      .mockRejectedValueOnce(new Error('任务刷新失败'));
     const getTask = jest.fn();
     const renderer = await render(
       <TasksScreen api={{ createTask: jest.fn(), getTask, listTasks, reviewTask: jest.fn() }} />,
@@ -401,11 +409,11 @@ describe('native resource screens', () => {
     await settle();
     expect(renderedText(renderer)).toContain('实现原生列表');
 
-    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选任务：受阻' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '刷新任务' })));
     await settle();
 
-    expect(renderedText(renderer)).toContain('任务加载失败');
-    expect(renderedText(renderer)).not.toContain('实现原生列表');
+    expect(renderedText(renderer)).toContain('任务刷新失败');
+    expect(renderedText(renderer)).toContain('实现原生列表');
   });
 
   it('creates and dispatches a task from a mobile-first composer', async () => {
