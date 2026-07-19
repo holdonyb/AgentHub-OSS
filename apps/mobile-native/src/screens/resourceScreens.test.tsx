@@ -582,7 +582,17 @@ describe('native resource screens', () => {
       });
     const renderer = await render(
       <FilesScreen
-        api={{ getSessionSync, listSessionFiles, listSessions, readSessionFile, writeSessionFile }}
+        api={{
+          createSessionFile: jest.fn(),
+          getSessionSync,
+          listSessionFiles,
+          listSessions,
+          mkdirSessionDirectory: jest.fn(),
+          readSessionFile,
+          renameSessionFile: jest.fn(),
+          uploadSessionFile: jest.fn(),
+          writeSessionFile,
+        }}
         canEdit
         csrfToken="csrf-token"
       />,
@@ -657,7 +667,17 @@ describe('native resource screens', () => {
 
     const renderer = await render(
       <FilesScreen
-        api={{ getSessionSync, listSessionFiles, listSessions, readSessionFile, writeSessionFile }}
+        api={{
+          createSessionFile: jest.fn(),
+          getSessionSync,
+          listSessionFiles,
+          listSessions,
+          mkdirSessionDirectory: jest.fn(),
+          readSessionFile,
+          renameSessionFile: jest.fn(),
+          uploadSessionFile: jest.fn(),
+          writeSessionFile,
+        }}
         canEdit
         csrfToken="csrf-token"
         requestedTarget={{ sessionId: 'session-1', path: 'E:/Work/AgentHub-OSS/README.md' }}
@@ -670,6 +690,74 @@ describe('native resource screens', () => {
     expect(readSessionFile).toHaveBeenCalledWith(
       'session-1',
       { path: 'README.md', max_bytes: 5_000_000 },
+      'csrf-token',
+    );
+  });
+
+  it('creates a workspace file through the selected session instead of an unrestricted device path', async () => {
+    const workspaceSession = { ...session, workspace_root: 'E:/Work/AgentHub-OSS' };
+    const listSessions = jest.fn(async () => ({ items: [workspaceSession] }));
+    const listSessionFiles = jest.fn(async () => ({ job: queuedJob('list-job', 'file_list') }));
+    const createSessionFile = jest.fn(async () => ({ job: queuedJob('create-job', 'file_create') }));
+    const getSessionSync = jest
+      .fn()
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'list-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({ path: '.', entries: [] }),
+        }],
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{ job_id: 'create-job', status: 'succeeded', result_text: '{}' }],
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        session: workspaceSession,
+        items: [],
+        jobs: [{
+          job_id: 'list-job',
+          status: 'succeeded',
+          result_text: JSON.stringify({ path: '.', entries: [{ name: 'notes.md', path: 'notes.md', kind: 'file' }] }),
+        }],
+        has_more: false,
+      });
+    const renderer = await render(
+      <FilesScreen
+        api={{
+          createSessionFile,
+          getSessionSync,
+          listSessionFiles,
+          listSessions,
+          mkdirSessionDirectory: jest.fn(),
+          readSessionFile: jest.fn(),
+          renameSessionFile: jest.fn(),
+          uploadSessionFile: jest.fn(),
+          writeSessionFile: jest.fn(),
+        }}
+        canEdit
+        csrfToken="csrf-token"
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '文件操作' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '新建文本文件' })));
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '新文件路径' }), 'notes.md');
+      changeText(renderer.root.findByProps({ accessibilityLabel: '新文件内容' }), '# Mobile notes');
+    });
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '确认创建文件' })));
+    await settle();
+
+    expect(createSessionFile).toHaveBeenCalledWith(
+      'session-1',
+      { path: 'notes.md', text: '# Mobile notes', overwrite: false },
       'csrf-token',
     );
   });

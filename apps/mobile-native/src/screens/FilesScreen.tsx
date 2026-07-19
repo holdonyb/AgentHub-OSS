@@ -23,15 +23,22 @@ import type {
 import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
+import { pickSessionImage } from './nativeImagePicker';
 
 type FilesApi = Pick<
   MobileApi,
   | 'getSessionSync'
   | 'listSessionFiles'
   | 'listSessions'
+  | 'mkdirSessionDirectory'
   | 'readSessionFile'
+  | 'renameSessionFile'
+  | 'uploadSessionFile'
   | 'writeSessionFile'
+  | 'createSessionFile'
 >;
+
+type FileActionKind = 'create' | 'directory' | 'rename' | null;
 
 export function FilesScreen({
   api,
@@ -61,6 +68,14 @@ export function FilesScreen({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [editorText, setEditorText] = useState('');
+  const [fileQuery, setFileQuery] = useState('');
+  const [showHidden, setShowHidden] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionKind, setActionKind] = useState<FileActionKind>(null);
+  const [actionPath, setActionPath] = useState('');
+  const [actionText, setActionText] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === selectedSessionId) ?? null,
     [selectedSessionId, sessions],
@@ -93,6 +108,17 @@ export function FilesScreen({
     resetKey: `${selectedSessionId ?? 'none'}:${path}`,
   });
   const entries = fileResource.data?.entries ?? [];
+  const normalizedFileQuery = fileQuery.trim().toLocaleLowerCase();
+  const hiddenEntryCount = entries.filter((entry) => entry.name.startsWith('.')).length;
+  const filteredEntries = useMemo(() => entries.filter((entry) => {
+    if (!showHidden && entry.name.startsWith('.')) return false;
+    if (!normalizedFileQuery) return true;
+    return [entry.name, entry.path, entry.extension, entry.preview_capability]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase()
+      .includes(normalizedFileQuery);
+  }), [entries, normalizedFileQuery, showHidden]);
 
   async function openEntry(entry: NativeWorkspaceFileEntry) {
     if (!selectedSession) return;
@@ -187,6 +213,93 @@ export function FilesScreen({
     }
   }
 
+  function startFileAction(kind: Exclude<FileActionKind, null>, entry?: NativeWorkspaceFileEntry) {
+    setActionsOpen(true);
+    setActionKind(kind);
+    setActionError(null);
+    setActionText('');
+    setActionPath(entry?.path ?? '');
+  }
+
+  function closeFileAction() {
+    if (actionBusy) return;
+    setActionKind(null);
+    setActionError(null);
+    setActionPath('');
+    setActionText('');
+  }
+
+  async function completeFileMutation(response: { job: NativeJob }) {
+    if (!selectedSession) return;
+    await waitForSessionJob(api, selectedSession.session_id, response.job.job_id);
+    await fileResource.reload();
+  }
+
+  async function submitFileAction() {
+    if (!selectedSession || !actionKind || !actionPath.trim() || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      if (actionKind === 'create') {
+        await completeFileMutation(await api.createSessionFile(
+          selectedSession.session_id,
+          { path: actionPath.trim(), text: actionText, overwrite: false },
+          csrfToken,
+        ));
+      } else if (actionKind === 'directory') {
+        await completeFileMutation(await api.mkdirSessionDirectory(
+          selectedSession.session_id,
+          { path: actionPath.trim() },
+          csrfToken,
+        ));
+      } else {
+        const sourcePath = actionPath.trim();
+        const newPath = actionText.trim();
+        if (!newPath) throw new Error('请输入新的文件路径');
+        await completeFileMutation(await api.renameSessionFile(
+          selectedSession.session_id,
+          { path: sourcePath, new_path: newPath },
+          csrfToken,
+        ));
+      }
+      closeFileAction();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '文件操作失败';
+      setActionError(message);
+      onRequestError?.(error);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function uploadImageToCurrentDirectory() {
+    if (!selectedSession || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const image = await pickSessionImage();
+      if (!image) return;
+      await completeFileMutation(await api.uploadSessionFile(
+        selectedSession.session_id,
+        {
+          path,
+          filename: image.filename,
+          content_type: image.content_type,
+          data_base64: image.data_base64,
+          overwrite: false,
+        },
+        csrfToken,
+      ));
+      setActionsOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '图片上传失败';
+      setActionError(message);
+      onRequestError?.(error);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   const loadingSessions = sessionResource.loading || (sessionResource.error !== null && sessionResource.data === null);
   const loadingFiles = fileResource.loading || (fileResource.error !== null && fileResource.data === null);
   return (
@@ -266,9 +379,121 @@ export function FilesScreen({
               <Ionicons color={colors.text} name="arrow-up" size={18} />
             </Pressable>
             <View style={styles.pathCopy}>
-              <Text numberOfLines={1} style={styles.pathText}>{path === '.' ? '工作区根目录' : path}</Text>
+              <View style={styles.breadcrumbRow}>
+                {breadcrumbs(path).map((crumb, index) => (
+                  <Pressable
+                    accessibilityLabel={`进入目录 ${crumb.label}`}
+                    accessibilityRole="button"
+                    disabled={crumb.path === path}
+                    key={`${crumb.path}-${index}`}
+                    onPress={() => setPath(crumb.path)}
+                    style={({ pressed }) => [styles.breadcrumbButton, pressed && styles.pressed]}
+                  >
+                    <Text numberOfLines={1} style={[styles.breadcrumbText, crumb.path === path && styles.breadcrumbTextCurrent]}>
+                      {crumb.label}
+                    </Text>
+                    {index < breadcrumbs(path).length - 1 ? <Text style={styles.breadcrumbDivider}>/</Text> : null}
+                  </Pressable>
+                ))}
+              </View>
               <Text numberOfLines={1} style={styles.workspaceRoot}>{selectedSession?.workspace_root}</Text>
             </View>
+            {canEdit ? (
+              <Pressable
+                accessibilityLabel="文件操作"
+                accessibilityRole="button"
+                onPress={() => setActionsOpen((current) => !current)}
+                style={({ pressed }) => [styles.pathButton, pressed && styles.pressed]}
+              >
+                <Ionicons color={colors.accent} name="add" size={21} />
+              </Pressable>
+            ) : null}
+          </View>
+          {canEdit && actionsOpen ? (
+            <View style={styles.actionPanel}>
+              {!actionKind ? (
+                <View style={styles.actionChoices}>
+                  <Pressable accessibilityLabel="新建文本文件" accessibilityRole="button" onPress={() => startFileAction('create')} style={({ pressed }) => [styles.actionChoice, pressed && styles.pressed]}>
+                    <Ionicons color={colors.accent} name="document-text-outline" size={18} />
+                    <Text style={styles.actionChoiceText}>新建文本</Text>
+                  </Pressable>
+                  <Pressable accessibilityLabel="新建文件夹" accessibilityRole="button" onPress={() => startFileAction('directory')} style={({ pressed }) => [styles.actionChoice, pressed && styles.pressed]}>
+                    <Ionicons color={colors.accent} name="folder-open-outline" size={18} />
+                    <Text style={styles.actionChoiceText}>新建目录</Text>
+                  </Pressable>
+                  <Pressable accessibilityLabel="上传图片到当前目录" accessibilityRole="button" disabled={actionBusy} onPress={() => void uploadImageToCurrentDirectory()} style={({ pressed }) => [styles.actionChoice, actionBusy && styles.disabled, pressed && styles.pressed]}>
+                    <Ionicons color={colors.accent} name="image-outline" size={18} />
+                    <Text style={styles.actionChoiceText}>{actionBusy ? '上传中' : '上传图片'}</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.actionForm}>
+                  <Text style={styles.actionTitle}>{actionKind === 'create' ? '新建文本文件' : actionKind === 'directory' ? '新建目录' : '重命名'}</Text>
+                  <TextInput
+                    accessibilityLabel={actionKind === 'rename' ? '原文件路径' : actionKind === 'create' ? '新文件路径' : '新目录路径'}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!actionBusy}
+                    onChangeText={setActionPath}
+                    placeholder={actionKind === 'directory' ? '例如 reports' : '例如 notes.md'}
+                    placeholderTextColor={colors.muted}
+                    style={styles.actionInput}
+                    value={actionPath}
+                  />
+                  {actionKind === 'create' ? (
+                    <TextInput
+                      accessibilityLabel="新文件内容"
+                      editable={!actionBusy}
+                      multiline
+                      onChangeText={setActionText}
+                      placeholder="可留空，之后再编辑"
+                      placeholderTextColor={colors.muted}
+                      style={[styles.actionInput, styles.actionTextArea]}
+                      textAlignVertical="top"
+                      value={actionText}
+                    />
+                  ) : null}
+                  {actionKind === 'rename' ? (
+                    <TextInput
+                      accessibilityLabel="新文件路径"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      editable={!actionBusy}
+                      onChangeText={setActionText}
+                      placeholder="新的相对路径"
+                      placeholderTextColor={colors.muted}
+                      style={styles.actionInput}
+                      value={actionText}
+                    />
+                  ) : null}
+                  {actionError ? <Text accessibilityRole="alert" style={styles.actionError}>{actionError}</Text> : null}
+                  <View style={styles.actionFormButtons}>
+                    <Pressable accessibilityLabel="取消文件操作" accessibilityRole="button" disabled={actionBusy} onPress={closeFileAction} style={({ pressed }) => [styles.cancelAction, pressed && styles.pressed]}>
+                      <Text style={styles.cancelActionText}>取消</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel={actionKind === 'create' ? '确认创建文件' : actionKind === 'directory' ? '确认创建目录' : '确认重命名'}
+                      accessibilityRole="button"
+                      disabled={actionBusy || !actionPath.trim() || (actionKind === 'rename' && !actionText.trim())}
+                      onPress={() => void submitFileAction()}
+                      style={({ pressed }) => [styles.confirmAction, (actionBusy || !actionPath.trim() || (actionKind === 'rename' && !actionText.trim())) && styles.disabled, pressed && styles.pressed]}
+                    >
+                      {actionBusy ? <ActivityIndicator color={colors.surface} size="small" /> : null}
+                      <Text style={styles.confirmActionText}>{actionBusy ? '处理中' : '确认'}</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+            </View>
+          ) : null}
+          <View style={styles.fileSearchRow}>
+            <Ionicons color={colors.muted} name="search-outline" size={18} />
+            <TextInput accessibilityLabel="搜索当前目录文件" autoCapitalize="none" autoCorrect={false} onChangeText={setFileQuery} placeholder="搜索当前目录" placeholderTextColor={colors.muted} style={styles.fileSearchInput} value={fileQuery} />
+            {hiddenEntryCount > 0 ? (
+              <Pressable accessibilityLabel={showHidden ? '隐藏隐藏文件' : '显示隐藏文件'} accessibilityRole="button" onPress={() => setShowHidden((current) => !current)} style={({ pressed }) => [styles.hiddenToggle, pressed && styles.pressed]}>
+                <Text style={styles.hiddenToggleText}>{showHidden ? '隐藏' : `隐藏项 ${hiddenEntryCount}`}</Text>
+              </Pressable>
+            ) : null}
           </View>
           {previewError ? (
             <View style={styles.inlineError}>
@@ -295,9 +520,9 @@ export function FilesScreen({
           ) : (
             <FlatList
               contentContainerStyle={styles.fileList}
-              data={entries}
+              data={filteredEntries}
               keyExtractor={(entry) => entry.path}
-              ListEmptyComponent={<Text style={styles.emptyText}>当前目录为空</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>{normalizedFileQuery ? '没有匹配的文件' : '当前目录为空'}</Text>}
               ListHeaderComponent={fileResource.error ? (
                 <ResourceErrorBanner
                   error={fileResource.error}
@@ -314,7 +539,12 @@ export function FilesScreen({
                 />
               )}
               renderItem={({ item }) => (
-                <FileRow entry={item} onPress={() => void openEntry(item)} />
+                <FileRow
+                  canEdit={canEdit}
+                  entry={item}
+                  onPress={() => void openEntry(item)}
+                  onRename={() => startFileAction('rename', item)}
+                />
               )}
             />
           )}
@@ -324,7 +554,17 @@ export function FilesScreen({
   );
 }
 
-function FileRow({ entry, onPress }: { entry: NativeWorkspaceFileEntry; onPress(): void }) {
+function FileRow({
+  entry,
+  canEdit,
+  onPress,
+  onRename,
+}: {
+  entry: NativeWorkspaceFileEntry;
+  canEdit: boolean;
+  onPress(): void;
+  onRename(): void;
+}) {
   const directory = entry.kind === 'directory';
   return (
     <Pressable
@@ -346,7 +586,11 @@ function FileRow({ entry, onPress }: { entry: NativeWorkspaceFileEntry; onPress(
           {directory ? '目录' : `${fileKindLabel(entry)} · ${formatFileSize(entry.size_bytes)}`}
         </Text>
       </View>
-      <Ionicons color={colors.muted} name="chevron-forward" size={18} />
+      {canEdit ? (
+        <Pressable accessibilityLabel={`重命名 ${entry.name}`} accessibilityRole="button" onPress={onRename} style={({ pressed }) => [styles.fileMoreButton, pressed && styles.pressed]}>
+          <Ionicons color={colors.muted} name="ellipsis-horizontal" size={19} />
+        </Pressable>
+      ) : <Ionicons color={colors.muted} name="chevron-forward" size={18} />}
     </Pressable>
   );
 }
@@ -495,6 +739,18 @@ function parentPath(path: string) {
   return parts.join('/') || '.';
 }
 
+function breadcrumbs(path: string): Array<{ label: string; path: string }> {
+  if (!path || path === '.') return [{ label: '根目录', path: '.' }];
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+  const result: Array<{ label: string; path: string }> = [{ label: '根目录', path: '.' }];
+  let current = '';
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    result.push({ label: part, path: current });
+  }
+  return result;
+}
+
 function toRelativeWorkspacePath(workspaceRoot: string | undefined, filePath: string) {
   const normalizedPath = filePath.replace(/\\/g, '/');
   const normalizedRoot = (workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '');
@@ -566,8 +822,76 @@ const styles = StyleSheet.create({
     width: 40,
   },
   pathCopy: { flex: 1, gap: 2 },
-  pathText: { color: colors.text, fontSize: 14, fontWeight: '700' },
+  breadcrumbRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap' },
+  breadcrumbButton: { alignItems: 'center', flexDirection: 'row', maxWidth: 130 },
+  breadcrumbText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  breadcrumbTextCurrent: { color: colors.text, fontWeight: '800' },
+  breadcrumbDivider: { color: colors.muted, fontSize: 12, marginHorizontal: 3 },
   workspaceRoot: { color: colors.muted, fontSize: 11 },
+  actionPanel: {
+    backgroundColor: colors.surface,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  actionChoices: { flexDirection: 'row', gap: 8 },
+  actionChoice: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flex: 1,
+    gap: 5,
+    justifyContent: 'center',
+    minHeight: 62,
+    paddingHorizontal: 5,
+  },
+  actionChoiceText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  actionForm: { gap: 9 },
+  actionTitle: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  actionInput: {
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 14,
+    minHeight: 44,
+    paddingHorizontal: 11,
+  },
+  actionTextArea: { minHeight: 92, paddingTop: 11 },
+  actionError: { color: colors.danger, fontSize: 12, lineHeight: 18 },
+  actionFormButtons: { flexDirection: 'row', gap: 9, justifyContent: 'flex-end' },
+  cancelAction: { alignItems: 'center', justifyContent: 'center', minHeight: 42, paddingHorizontal: 14 },
+  cancelActionText: { color: colors.muted, fontSize: 13, fontWeight: '700' },
+  confirmAction: {
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    borderRadius: 7,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    minHeight: 42,
+    minWidth: 82,
+    paddingHorizontal: 14,
+  },
+  confirmActionText: { color: colors.surface, fontSize: 13, fontWeight: '800' },
+  fileSearchRow: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  fileSearchInput: { color: colors.text, flex: 1, fontSize: 14, minHeight: 34 },
+  hiddenToggle: { backgroundColor: colors.surfaceMuted, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 6 },
+  hiddenToggleText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
   fileList: { paddingBottom: 28, paddingHorizontal: 16, paddingTop: 10 },
   fileRow: {
     alignItems: 'center',
@@ -588,6 +912,7 @@ const styles = StyleSheet.create({
   },
   directoryIcon: { backgroundColor: '#E8F1FD' },
   fileCopy: { flex: 1, gap: 4 },
+  fileMoreButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
   fileName: { color: colors.text, fontSize: 15, fontWeight: '600' },
   fileMetadata: { color: colors.muted, fontSize: 12, lineHeight: 17 },
   previewBusy: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingHorizontal: 18, paddingVertical: 9 },
