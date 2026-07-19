@@ -658,6 +658,53 @@ def test_file_list_returns_workspace_entries_without_shell(tmp_path: Path) -> No
     assert payload["entries"][1]["path"] == "README.md"
 
 
+def test_file_search_returns_bounded_recursive_workspace_matches(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# AgentHub\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "release-notes.md").write_text("ready\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "release-secret.md").write_text("skip\n", encoding="utf-8")
+    (tmp_path / ".env.release").write_text("TOKEN=secret\n", encoding="utf-8")
+
+    payload = json.loads(
+        execute_job(
+            {
+                "job_id": "job-file-search",
+                "kind": "file_search",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": ".", "query": "release", "max_results": 20},
+            }
+        )
+    )
+
+    assert payload["query"] == "release"
+    assert [entry["path"] for entry in payload["entries"]] == ["docs/release-notes.md"]
+    assert payload["truncated"] is False
+
+
+def test_file_search_can_include_hidden_files_without_following_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.env").write_text("outside\n", encoding="utf-8")
+    (tmp_path / ".env.local").write_text("inside\n", encoding="utf-8")
+    try:
+        (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    payload = json.loads(
+        execute_job(
+            {
+                "kind": "file_search",
+                "workspace_root": str(tmp_path),
+                "payload": {"path": ".", "query": "env", "include_hidden": True},
+            }
+        )
+    )
+
+    assert [entry["path"] for entry in payload["entries"]] == [".env.local"]
+
+
 def test_file_read_returns_bounded_text_preview(tmp_path: Path) -> None:
     target = tmp_path / "notes.md"
     target.write_text("第一行\n第二行\n第三行\n", encoding="utf-8")
@@ -1052,8 +1099,25 @@ def test_file_read_returns_inline_audio_preview(tmp_path: Path) -> None:
 
     payload = json.loads(result)
     assert payload["preview_kind"] == "audio"
+    assert payload["is_editable"] is False
     assert payload["downloadable"] is True
     assert payload["data_base64"] == base64.b64encode(b"ID3demo-audio").decode("ascii")
+
+
+def test_file_read_reports_whether_the_preview_is_editable(tmp_path: Path) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("# AgentHub\n", encoding="utf-8")
+
+    result = execute_job(
+        {
+            "job_id": "job-file-read-editable",
+            "kind": "file_read",
+            "workspace_root": str(tmp_path),
+            "payload": {"path": "README.md", "max_bytes": 200_000},
+        }
+    )
+
+    assert json.loads(result)["is_editable"] is True
 
 
 def test_file_upload_writes_into_existing_directory(tmp_path: Path) -> None:

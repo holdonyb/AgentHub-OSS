@@ -12,6 +12,7 @@ from app.models import Job, utcnow
 FILE_JOB_KINDS = {
     "file_create",
     "file_list",
+    "file_search",
     "file_mkdir",
     "file_read",
     "file_rename",

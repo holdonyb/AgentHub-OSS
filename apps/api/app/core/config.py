@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     legacy_file_job_body_ttl_seconds: Annotated[int, Field(ge=60)] = 86400
     file_transfer_dir: str = ".runtime/file-transfers"
     file_transfer_ttl_seconds: Annotated[int, Field(ge=60, le=86400)] = 900
+    file_transfer_download_ticket_seconds: Annotated[int, Field(ge=15, le=300)] = 60
     file_transfer_cleanup_interval_seconds: Annotated[float, Field(ge=5, le=3600)] = 60.0
     max_file_transfer_bytes: Annotated[int, Field(ge=1024)] = 64 * 1024 * 1024
     notification_webhook_url: str = ""

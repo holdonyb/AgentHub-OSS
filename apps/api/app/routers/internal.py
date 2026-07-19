@@ -22,6 +22,7 @@ PLAN_OPTIONS_MARKER = "AGENTHUB_OPTIONS:"
 PLAN_CHOICE_RE = re.compile(r"^\s*(?:[-*]|\d+[\.)、]|[A-Za-z][\.)、]|[一二三四五六七八九十]+[、\.)])\s*(?P<label>.+?)\s*$")
 SIDECAR_JOB_KINDS = {
     "file_list",
+    "file_search",
     "file_read",
     "file_write",
     "file_upload",

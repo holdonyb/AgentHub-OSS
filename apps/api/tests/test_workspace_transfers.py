@@ -95,6 +95,46 @@ def test_worker_can_stream_transfer_and_user_can_read_ranges(client: TestClient)
     assert partial.headers["x-agenthub-sha256"] == hashlib.sha256(b"0123456789").hexdigest()
 
 
+def test_user_can_issue_a_short_lived_download_ticket_for_native_streaming(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = _register_transfer_worker(client, "transfer-native-download")
+    user_headers = auth_headers(owner_login)
+    created = client.post(
+        "/api/workspaces/files/transfers",
+        headers=user_headers,
+        json={"worker_id": "transfer-native-download", "workspace_root": "/srv/work", "path": "reports/result.pdf"},
+    )
+    transfer_id = created.json()["transfer"]["transfer_id"]
+    uploaded = client.put(
+        f"/api/internal/transfers/{transfer_id}/content",
+        headers={
+            "Authorization": f"Bearer {worker['worker_token']}",
+            "Content-Type": "application/pdf",
+            "X-AgentHub-Filename": "result.pdf",
+        },
+        content=b"native-download",
+    )
+    assert uploaded.status_code == 200, uploaded.text
+
+    ticket = client.post(
+        f"/api/workspaces/files/transfers/{transfer_id}/download-ticket",
+        headers=user_headers,
+    )
+
+    assert ticket.status_code == 200, ticket.text
+    download_url = ticket.json()["download_url"]
+    assert download_url.startswith(f"/api/workspaces/files/transfers/{transfer_id}/download?")
+    downloaded = client.get(download_url)
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == b"native-download"
+    assert downloaded.headers["content-disposition"].startswith("attachment;")
+
+    tampered = client.get(download_url.replace("signature=", "signature=0"))
+    assert tampered.status_code == 403
+    assert tampered.json()["detail"]["code"] == "TRANSFER_TICKET_INVALID"
+
+
 def test_declared_oversized_transfer_is_marked_failed_after_claim(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

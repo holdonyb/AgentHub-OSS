@@ -522,6 +522,33 @@ def test_windows_discovery_limits_to_recent_session_files(tmp_path: Path, monkey
     assert [session["session_id"] for session in sessions] == ["newest", "new"]
 
 
+def test_recent_session_limit_does_not_allow_one_backend_to_starve_another(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_MAX_FILES", "2")
+    codex_root = tmp_path / ".codex" / "sessions"
+    claude_root = tmp_path / ".claude" / "projects"
+    codex_root.mkdir(parents=True)
+    claude_root.mkdir(parents=True)
+
+    for index, session_id in enumerate(["codex-old", "codex-new", "codex-newest"], start=1):
+        fixture = codex_root / f"{session_id}.jsonl"
+        fixture.write_text(
+            f'{{"type":"session","id":"{session_id}","cwd":"E:\\\\work","title":"{session_id}"}}\n',
+            encoding="utf-8",
+        )
+        os.utime(fixture, (1_700_000_100 + index, 1_700_000_100 + index))
+
+    claude_fixture = claude_root / "claude-latest.jsonl"
+    claude_fixture.write_text(
+        '{"sessionId":"claude-latest","cwd":"E:\\\\work","type":"summary","summary":"Claude latest"}\n',
+        encoding="utf-8",
+    )
+    os.utime(claude_fixture, (1_700_000_000, 1_700_000_000))
+
+    sessions = discover_windows_sessions([codex_root, claude_root])
+
+    assert [session["session_id"] for session in sessions] == ["codex-newest", "codex-new", "claude-latest"]
+
+
 def test_windows_discovery_detects_claude_jsonl_by_root_path(tmp_path: Path) -> None:
     claude_root = tmp_path / ".claude" / "projects"
     claude_root.mkdir(parents=True)
