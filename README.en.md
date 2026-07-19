@@ -7,7 +7,7 @@
 ![AgentHub README Hero](docs/assets/agenthub-readme-hero.png)
 
 [![CI](https://img.shields.io/badge/CI-GitHub_Actions-334155)](.github/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0_RC-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
+[![Release](https://img.shields.io/badge/release-latest-f97316)](docs/OPEN_SOURCE_LAUNCH.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0ea5e9.svg)](LICENSE)
 [![Self-hosted](https://img.shields.io/badge/self--hosted-first-16a34a)](docs/SELF_HOST_QUICKSTART.md)
 [![Tailscale](https://img.shields.io/badge/Tailscale-friendly-4f46e5)](docs/TAILSCALE_PRIVATE_MODE.md)

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPOSITORY="holdonyb/AgentHub-OSS"
-TAG="v1.0.0"
+TAG="latest"
 DESTINATION="/opt/agenthub/data/downloads"
 ASSETS=(
   "agenthub-android-release.apk"
@@ -20,7 +20,7 @@ Usage: sync-android-release-assets.sh [options]
 
 Options:
   --repository OWNER/REPOSITORY  GitHub repository (default: holdonyb/AgentHub-OSS)
-  --tag TAG                      Release tag (default: v1.0.0)
+  --tag TAG                      Release tag, or "latest" (default: latest)
   --destination PATH             Download directory (default: /opt/agenthub/data/downloads)
   -h, --help                     Show this help
 EOF
@@ -69,7 +69,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-release_url="https://github.com/${REPOSITORY}/releases/download/${TAG}"
+if [[ "$TAG" == "latest" ]]; then
+  release_url="https://github.com/${REPOSITORY}/releases/latest/download"
+else
+  release_url="https://github.com/${REPOSITORY}/releases/download/${TAG}"
+fi
 for asset in "${ASSETS[@]}"; do
   curl --fail --location --retry 3 --output "$STAGING_DIR/$asset" "$release_url/$asset"
 done

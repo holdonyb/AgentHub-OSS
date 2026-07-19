@@ -59,7 +59,9 @@ def test_android_release_sync_script_has_versioned_verified_atomic_contract() ->
     script = SYNC_SCRIPT.read_text(encoding="utf-8")
 
     assert "holdonyb/AgentHub-OSS" in script
-    assert "v1.0.0" in script
+    assert 'TAG="latest"' in script
+    assert 'if [[ "$TAG" == "latest" ]]' in script
+    assert "releases/latest/download" in script
     assert "/opt/agenthub/data/downloads" in script
     for filename in ASSETS:
         assert filename in script
@@ -72,15 +74,17 @@ def test_android_release_sync_script_has_versioned_verified_atomic_contract() ->
 def test_native_android_is_the_recommended_download_and_release_asset() -> None:
     page = DOWNLOAD_PAGE.read_text(encoding="utf-8")
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    download_section = page.split('<div class="download-grid">', 1)[1]
 
     native_heading = "AgentHub 原生客户端"
     webview_heading = "WebView 兼容版"
     assert native_heading in page
     assert webview_heading in page
-    assert page.index(native_heading) < page.index(webview_heading)
+    assert download_section.index(native_heading) < download_section.index(webview_heading)
     assert "Android · Native · Recommended" in page
-    assert 'releases/download/v1.0.0/agenthub-native-android-release.apk' in page
-    assert 'releases/download/v1.0.0/agenthub-android-release.apk' in page
+    assert 'releases/latest/download/agenthub-native-android-release.apk' in page
+    assert 'releases/latest/download/agenthub-android-release.apk' in page
+    assert "GitHub latest" in page
 
     assert "npm run mobile:build:release" in workflow
     assert "npm run mobile:native:build:android" in workflow
@@ -147,7 +151,7 @@ cp "$FAKE_RELEASE_DIR/${url##*/}" "$output"
         "--repository",
         "example/AgentHub",
         "--tag",
-        "v1.0.0",
+        "latest",
         "--destination",
         str(destination),
     ]
