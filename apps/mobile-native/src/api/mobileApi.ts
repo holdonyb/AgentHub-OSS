@@ -49,6 +49,11 @@ export interface NativeSessionSummary {
   worker_id: string;
   status: NativeSessionStatus;
   last_activity_at: string | null;
+  updated_at?: string | null;
+  execution_status?: 'unknown' | 'idle' | 'queued' | 'running' | 'waiting_input' | 'failed' | 'terminated';
+  execution_status_observed_at?: string | null;
+  attention_status?: 'none' | 'unseen' | 'seen';
+  attention_reason?: '' | 'completion' | 'approval' | 'failure';
   project_name?: string;
   workspace_root?: string;
   namespace?: string;
@@ -248,8 +253,34 @@ export interface NativeWorkspaceFileReadResult {
   modified_at?: string | null;
   preview_kind?: 'text' | 'image' | 'audio' | 'video' | 'download';
   downloadable?: boolean;
+  is_editable?: boolean;
   data_base64?: string;
   text?: string;
+}
+
+export interface NativeWorkspaceFileTransfer {
+  transfer_id: string;
+  worker_id: string;
+  workspace_root: string;
+  path: string;
+  direction: 'download' | 'upload';
+  status: 'queued' | 'uploading' | 'awaiting_upload' | 'ready' | 'failed' | 'expired';
+  filename: string;
+  content_type: string;
+  size_bytes: number | null;
+  sha256: string;
+  expires_at: string;
+  content_url: string;
+}
+
+export interface NativeWorkspaceFileDownloadTicket {
+  download_url: string;
+  expires_at: number;
+}
+
+export interface NativeWorkspaceTargetInput {
+  worker_id: string;
+  workspace_root: string;
 }
 
 export interface NativeTimelinePageOptions {
@@ -493,7 +524,7 @@ export interface MobileApi {
   login(email: string, password: string): Promise<NativeAuthPayload>;
   me(): Promise<NativeAuthPayload>;
   logout(csrfToken: string, deviceId?: string): Promise<{ ok: boolean }>;
-  listSessions(): Promise<NativeListPayload<NativeSessionSummary>>;
+  listSessions(input?: { archived?: boolean }): Promise<NativeListPayload<NativeSessionSummary>>;
   startSession(payload: NativeSessionStartInput, csrfToken: string): Promise<{ job: NativeJob }>;
   getSession(sessionId: string): Promise<{ session: NativeSessionSummary }>;
   getSessionTimeline(
@@ -506,6 +537,7 @@ export interface MobileApi {
     status?: NativePermission['status'],
   ): Promise<NativeListPayload<NativePermission>>;
   listJobs(): Promise<NativeListPayload<NativeJob>>;
+  getJob(jobId: string): Promise<{ job: NativeJob }>;
   listNotifications(): Promise<NativeListPayload<NativeNotificationRecord>>;
   markNotificationDelivered(
     notificationId: string,
@@ -515,6 +547,7 @@ export interface MobileApi {
     notificationId: string,
     csrfToken: string,
   ): Promise<NativeNotificationTransitionPayload>;
+  markAllNotificationsRead(csrfToken: string): Promise<{ updated: number }>;
   dismissNotification(
     notificationId: string,
     csrfToken: string,
@@ -574,6 +607,20 @@ export interface MobileApi {
     payload: { path: string },
     csrfToken: string,
   ): Promise<{ job: NativeJob }>;
+  searchSessionFiles(
+    sessionId: string,
+    payload: { path: string; query: string; max_results?: number; include_hidden?: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  createWorkspaceFileTransfer(
+    payload: { worker_id: string; workspace_root: string; path: string; reveal_sensitive?: boolean },
+    csrfToken: string,
+  ): Promise<{ transfer: NativeWorkspaceFileTransfer; job: NativeJob }>;
+  getWorkspaceFileTransfer(transferId: string): Promise<{ transfer: NativeWorkspaceFileTransfer }>;
+  createWorkspaceFileDownloadTicket(
+    transferId: string,
+    csrfToken: string,
+  ): Promise<NativeWorkspaceFileDownloadTicket>;
   readSessionFile(
     sessionId: string,
     payload: { path: string; max_bytes?: number },
@@ -610,7 +657,39 @@ export interface MobileApi {
     payload: { path: string; new_path: string; expected_modified_at?: string | null },
     csrfToken: string,
   ): Promise<{ job: NativeJob }>;
-  listTasks(status?: NativeTaskStatus): Promise<NativeListPayload<NativeTaskSummary>>;
+  listWorkspaceFiles(
+    payload: NativeWorkspaceTargetInput & { path: string },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  searchWorkspaceFiles(
+    payload: NativeWorkspaceTargetInput & { path: string; query: string; max_results: number; include_hidden: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  readWorkspaceFile(
+    payload: NativeWorkspaceTargetInput & { path: string; max_bytes: number; reveal_sensitive?: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  writeWorkspaceFile(
+    payload: NativeWorkspaceTargetInput & { path: string; text: string; expected_modified_at?: string | null },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  uploadWorkspaceFile(
+    payload: NativeWorkspaceTargetInput & { path: string; filename: string; content_type: string; data_base64: string; overwrite: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  createWorkspaceFile(
+    payload: NativeWorkspaceTargetInput & { path: string; text: string; overwrite: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  mkdirWorkspaceDirectory(
+    payload: NativeWorkspaceTargetInput & { path: string },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  renameWorkspaceFile(
+    payload: NativeWorkspaceTargetInput & { path: string; new_path: string; expected_modified_at?: string | null },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  listTasks(status?: NativeTaskStatus, archived?: boolean): Promise<NativeListPayload<NativeTaskSummary>>;
   getTask(taskId: string): Promise<NativeTaskDetail>;
   createTask(
     payload: NativeTaskCreateInput,
@@ -623,6 +702,8 @@ export interface MobileApi {
   ): Promise<NativeTaskMutationPayload>;
   listWorkers(): Promise<NativeListPayload<NativeWorkerSummary>>;
   listProviderSnapshots(): Promise<NativeListPayload<NativeProviderSnapshot>>;
+  loginProvider(workerId: string, backend: string, csrfToken: string): Promise<{ job: NativeJob }>;
+  logoutProvider(workerId: string, backend: string, csrfToken: string): Promise<{ job: NativeJob }>;
   getSettings(): Promise<NativeSettings>;
   patchPreferences(
     payload: Partial<NativeUserPreferences>,
@@ -634,6 +715,7 @@ export interface MobileApi {
 export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi {
   const client = createAgentHubClient({ baseUrl, fetcher });
   const sessionPath = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}`;
+  const absoluteServerUrl = (path: string) => new URL(path, `${new URL(baseUrl).origin}/`).toString();
   return {
     login: (email, password) =>
       client.post<NativeAuthPayload>('/api/auth/login', { email, password }),
@@ -644,7 +726,8 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         deviceId ? { device_id: deviceId } : {},
         { csrfToken },
       ),
-    listSessions: () => client.get<NativeListPayload<NativeSessionSummary>>('/api/sessions'),
+    listSessions: (input) =>
+      client.get<NativeListPayload<NativeSessionSummary>>(input?.archived ? '/api/sessions?archived=true' : '/api/sessions'),
     startSession: (payload, csrfToken) =>
       client.post<{ job: NativeJob }>('/api/sessions/start', payload, { csrfToken }),
     getSession: (sessionId) =>
@@ -670,6 +753,7 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         `/api/permissions?status=${encodeURIComponent(status)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`,
       ),
     listJobs: () => client.get<NativeListPayload<NativeJob>>('/api/jobs?limit=200'),
+    getJob: (jobId) => client.get<{ job: NativeJob }>(`/api/jobs/${encodeURIComponent(jobId)}`),
     listNotifications: () =>
       client.get<NativeListPayload<NativeNotificationRecord>>('/api/notifications?limit=200'),
     markNotificationDelivered: (notificationId, csrfToken) =>
@@ -684,6 +768,8 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         {},
         { csrfToken },
       ),
+    markAllNotificationsRead: (csrfToken) =>
+      client.post<{ updated: number }>('/api/notifications/read-all', {}, { csrfToken }),
     dismissNotification: (notificationId, csrfToken) =>
       client.post<NativeNotificationTransitionPayload>(
         `/api/notifications/${encodeURIComponent(notificationId)}/dismiss`,
@@ -735,6 +821,26 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       client.post<{ session: NativeSessionSummary }>(`${sessionPath(sessionId)}/unarchive`, {}, { csrfToken }),
     listSessionFiles: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/list`, payload, { csrfToken }),
+    searchSessionFiles: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/search`, payload, { csrfToken }),
+    createWorkspaceFileTransfer: (payload, csrfToken) =>
+      client.post<{ transfer: NativeWorkspaceFileTransfer; job: NativeJob }>(
+        '/api/workspaces/files/transfers',
+        payload,
+        { csrfToken },
+      ),
+    getWorkspaceFileTransfer: (transferId) =>
+      client.get<{ transfer: NativeWorkspaceFileTransfer }>(
+        `/api/workspaces/files/transfers/${encodeURIComponent(transferId)}`,
+      ),
+    createWorkspaceFileDownloadTicket: async (transferId, csrfToken) => {
+      const ticket = await client.post<NativeWorkspaceFileDownloadTicket>(
+        `/api/workspaces/files/transfers/${encodeURIComponent(transferId)}/download-ticket`,
+        {},
+        { csrfToken },
+      );
+      return { ...ticket, download_url: absoluteServerUrl(ticket.download_url) };
+    },
     readSessionFile: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/read`, payload, { csrfToken }),
     writeSessionFile: (sessionId, payload, csrfToken) =>
@@ -747,10 +853,31 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/mkdir`, payload, { csrfToken }),
     renameSessionFile: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/rename`, payload, { csrfToken }),
-    listTasks: (status) =>
-      client.get<NativeListPayload<NativeTaskSummary>>(
-        status ? `/api/tasks?status=${encodeURIComponent(status)}` : '/api/tasks',
-      ),
+    listWorkspaceFiles: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/list', payload, { csrfToken }),
+    searchWorkspaceFiles: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/search', payload, { csrfToken }),
+    readWorkspaceFile: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/read', payload, { csrfToken }),
+    writeWorkspaceFile: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/write', payload, { csrfToken }),
+    uploadWorkspaceFile: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/upload', payload, { csrfToken }),
+    createWorkspaceFile: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/create', payload, { csrfToken }),
+    mkdirWorkspaceDirectory: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/mkdir', payload, { csrfToken }),
+    renameWorkspaceFile: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/workspaces/files/rename', payload, { csrfToken }),
+    listTasks: (status, archived = false) => {
+      const query = [
+        ...(status ? [`status=${encodeURIComponent(status)}`] : []),
+        ...(archived ? ['archived=true'] : []),
+      ];
+      return client.get<NativeListPayload<NativeTaskSummary>>(
+        `/api/tasks${query.length > 0 ? `?${query.join('&')}` : ''}`,
+      );
+    },
     getTask: (taskId) =>
       client.get<NativeTaskDetail>(`/api/tasks/${encodeURIComponent(taskId)}`),
     createTask: (payload, csrfToken) =>
@@ -763,6 +890,18 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       ),
     listWorkers: () => client.get<NativeListPayload<NativeWorkerSummary>>('/api/workers'),
     listProviderSnapshots: () => client.get<NativeListPayload<NativeProviderSnapshot>>('/api/providers'),
+    loginProvider: (workerId, backend, csrfToken) =>
+      client.post<{ job: NativeJob }>(
+        `/api/providers/${encodeURIComponent(workerId)}/${encodeURIComponent(backend)}/login`,
+        {},
+        { csrfToken },
+      ),
+    logoutProvider: (workerId, backend, csrfToken) =>
+      client.post<{ job: NativeJob }>(
+        `/api/providers/${encodeURIComponent(workerId)}/${encodeURIComponent(backend)}/logout`,
+        {},
+        { csrfToken },
+      ),
     getSettings: () => client.get<NativeSettings>('/api/settings'),
     patchPreferences: (payload, csrfToken) =>
       client.patch<{ preferences: NativeUserPreferences }>('/api/settings/preferences', payload, { csrfToken }),

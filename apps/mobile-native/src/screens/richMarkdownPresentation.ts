@@ -22,7 +22,13 @@ function appendText(spans: MarkdownSpan[], text: string) {
 }
 
 function isSafeLink(value: string) {
-  return /^https?:\/\//i.test(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('/');
+  const normalized = value.trim();
+  if (!normalized) return false;
+  if (/^https?:\/\//i.test(normalized)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(normalized)) return true;
+  if (normalized.startsWith('/')) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(normalized)) return false;
+  return true;
 }
 
 function readBalancedLink(value: string, start: number): { end: number; label: string; url: string } | null {

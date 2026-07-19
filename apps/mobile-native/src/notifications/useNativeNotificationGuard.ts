@@ -4,8 +4,12 @@ import {
   consumeLastNotificationResponse,
   deliverClaimedNotification,
   deliverNewNotifications,
+  confirmStagedNotification,
+  discardStagedNotification,
   enableNativeNotifications,
   nativeNotificationsEnabled,
+  retryStagedNotifications,
+  stageNotification,
   subscribeToNotificationResponses,
 } from './nativeNotifications';
 import { notificationSignals } from './notificationSignals';
@@ -32,7 +36,8 @@ export function useNativeNotificationGuard(
   api: NotificationApi,
   csrfToken: string,
   onError?: (error: unknown) => void,
-  onOpenSession?: (sessionId: string) => void,
+  onOpenSession?: (sessionId: string, permissionId?: string | null) => void,
+  onOpenTask?: (taskId: string) => void,
 ): NativeNotificationGuardState {
   const [enabled, setEnabled] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
@@ -60,7 +65,18 @@ export function useNativeNotificationGuard(
           onError?.(error);
         }
       }
-      const ledger = await syncNotificationLedger(api, csrfToken, deliverClaimedNotification, permissionGranted);
+      if (permissionGranted) await retryStagedNotifications();
+      const ledger = await syncNotificationLedger(
+        api,
+        csrfToken,
+        deliverClaimedNotification,
+        permissionGranted,
+        {
+          stage: stageNotification,
+          confirm: confirmStagedNotification,
+          discard: discardStagedNotification,
+        },
+      );
       if (ledger.available) {
         setPendingCount(ledger.pendingCount);
         return;
@@ -86,15 +102,24 @@ export function useNativeNotificationGuard(
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const handleNotificationResponse = useCallback(({ notificationId, sessionId }: {
+  const handleNotificationResponse = useCallback(({ notificationId, sessionId, permissionId, taskId, legacy }: {
     notificationId: string;
     sessionId: string | null;
+    permissionId?: string | null;
+    taskId?: string | null;
+    legacy?: boolean;
   }) => {
     if (handledResponses.current.has(notificationId)) return;
     handledResponses.current.add(notificationId);
-    if (sessionId) onOpenSession?.(sessionId);
-    void api.markNotificationRead(notificationId, csrfToken).catch((error) => onError?.(error));
-  }, [api, csrfToken, onError, onOpenSession]);
+    if (taskId) onOpenTask?.(taskId);
+    else if (sessionId) {
+      if (permissionId) onOpenSession?.(sessionId, permissionId);
+      else onOpenSession?.(sessionId);
+    }
+    if (!legacy) {
+      void api.markNotificationRead(notificationId, csrfToken).catch((error) => onError?.(error));
+    }
+  }, [api, csrfToken, onError, onOpenSession, onOpenTask]);
 
   useEffect(() => {
     let active = true;

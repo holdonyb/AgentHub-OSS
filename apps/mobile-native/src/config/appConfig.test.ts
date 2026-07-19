@@ -21,8 +21,8 @@ describe('Expo native identifiers', () => {
     expect(androidPackage.split('.').some((part) => javaKeywords.has(part))).toBe(false);
   });
 
-  it('keeps system chrome readable while the foundation uses a light-only theme', () => {
-    expect(appConfig.expo.userInterfaceStyle).toBe('light');
+  it('allows the saved appearance preference to switch native system chrome', () => {
+    expect(appConfig.expo.userInterfaceStyle).toBe('automatic');
   });
 
   it('keeps release metadata inside the Expo configuration object', () => {

@@ -97,7 +97,7 @@ describe('native session detail presentation', () => {
     });
   });
 
-  it('restores only safe attachment metadata from a timeline payload', () => {
+  it('restores safe attachment metadata from multiple timeline payload shapes', () => {
     const attachments = timelineAttachments({
       session_id: 'session-1',
       seq: 8,
@@ -108,19 +108,21 @@ describe('native session detail presentation', () => {
       tool_name: null,
       status: null,
       payload: {
-        attachments: [
-          { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048 },
-          { filename: 'screen.png', content_type: 'image/png', size_bytes: 512 },
-          { filename: '', content_type: 'image/png', size_bytes: 2 },
-          'not-an-attachment',
-        ],
+        input: {
+          attachments: [
+            { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048, path: 'docs/需求说明.md' },
+            { filename: 'screen.png', content_type: 'image/png', size_bytes: 512, uri: 'https://example.com/screen.png' },
+            { filename: '', content_type: 'image/png', size_bytes: 2 },
+            'not-an-attachment',
+          ],
+        },
       },
       created_at: '2026-07-19T09:00:00Z',
     } as NativeTimelineItem);
 
     expect(attachments).toEqual([
-      { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048 },
-      { filename: 'screen.png', content_type: 'image/png', size_bytes: 512 },
+      { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048, path: 'docs/需求说明.md', url: null },
+      { filename: 'screen.png', content_type: 'image/png', size_bytes: 512, path: null, url: 'https://example.com/screen.png' },
     ]);
   });
 });

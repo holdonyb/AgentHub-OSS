@@ -272,6 +272,136 @@ describe('mobile API', () => {
     );
   });
 
+  it('lists archived tasks without mixing them into the active inbox', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ items: [{ task_id: 'task-archived', status: 'archived' }] }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.listTasks(undefined, true);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://agenthub.example.com/api/tasks?archived=true',
+      { credentials: 'include' },
+    );
+  });
+
+  it('submits a bounded recursive workspace search for the selected session', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'search-job', status: 'queued' } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.searchSessionFiles(
+      'session/1',
+      { path: '.', query: 'release', max_results: 100, include_hidden: true },
+      'csrf-token',
+    );
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://agenthub.example.com/api/sessions/session%2F1/files/search',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ path: '.', query: 'release', max_results: 100, include_hidden: true }),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
+
+  it('runs file jobs directly against a registered worker workspace', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'job-list', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'job-read', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'job-write', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'job-write', status: 'succeeded' } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+    const target = { worker_id: 'worker-main', workspace_root: 'E:/Work/AgentHub-OSS' };
+
+    await api.listWorkspaceFiles({ ...target, path: 'docs' }, 'csrf-token');
+    await api.readWorkspaceFile({ ...target, path: 'docs/plan.md', max_bytes: 5000000 }, 'csrf-token');
+    await api.writeWorkspaceFile({ ...target, path: 'docs/plan.md', text: '# Plan', expected_modified_at: null }, 'csrf-token');
+    await api.getJob('job-write');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/workspaces/files/list',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ...target, path: 'docs' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/workspaces/files/read',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ...target, path: 'docs/plan.md', max_bytes: 5000000 }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      'https://agenthub.example.com/api/workspaces/files/write',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ ...target, path: 'docs/plan.md', text: '# Plan', expected_modified_at: null }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      4,
+      'https://agenthub.example.com/api/jobs/job-write',
+      { credentials: 'include' },
+    );
+  });
+
+  it('creates a streamed file transfer and resolves its short-lived native download URL', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({
+        transfer: {
+          transfer_id: 'xfr-native-1',
+          worker_id: 'worker-1',
+          workspace_root: 'E:/Work',
+          path: 'reports/result.pdf',
+          direction: 'download',
+          status: 'queued',
+          filename: 'result.pdf',
+          content_type: 'application/pdf',
+          size_bytes: null,
+          sha256: '',
+          expires_at: '2026-07-19T03:00:00Z',
+          content_url: '/api/workspaces/files/transfers/xfr-native-1/content',
+        },
+        job: { job_id: 'job-xfr-1', kind: 'file_transfer_prepare', status: 'queued' },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        transfer: {
+          transfer_id: 'xfr-native-1',
+          status: 'ready',
+          filename: 'result.pdf',
+          content_type: 'application/pdf',
+          size_bytes: 4096,
+        },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        download_url: '/api/workspaces/files/transfers/xfr-native-1/download?expires=1&signature=signed',
+        expires_at: 1,
+      }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.createWorkspaceFileTransfer(
+      { worker_id: 'worker-1', workspace_root: 'E:/Work', path: 'reports/result.pdf' },
+      'csrf',
+    );
+    await api.getWorkspaceFileTransfer('xfr-native-1');
+    const ticket = await api.createWorkspaceFileDownloadTicket('xfr-native-1', 'csrf');
+
+    expect(ticket.download_url).toBe(
+      'https://agenthub.example.com/api/workspaces/files/transfers/xfr-native-1/download?expires=1&signature=signed',
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/workspaces/files/transfers',
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      'https://agenthub.example.com/api/workspaces/files/transfers/xfr-native-1/download-ticket',
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
+  });
+
   it('keeps native file mutations scoped, exposes settings and provider state, and resolves the public APK release', async () => {
     const fetcher = jest
       .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
@@ -361,6 +491,28 @@ describe('mobile API', () => {
       9,
       'https://api.github.com/repos/holdonyb/AgentHub-OSS/releases/latest',
       expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/vnd.github+json' }) }),
+    );
+  });
+
+  it('queues provider login and logout jobs with CSRF protection', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'login-job', kind: 'provider_login', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'logout-job', kind: 'provider_logout', status: 'queued' } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.loginProvider('worker/1', 'claude', 'csrf-token');
+    await api.logoutProvider('worker/1', 'claude', 'csrf-token');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/providers/worker%2F1/claude/login',
+      expect.objectContaining({ method: 'POST', body: '{}', headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/providers/worker%2F1/claude/logout',
+      expect.objectContaining({ method: 'POST', body: '{}', headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }) }),
     );
   });
 
@@ -498,6 +650,24 @@ describe('mobile API', () => {
       'https://agenthub.example.com/api/sessions/session-1/terminate',
       expect.objectContaining({
         method: 'POST',
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+  });
+
+  it('marks every pending notification read with CSRF protection', async () => {
+    const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
+      jsonResponse({ updated: 3 }),
+    );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await expect(api.markAllNotificationsRead('csrf-token')).resolves.toEqual({ updated: 3 });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://agenthub.example.com/api/notifications/read-all',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({}),
         headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
       }),
     );

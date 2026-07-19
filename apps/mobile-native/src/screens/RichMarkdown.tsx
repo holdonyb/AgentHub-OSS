@@ -17,6 +17,7 @@ function InlineMarkdown({ spans, onLinkPress }: { spans: MarkdownSpan[]; onLinkP
         if (span.kind === 'link') {
           return (
             <Text
+              accessibilityLabel={`链接 ${span.text}`}
               accessibilityRole="link"
               key={key}
               onPress={() => onLinkPress?.(span.url)}

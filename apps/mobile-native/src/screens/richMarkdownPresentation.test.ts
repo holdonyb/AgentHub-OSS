@@ -42,9 +42,9 @@ describe('native rich markdown presentation', () => {
     ]);
   });
 
-  it('keeps only http, https, and worker-local file links actionable', () => {
+  it('keeps only safe remote and local file links actionable', () => {
     const [paragraph] = parseMarkdownBlocks(
-      '[安全](https://example.com) [本地](E:/Work/AgentHub-OSS/README.md) [危险](javascript:alert(1))',
+      '[安全](https://example.com) [本地](E:/Work/AgentHub-OSS/README.md) [相对](docs/plan.md) [危险](javascript:alert(1))',
     );
 
     expect(paragraph).toEqual({
@@ -53,6 +53,8 @@ describe('native rich markdown presentation', () => {
         { kind: 'link', text: '安全', url: 'https://example.com' },
         { kind: 'text', text: ' ' },
         { kind: 'link', text: '本地', url: 'E:/Work/AgentHub-OSS/README.md' },
+        { kind: 'text', text: ' ' },
+        { kind: 'link', text: '相对', url: 'docs/plan.md' },
         { kind: 'text', text: ' 危险' },
       ],
     });

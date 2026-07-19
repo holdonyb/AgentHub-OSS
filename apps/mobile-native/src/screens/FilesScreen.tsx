@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Image,
+  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -20,10 +22,18 @@ import type {
   NativeWorkspaceFileListResult,
   NativeWorkspaceFileReadResult,
 } from '../api/mobileApi';
+import {
+  addRecentFile,
+  loadRecentFiles,
+  type RecentWorkspaceFile,
+} from '../features/files/recentFiles';
+import { MediaFilePreview } from '../features/files/MediaFilePreview';
+import { downloadWorkspaceFile } from '../features/files/downloadWorkspaceFile';
 import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
 import { pickSessionImage } from './nativeImagePicker';
+import { pickSessionFile } from './nativeSessionFilePicker';
 import { RichMarkdown } from './RichMarkdown';
 
 type FilesApi = Pick<
@@ -37,7 +47,36 @@ type FilesApi = Pick<
   | 'uploadSessionFile'
   | 'writeSessionFile'
   | 'createSessionFile'
+> & Partial<Pick<
+  MobileApi,
+  | 'searchSessionFiles'
+  | 'createWorkspaceFileTransfer'
+  | 'getWorkspaceFileTransfer'
+  | 'createWorkspaceFileDownloadTicket'
+  | 'listWorkers'
+  | 'getJob'
+  | 'listWorkspaceFiles'
+  | 'searchWorkspaceFiles'
+  | 'readWorkspaceFile'
+  | 'writeWorkspaceFile'
+  | 'uploadWorkspaceFile'
+  | 'createWorkspaceFile'
+  | 'mkdirWorkspaceDirectory'
+  | 'renameWorkspaceFile'
+>>;
+
+type TransferFilesApi = Pick<
+  MobileApi,
+  'createWorkspaceFileTransfer' | 'getWorkspaceFileTransfer' | 'createWorkspaceFileDownloadTicket'
 >;
+
+function canDownloadPreview(api: FilesApi): api is FilesApi & TransferFilesApi {
+  return Boolean(
+    api.createWorkspaceFileTransfer
+    && api.getWorkspaceFileTransfer
+    && api.createWorkspaceFileDownloadTicket,
+  );
+}
 
 type FileActionKind = 'create' | 'directory' | 'rename' | null;
 
@@ -57,8 +96,42 @@ export function FilesScreen({
   onRequestError?(error: unknown): void;
 }) {
   const loadSessions = useCallback(async () => {
-    const payload = await api.listSessions();
-    return payload.items.filter((session) => Boolean(session.workspace_root));
+    const [payload, workersPayload] = await Promise.all([
+      api.listSessions(),
+      api.listWorkers?.() ?? Promise.resolve({ items: [] }),
+    ]);
+    const workersById = new Map(workersPayload.items.map((worker) => [worker.worker_id, worker]));
+    const sessions = payload.items
+      .filter((session) => Boolean(session.workspace_root))
+      .map((session) => ({
+        ...session,
+        runtime_metadata: {
+          ...session.runtime_metadata,
+          file_transfer_v2: workersById.get(session.worker_id)?.capabilities?.file_transfer_v2 === true,
+        },
+      }));
+    const representedRoots = new Set(
+      sessions.map((session) => workspaceIdentity(session.worker_id, session.workspace_root ?? '')),
+    );
+    const directSupported = Boolean(api.getJob && api.listWorkspaceFiles && api.readWorkspaceFile);
+    const directWorkspaces = directSupported ? workersPayload.items
+      .filter((worker) => worker.status !== 'offline')
+      .flatMap((worker) => (worker.workspace_roots ?? []).map((workspaceRoot) => ({ worker, workspaceRoot })))
+      .filter(({ worker, workspaceRoot }) => !representedRoots.has(workspaceIdentity(worker.worker_id, workspaceRoot)))
+      .map(({ worker, workspaceRoot }): NativeSessionSummary => ({
+        session_id: directWorkspaceSessionId(worker.worker_id, workspaceRoot),
+        title: `${worker.machine_name || worker.worker_id} · ${workspaceLabel(workspaceRoot)}`,
+        backend: 'workspace',
+        worker_id: worker.worker_id,
+        status: 'ready',
+        last_activity_at: worker.last_heartbeat_at,
+        workspace_root: workspaceRoot,
+        runtime_metadata: {
+          direct_workspace: true,
+          file_transfer_v2: worker.capabilities?.file_transfer_v2 === true,
+        },
+      })) : [];
+    return [...sessions, ...directWorkspaces];
   }, [api]);
   const sessionResource = useAsyncResource(loadSessions, { onError: onRequestError });
   const sessions = sessionResource.data ?? [];
@@ -66,10 +139,17 @@ export function FilesScreen({
   const [path, setPath] = useState('.');
   const [preview, setPreview] = useState<NativeWorkspaceFileReadResult | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<'markdown' | 'text'>('markdown');
   const [editing, setEditing] = useState(false);
   const [editorText, setEditorText] = useState('');
   const [fileQuery, setFileQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<NativeWorkspaceFileEntry[] | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchedQuery, setSearchedQuery] = useState('');
+  const [recentFiles, setRecentFiles] = useState<RecentWorkspaceFile[]>([]);
   const [showHidden, setShowHidden] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [actionKind, setActionKind] = useState<FileActionKind>(null);
@@ -98,10 +178,18 @@ export function FilesScreen({
     }
   }, [selectedSessionId, sessions]);
 
+  useEffect(() => {
+    setSearchResults(null);
+    setSearchError(null);
+    setSearchedQuery('');
+  }, [selectedSessionId]);
+
   const loadFiles = useCallback(async () => {
     if (!selectedSession) return emptyFileList(path);
-    const response = await api.listSessionFiles(selectedSession.session_id, { path }, csrfToken);
-    const job = await waitForSessionJob(api, selectedSession.session_id, response.job.job_id);
+    const response = isDirectWorkspace(selectedSession) && api.listWorkspaceFiles
+      ? await api.listWorkspaceFiles(workspacePayload(selectedSession, { path }), csrfToken)
+      : await api.listSessionFiles(selectedSession.session_id, { path }, csrfToken);
+    const job = await waitForFileJob(api, selectedSession, response.job.job_id);
     return parseJobResult<NativeWorkspaceFileListResult>(job, '文件列表读取失败');
   }, [api, csrfToken, path, selectedSession]);
   const fileResource = useAsyncResource(loadFiles, {
@@ -120,6 +208,20 @@ export function FilesScreen({
       .toLocaleLowerCase()
       .includes(normalizedFileQuery);
   }), [entries, normalizedFileQuery, showHidden]);
+  const selectedRecentFiles = useMemo(
+    () => recentFiles.filter((item) => item.sessionId === selectedSessionId).slice(0, 8),
+    [recentFiles, selectedSessionId],
+  );
+
+  useEffect(() => {
+    let active = true;
+    void loadRecentFiles().then((items) => {
+      if (active) setRecentFiles(items);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function openEntry(entry: NativeWorkspaceFileEntry) {
     if (!selectedSession) return;
@@ -130,18 +232,59 @@ export function FilesScreen({
     await openFilePath(selectedSession, entry.path);
   }
 
+  async function searchWorkspace() {
+    const query = fileQuery.trim();
+    if (!selectedSession || !query || searchBusy) return;
+    setSearchBusy(true);
+    setSearchError(null);
+    try {
+      const searchPayload = { path: '.', query, max_results: 100, include_hidden: false };
+      const response = isDirectWorkspace(selectedSession)
+        ? api.searchWorkspaceFiles
+          ? await api.searchWorkspaceFiles(workspacePayload(selectedSession, searchPayload), csrfToken)
+          : null
+        : api.searchSessionFiles
+          ? await api.searchSessionFiles(selectedSession.session_id, searchPayload, csrfToken)
+          : null;
+      if (!response) throw new Error('当前 Worker 不支持工作区搜索');
+      const job = await waitForFileJob(api, selectedSession, response.job.job_id);
+      const result = parseJobResult<NativeWorkspaceFileListResult>(job, '工作区搜索失败');
+      setSearchResults(result.entries ?? []);
+      setSearchedQuery(query);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : '工作区搜索失败');
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
+  function updateFileQuery(value: string) {
+    setFileQuery(value);
+    if (searchResults !== null || searchError || searchedQuery) {
+      setSearchResults(null);
+      setSearchError(null);
+      setSearchedQuery('');
+    }
+  }
+
   async function openFilePath(session: NativeSessionSummary, filePath: string) {
     setPreviewBusy(true);
     setPreviewError(null);
     try {
-      const response = await api.readSessionFile(
-        session.session_id,
-        { path: filePath, max_bytes: 5_000_000 },
-        csrfToken,
-      );
-      const job = await waitForSessionJob(api, session.session_id, response.job.job_id);
+      const readPayload = { path: filePath, max_bytes: 5_000_000 };
+      const response = isDirectWorkspace(session) && api.readWorkspaceFile
+        ? await api.readWorkspaceFile(workspacePayload(session, readPayload), csrfToken)
+        : await api.readSessionFile(session.session_id, readPayload, csrfToken);
+      const job = await waitForFileJob(api, session, response.job.job_id);
       const result = parseJobResult<NativeWorkspaceFileReadResult>(job, '文件读取失败');
       setPreview(result);
+      void addRecentFile({
+        sessionId: session.session_id,
+        path: result.path || filePath,
+        filename: result.filename || filePath.split('/').pop() || filePath,
+        openedAt: Date.now(),
+      }).then(setRecentFiles).catch(() => undefined);
+      setPreviewMode(isMarkdownFile(result) ? 'markdown' : 'text');
       setEditorText(result.text ?? '');
       setEditing(false);
     } catch (error) {
@@ -180,8 +323,24 @@ export function FilesScreen({
           setPreviewError(null);
         }}
         onChangeText={setEditorText}
+        onCopy={async () => {
+          if (!preview.text) return;
+          try {
+            await Clipboard.setStringAsync(preview.text);
+          } catch (error) {
+            setPreviewError(error instanceof Error ? error.message : '复制失败');
+            onRequestError?.(error);
+          }
+        }}
         onEdit={() => setEditing(true)}
+        onDownload={canDownloadPreview(api) && previewSession.runtime_metadata?.file_transfer_v2 === true
+          ? () => void downloadPreview(previewSession)
+          : undefined}
+        onOpenLink={(target) => void openPreviewLink(target)}
+        onPreviewModeChange={setPreviewMode}
         onSave={() => void saveFile(previewSession)}
+        previewMode={previewMode}
+        downloading={downloadBusy}
         saving={previewBusy}
       />
     );
@@ -192,16 +351,15 @@ export function FilesScreen({
     setPreviewBusy(true);
     setPreviewError(null);
     try {
-      const response = await api.writeSessionFile(
-        session.session_id,
-        {
-          path: preview.path,
-          text: editorText,
-          expected_modified_at: preview.modified_at ?? null,
-        },
-        csrfToken,
-      );
-      const job = await waitForSessionJob(api, session.session_id, response.job.job_id);
+      const writePayload = {
+        path: preview.path,
+        text: editorText,
+        expected_modified_at: preview.modified_at ?? null,
+      };
+      const response = isDirectWorkspace(session) && api.writeWorkspaceFile
+        ? await api.writeWorkspaceFile(workspacePayload(session, writePayload), csrfToken)
+        : await api.writeSessionFile(session.session_id, writePayload, csrfToken);
+      const job = await waitForFileJob(api, session, response.job.job_id);
       const result = parseJobResult<NativeWorkspaceFileReadResult>(job, '文件保存失败');
       setPreview(result);
       setEditorText(result.text ?? editorText);
@@ -211,6 +369,30 @@ export function FilesScreen({
       onRequestError?.(error);
     } finally {
       setPreviewBusy(false);
+    }
+  }
+
+  async function downloadPreview(session: NativeSessionSummary) {
+    if (!preview || downloadBusy || !canDownloadPreview(api) || !session.workspace_root) return;
+    setDownloadBusy(true);
+    setPreviewError(null);
+    try {
+      await downloadWorkspaceFile({
+        api: {
+          createWorkspaceFileTransfer: api.createWorkspaceFileTransfer,
+          getWorkspaceFileTransfer: api.getWorkspaceFileTransfer,
+          createWorkspaceFileDownloadTicket: api.createWorkspaceFileDownloadTicket,
+        },
+        csrfToken,
+        workerId: session.worker_id,
+        workspaceRoot: session.workspace_root,
+        path: preview.path,
+      });
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : '文件下载失败');
+      onRequestError?.(error);
+    } finally {
+      setDownloadBusy(false);
     }
   }
 
@@ -232,7 +414,7 @@ export function FilesScreen({
 
   async function completeFileMutation(response: { job: NativeJob }) {
     if (!selectedSession) return;
-    await waitForSessionJob(api, selectedSession.session_id, response.job.job_id);
+    await waitForFileJob(api, selectedSession, response.job.job_id);
     await fileResource.reload();
   }
 
@@ -242,26 +424,29 @@ export function FilesScreen({
     setActionError(null);
     try {
       if (actionKind === 'create') {
-        await completeFileMutation(await api.createSessionFile(
-          selectedSession.session_id,
-          { path: actionPath.trim(), text: actionText, overwrite: false },
-          csrfToken,
-        ));
+        const payload = { path: actionPath.trim(), text: actionText, overwrite: false };
+        await completeFileMutation(
+          isDirectWorkspace(selectedSession) && api.createWorkspaceFile
+            ? await api.createWorkspaceFile(workspacePayload(selectedSession, payload), csrfToken)
+            : await api.createSessionFile(selectedSession.session_id, payload, csrfToken),
+        );
       } else if (actionKind === 'directory') {
-        await completeFileMutation(await api.mkdirSessionDirectory(
-          selectedSession.session_id,
-          { path: actionPath.trim() },
-          csrfToken,
-        ));
+        const payload = { path: actionPath.trim() };
+        await completeFileMutation(
+          isDirectWorkspace(selectedSession) && api.mkdirWorkspaceDirectory
+            ? await api.mkdirWorkspaceDirectory(workspacePayload(selectedSession, payload), csrfToken)
+            : await api.mkdirSessionDirectory(selectedSession.session_id, payload, csrfToken),
+        );
       } else {
         const sourcePath = actionPath.trim();
         const newPath = actionText.trim();
         if (!newPath) throw new Error('请输入新的文件路径');
-        await completeFileMutation(await api.renameSessionFile(
-          selectedSession.session_id,
-          { path: sourcePath, new_path: newPath },
-          csrfToken,
-        ));
+        const payload = { path: sourcePath, new_path: newPath };
+        await completeFileMutation(
+          isDirectWorkspace(selectedSession) && api.renameWorkspaceFile
+            ? await api.renameWorkspaceFile(workspacePayload(selectedSession, payload), csrfToken)
+            : await api.renameSessionFile(selectedSession.session_id, payload, csrfToken),
+        );
       }
       closeFileAction();
     } catch (error) {
@@ -273,6 +458,15 @@ export function FilesScreen({
     }
   }
 
+  async function openPreviewLink(target: string) {
+    if (!previewSession || !preview) return;
+    if (/^https?:\/\//i.test(target)) {
+      await Linking.openURL(target);
+      return;
+    }
+    await openFilePath(previewSession, resolveLinkedFilePath(preview.path, target));
+  }
+
   async function uploadImageToCurrentDirectory() {
     if (!selectedSession || actionBusy) return;
     setActionBusy(true);
@@ -280,20 +474,50 @@ export function FilesScreen({
     try {
       const image = await pickSessionImage();
       if (!image) return;
-      await completeFileMutation(await api.uploadSessionFile(
-        selectedSession.session_id,
-        {
-          path,
-          filename: image.filename,
-          content_type: image.content_type,
-          data_base64: image.data_base64,
-          overwrite: false,
-        },
-        csrfToken,
-      ));
+      const payload = {
+        path,
+        filename: image.filename,
+        content_type: image.content_type,
+        data_base64: image.data_base64,
+        overwrite: false,
+      };
+      await completeFileMutation(
+        isDirectWorkspace(selectedSession) && api.uploadWorkspaceFile
+          ? await api.uploadWorkspaceFile(workspacePayload(selectedSession, payload), csrfToken)
+          : await api.uploadSessionFile(selectedSession.session_id, payload, csrfToken),
+      );
       setActionsOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : '图片上传失败';
+      setActionError(message);
+      onRequestError?.(error);
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function uploadFileToCurrentDirectory() {
+    if (!selectedSession || actionBusy) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const file = await pickSessionFile();
+      if (!file) return;
+      const payload = {
+        path,
+        filename: file.filename,
+        content_type: file.content_type,
+        data_base64: file.data_base64,
+        overwrite: false,
+      };
+      await completeFileMutation(
+        isDirectWorkspace(selectedSession) && api.uploadWorkspaceFile
+          ? await api.uploadWorkspaceFile(workspacePayload(selectedSession, payload), csrfToken)
+          : await api.uploadSessionFile(selectedSession.session_id, payload, csrfToken),
+      );
+      setActionsOpen(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '文件上传失败';
       setActionError(message);
       onRequestError?.(error);
     } finally {
@@ -313,7 +537,7 @@ export function FilesScreen({
         }}
         refreshLabel="刷新文件"
         refreshing={sessionResource.refreshing || fileResource.refreshing}
-        title="文件"
+        title={selectedSession?.title || '工作区'}
       />
       {loadingSessions ? (
         <ResourceState
@@ -426,6 +650,10 @@ export function FilesScreen({
                     <Ionicons color={colors.accent} name="image-outline" size={18} />
                     <Text style={styles.actionChoiceText}>{actionBusy ? '上传中' : '上传图片'}</Text>
                   </Pressable>
+                  <Pressable accessibilityLabel="上传文件到当前目录" accessibilityRole="button" disabled={actionBusy} onPress={() => void uploadFileToCurrentDirectory()} style={({ pressed }) => [styles.actionChoice, actionBusy && styles.disabled, pressed && styles.pressed]}>
+                    <Ionicons color={colors.accent} name="document-attach-outline" size={18} />
+                    <Text style={styles.actionChoiceText}>{actionBusy ? '上传中' : '上传文件'}</Text>
+                  </Pressable>
                 </View>
               ) : (
                 <View style={styles.actionForm}>
@@ -487,15 +715,81 @@ export function FilesScreen({
               )}
             </View>
           ) : null}
+          {selectedRecentFiles.length > 0 ? (
+            <View style={styles.recentSection}>
+              <Text style={styles.recentTitle}>最近文件</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={styles.recentRow}>
+                  {selectedRecentFiles.map((item) => (
+                    <Pressable
+                      accessibilityLabel={`打开最近文件 ${item.filename}`}
+                      accessibilityRole="button"
+                      key={`${item.sessionId}:${item.path}`}
+                      onPress={() => selectedSession && void openFilePath(selectedSession, item.path)}
+                      style={({ pressed }) => [styles.recentChip, pressed && styles.pressed]}
+                    >
+                      <Ionicons color={colors.accent} name="document-text-outline" size={16} />
+                      <Text numberOfLines={1} style={styles.recentChipText}>{item.filename}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
+          ) : null}
           <View style={styles.fileSearchRow}>
             <Ionicons color={colors.muted} name="search-outline" size={18} />
-            <TextInput accessibilityLabel="搜索当前目录文件" autoCapitalize="none" autoCorrect={false} onChangeText={setFileQuery} placeholder="搜索当前目录" placeholderTextColor={colors.muted} style={styles.fileSearchInput} value={fileQuery} />
+            <TextInput
+              accessibilityLabel="搜索当前目录文件"
+              autoCapitalize="none"
+              autoCorrect={false}
+              onChangeText={updateFileQuery}
+              onSubmitEditing={() => void searchWorkspace()}
+              placeholder="筛选当前目录或搜索整个工作区"
+              placeholderTextColor={colors.muted}
+              returnKeyType="search"
+              style={styles.fileSearchInput}
+              value={fileQuery}
+            />
+            <Pressable
+              accessibilityLabel="搜索整个工作区"
+              accessibilityRole="button"
+              disabled={!fileQuery.trim() || !api.searchSessionFiles || searchBusy}
+              onPress={() => void searchWorkspace()}
+              style={({ pressed }) => [styles.workspaceSearchButton, (!fileQuery.trim() || !api.searchSessionFiles) && styles.disabled, pressed && styles.pressed]}
+            >
+              {searchBusy ? <ActivityIndicator color={colors.accent} size="small" /> : <Ionicons color={colors.accent} name="globe-outline" size={17} />}
+              <Text style={styles.workspaceSearchButtonText}>全局</Text>
+            </Pressable>
             {hiddenEntryCount > 0 ? (
               <Pressable accessibilityLabel={showHidden ? '隐藏隐藏文件' : '显示隐藏文件'} accessibilityRole="button" onPress={() => setShowHidden((current) => !current)} style={({ pressed }) => [styles.hiddenToggle, pressed && styles.pressed]}>
                 <Text style={styles.hiddenToggleText}>{showHidden ? '隐藏' : `隐藏项 ${hiddenEntryCount}`}</Text>
               </Pressable>
             ) : null}
           </View>
+          {searchResults !== null ? (
+            <View style={styles.searchResultBar}>
+              <View style={styles.searchResultCopy}>
+                <Text numberOfLines={1} style={styles.searchResultTitle}>工作区搜索“{searchedQuery}”</Text>
+                <Text style={styles.searchResultCount}>{searchResults.length} 项</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="关闭工作区搜索结果"
+                accessibilityRole="button"
+                onPress={() => {
+                  setSearchResults(null);
+                  setSearchedQuery('');
+                }}
+                style={({ pressed }) => [styles.searchResultClose, pressed && styles.pressed]}
+              >
+                <Ionicons color={colors.muted} name="close" size={19} />
+              </Pressable>
+            </View>
+          ) : null}
+          {searchError ? (
+            <View style={styles.inlineError}>
+              <Text style={styles.inlineErrorText}>{searchError}</Text>
+            </View>
+          ) : null}
           {previewError ? (
             <View style={styles.inlineError}>
               <Text style={styles.inlineErrorText}>{previewError}</Text>
@@ -521,9 +815,9 @@ export function FilesScreen({
           ) : (
             <FlatList
               contentContainerStyle={styles.fileList}
-              data={filteredEntries}
+              data={searchResults ?? filteredEntries}
               keyExtractor={(entry) => entry.path}
-              ListEmptyComponent={<Text style={styles.emptyText}>{normalizedFileQuery ? '没有匹配的文件' : '当前目录为空'}</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>{searchResults !== null ? '工作区内没有匹配的文件' : normalizedFileQuery ? '当前目录没有匹配的文件' : '当前目录为空'}</Text>}
               ListHeaderComponent={fileResource.error ? (
                 <ResourceErrorBanner
                   error={fileResource.error}
@@ -545,6 +839,7 @@ export function FilesScreen({
                   entry={item}
                   onPress={() => void openEntry(item)}
                   onRename={() => startFileAction('rename', item)}
+                  showPath={searchResults !== null}
                 />
               )}
             />
@@ -560,11 +855,13 @@ function FileRow({
   canEdit,
   onPress,
   onRename,
+  showPath,
 }: {
   entry: NativeWorkspaceFileEntry;
   canEdit: boolean;
   onPress(): void;
   onRename(): void;
+  showPath?: boolean;
 }) {
   const directory = entry.kind === 'directory';
   return (
@@ -584,7 +881,7 @@ function FileRow({
       <View style={styles.fileCopy}>
         <Text numberOfLines={1} style={styles.fileName}>{entry.name}</Text>
         <Text numberOfLines={1} style={styles.fileMetadata}>
-          {directory ? '目录' : `${fileKindLabel(entry)} · ${formatFileSize(entry.size_bytes)}`}
+          {showPath ? entry.path : directory ? '目录' : `${fileKindLabel(entry)} · ${formatFileSize(entry.size_bytes)}`}
         </Text>
       </View>
       {canEdit ? (
@@ -601,22 +898,34 @@ function FilePreview({
   canEdit,
   editing,
   editorText,
+  previewMode,
   saving,
+  downloading,
   error,
   onBack,
+  onCopy,
   onEdit,
+  onDownload,
+  onOpenLink,
   onChangeText,
+  onPreviewModeChange,
   onSave,
 }: {
   file: NativeWorkspaceFileReadResult;
   canEdit: boolean;
   editing: boolean;
   editorText: string;
+  previewMode: 'markdown' | 'text';
   saving: boolean;
+  downloading: boolean;
   error: string | null;
   onBack(): void;
+  onCopy(): void;
   onEdit(): void;
+  onDownload?(): void;
+  onOpenLink(target: string): void;
   onChangeText(value: string): void;
+  onPreviewModeChange(value: 'markdown' | 'text'): void;
   onSave(): void;
 }) {
   const textFile = (file.preview_kind ?? 'text') === 'text';
@@ -639,19 +948,66 @@ function FilePreview({
           <Text numberOfLines={1} style={styles.previewTitle}>{file.filename}</Text>
           <Text numberOfLines={1} style={styles.fileMetadata}>{file.path}</Text>
         </View>
-        {textFile && canEdit && !file.truncated && !editing ? (
-          <Pressable
-            accessibilityLabel="编辑文件"
-            accessibilityRole="button"
-            onPress={onEdit}
-            style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}
-          >
-            <Ionicons color={colors.accent} name="create-outline" size={18} />
-            <Text style={styles.editButtonText}>编辑</Text>
-          </Pressable>
+        {!editing && (onDownload || (textFile && canEdit && file.is_editable !== false && !file.truncated)) ? (
+          <View style={styles.previewHeaderActions}>
+            {textFile && canEdit && file.is_editable !== false && !file.truncated ? (
+              <>
+                <Pressable
+                  accessibilityLabel="复制文件内容"
+                  accessibilityRole="button"
+                  onPress={onCopy}
+                  style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}
+                >
+                  <Ionicons color={colors.accent} name="copy-outline" size={18} />
+                  <Text style={styles.editButtonText}>复制</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="编辑文件"
+                  accessibilityRole="button"
+                  onPress={onEdit}
+                  style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}
+                >
+                  <Ionicons color={colors.accent} name="create-outline" size={18} />
+                  <Text style={styles.editButtonText}>编辑</Text>
+                </Pressable>
+              </>
+            ) : null}
+            {onDownload ? (
+              <Pressable
+                accessibilityLabel="下载文件"
+                accessibilityRole="button"
+                disabled={downloading}
+                onPress={onDownload}
+                style={({ pressed }) => [styles.editButton, downloading && styles.disabled, pressed && styles.pressed]}
+              >
+                {downloading ? <ActivityIndicator color={colors.accent} size="small" /> : <Ionicons color={colors.accent} name="download-outline" size={18} />}
+                <Text style={styles.editButtonText}>{downloading ? '准备中' : '下载'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
         ) : null}
       </View>
       {error ? <Text style={styles.previewError}>{error}</Text> : null}
+      {!editing && markdownFile ? (
+        <View style={styles.previewTabs}>
+          <Pressable
+            accessibilityLabel="Markdown 预览"
+            accessibilityRole="button"
+            onPress={() => onPreviewModeChange('markdown')}
+            style={({ pressed }) => [styles.previewTab, previewMode === 'markdown' && styles.previewTabSelected, pressed && styles.pressed]}
+          >
+            <Text style={[styles.previewTabText, previewMode === 'markdown' && styles.previewTabTextSelected]}>Markdown</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="原文预览"
+            accessibilityRole="button"
+            onPress={() => onPreviewModeChange('text')}
+            style={({ pressed }) => [styles.previewTab, previewMode === 'text' && styles.previewTabSelected, pressed && styles.pressed]}
+          >
+            <Text style={[styles.previewTabText, previewMode === 'text' && styles.previewTabTextSelected]}>原文</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {editing ? (
         <TextInput
           accessibilityLabel="文件内容"
@@ -667,10 +1023,17 @@ function FilePreview({
         <View style={styles.imageStage}>
           <Image resizeMode="contain" source={{ uri: imageUri }} style={styles.imagePreview} />
         </View>
+      ) : (file.preview_kind === 'audio' || file.preview_kind === 'video') && file.data_base64 ? (
+        <MediaFilePreview
+          contentType={file.content_type}
+          dataBase64={file.data_base64}
+          filename={file.filename}
+          kind={file.preview_kind}
+        />
       ) : textFile ? (
         <ScrollView contentContainerStyle={styles.textPreviewContent}>
-          {markdownFile ? (
-            <RichMarkdown value={file.text || '文件为空'} />
+          {markdownFile && previewMode === 'markdown' ? (
+            <RichMarkdown onLinkPress={onOpenLink} value={file.text || '文件为空'} />
           ) : (
             <Text selectable style={styles.textPreview}>{file.text || '文件为空'}</Text>
           )}
@@ -745,6 +1108,52 @@ function parentPath(path: string) {
   return parts.join('/') || '.';
 }
 
+async function waitForFileJob(
+  api: FilesApi,
+  session: NativeSessionSummary,
+  jobId: string,
+  attempts = 20,
+  delayMs = 300,
+): Promise<NativeJob> {
+  if (!isDirectWorkspace(session)) {
+    return waitForSessionJob(api, session.session_id, jobId, attempts, delayMs);
+  }
+  if (!api.getJob) throw new Error('当前客户端不支持直接工作区任务同步');
+  let latest: NativeJob | undefined;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    latest = (await api.getJob(jobId)).job;
+    if (!['queued', 'running'].includes(latest.status)) return latest;
+    if (attempt < attempts - 1) await delay(delayMs);
+  }
+  if (latest) return latest;
+  throw new Error('Worker 尚未返回文件结果，请稍后刷新');
+}
+
+function isDirectWorkspace(session: NativeSessionSummary): boolean {
+  return session.runtime_metadata?.direct_workspace === true;
+}
+
+function workspacePayload<T extends Record<string, unknown>>(session: NativeSessionSummary, payload: T) {
+  return {
+    worker_id: session.worker_id,
+    workspace_root: session.workspace_root ?? '',
+    ...payload,
+  };
+}
+
+function workspaceIdentity(workerId: string, workspaceRoot: string) {
+  return `${workerId}:${workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '').toLocaleLowerCase()}`;
+}
+
+function directWorkspaceSessionId(workerId: string, workspaceRoot: string) {
+  return `workspace:${workerId}:${workspaceRoot}`;
+}
+
+function workspaceLabel(workspaceRoot: string) {
+  const normalized = workspaceRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  return normalized.split('/').filter(Boolean).pop() || normalized;
+}
+
 function breadcrumbs(path: string): Array<{ label: string; path: string }> {
   if (!path || path === '.') return [{ label: '根目录', path: '.' }];
   const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
@@ -764,6 +1173,23 @@ function toRelativeWorkspacePath(workspaceRoot: string | undefined, filePath: st
   if (!normalizedPath.toLowerCase().startsWith(normalizedRoot.toLowerCase())) return normalizedPath;
   const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '');
   return relative || '.';
+}
+
+function resolveLinkedFilePath(currentPath: string, target: string) {
+  const normalized = target.replace(/\\/g, '/').trim();
+  if (!normalized) return currentPath;
+  if (/^[A-Za-z]:\//.test(normalized)) return normalized;
+  if (normalized.startsWith('/')) return normalized.replace(/^\/+/, '');
+  const baseParts = parentPath(currentPath).split('/').filter(Boolean);
+  for (const part of normalized.split('/').filter(Boolean)) {
+    if (part === '.') continue;
+    if (part === '..') {
+      baseParts.pop();
+      continue;
+    }
+    baseParts.push(part);
+  }
+  return baseParts.join('/') || '.';
 }
 
 function formatFileSize(value?: number | null) {
@@ -890,6 +1316,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   confirmActionText: { color: colors.surface, fontSize: 13, fontWeight: '800' },
+  recentSection: {
+    backgroundColor: colors.surface,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    gap: 7,
+    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 9,
+  },
+  recentTitle: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  recentRow: { flexDirection: 'row', gap: 8 },
+  recentChip: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    maxWidth: 180,
+    minHeight: 34,
+    paddingHorizontal: 10,
+  },
+  recentChipText: { color: colors.text, flexShrink: 1, fontSize: 12, fontWeight: '700' },
   fileSearchRow: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -901,8 +1351,33 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   fileSearchInput: { color: colors.text, flex: 1, fontSize: 14, minHeight: 34 },
+  workspaceSearchButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 6,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 34,
+    paddingHorizontal: 9,
+  },
+  workspaceSearchButtonText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   hiddenToggle: { backgroundColor: colors.surfaceMuted, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 6 },
   hiddenToggleText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+  searchResultBar: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceMuted,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    minHeight: 44,
+    paddingLeft: 16,
+    paddingRight: 8,
+  },
+  searchResultCopy: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 8 },
+  searchResultTitle: { color: colors.text, flexShrink: 1, fontSize: 13, fontWeight: '700' },
+  searchResultCount: { color: colors.muted, fontSize: 12 },
+  searchResultClose: { alignItems: 'center', height: 36, justifyContent: 'center', width: 36 },
   fileList: { paddingBottom: 28, paddingHorizontal: 16, paddingTop: 10 },
   fileRow: {
     alignItems: 'center',
@@ -941,6 +1416,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   previewHeaderCopy: { flex: 1, gap: 3 },
+  previewHeaderActions: { flexDirection: 'row', gap: 8 },
   previewTitle: { color: colors.text, fontSize: 17, fontWeight: '700' },
   editButton: {
     alignItems: 'center',
@@ -955,6 +1431,20 @@ const styles = StyleSheet.create({
   },
   editButtonText: { color: colors.accent, fontSize: 13, fontWeight: '700' },
   previewError: { backgroundColor: '#FEF3F2', color: colors.danger, fontSize: 13, padding: 12 },
+  previewTabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 18, paddingTop: 14 },
+  previewTab: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 34,
+    paddingHorizontal: 14,
+  },
+  previewTabSelected: { backgroundColor: colors.surfaceMuted, borderColor: colors.accent },
+  previewTabText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  previewTabTextSelected: { color: colors.accent },
   textPreviewContent: { padding: 18 },
   textPreview: { color: colors.text, fontFamily: 'monospace', fontSize: 14, lineHeight: 22 },
   truncatedText: { color: colors.danger, fontSize: 12, marginTop: 18 },

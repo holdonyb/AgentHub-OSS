@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNavigationContainerRef, NavigationContainer } from '@react-navigation/native';
+import { createNavigationContainerRef, DarkTheme, DefaultTheme, NavigationContainer } from '@react-navigation/native';
+import Constants from 'expo-constants';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,6 +11,8 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
 import type {
@@ -25,12 +28,15 @@ import { SessionsScreen } from '../screens/SessionsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
 import { WorkersScreen } from '../screens/WorkersScreen';
 import { colors } from '../ui/theme';
+import { applyThemePreference } from '../ui/themePreference';
+import { presentReleaseStatus } from './releasePresentation';
+import { parseQuickReplies, quickRepliesText, workerDefaultsText } from './settingsPresentation';
 import { nativeTabs, type NativeTabKey } from './tabDefinitions';
 
 type RootTabParamList = Record<NativeTabKey, undefined>;
 const Tab = createBottomTabNavigator<RootTabParamList>();
 
-function ProfileScreen({
+export function ProfileScreen({
   api,
   csrfToken,
   user,
@@ -45,10 +51,11 @@ function ProfileScreen({
   onEnableNotifications,
   onRefreshNotifications,
   onOpenSession,
+  onOpenTask,
 }: {
   api: Pick<
     MobileApi,
-    'dismissNotification' | 'getLatestRelease' | 'getSettings' | 'listNotifications' | 'markNotificationRead' | 'patchPreferences'
+    'dismissNotification' | 'getLatestRelease' | 'getSettings' | 'listNotifications' | 'markAllNotificationsRead' | 'markNotificationRead' | 'patchPreferences'
   >;
   csrfToken: string;
   user: NativeUser;
@@ -62,23 +69,32 @@ function ProfileScreen({
   notificationSyncing: boolean;
   onEnableNotifications(): Promise<void>;
   onRefreshNotifications(): Promise<void>;
-  onOpenSession(sessionId: string): void;
+  onOpenSession(sessionId: string, permissionId?: string | null): void;
+  onOpenTask(taskId: string): void;
 }) {
   const [settings, setSettings] = useState<NativeSettings | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [quickReplyDraft, setQuickReplyDraft] = useState('');
   const [inboxOpen, setInboxOpen] = useState(false);
   const [notifications, setNotifications] = useState<NativeNotificationRecord[]>([]);
   const [inboxBusy, setInboxBusy] = useState(false);
   const [inboxError, setInboxError] = useState<string | null>(null);
   const [release, setRelease] = useState<NativeReleaseMetadata | null>(null);
   const [releaseBusy, setReleaseBusy] = useState(false);
+  const currentVersion = Constants.expoConfig?.version ?? '未知';
+  const releaseStatus = release
+    ? presentReleaseStatus(currentVersion, release.version, release.source)
+    : { action: 'check' as const, detail: '尚未检查更新', latestLabel: '等待检查' };
 
   const loadSettings = useCallback(async () => {
     setSettingsBusy(true);
     setSettingsError(null);
     try {
-      setSettings(await api.getSettings());
+      const loaded = await api.getSettings();
+      setSettings(loaded);
+      setQuickReplyDraft(quickRepliesText(loaded.preferences.quick_replies));
+      applyThemePreference(loaded.preferences.theme_mode);
     } catch (requestError) {
       setSettingsError(requestError instanceof Error ? requestError.message : '设置加载失败');
     } finally {
@@ -89,6 +105,21 @@ function ProfileScreen({
   useEffect(() => {
     void loadSettings();
   }, [loadSettings]);
+
+  useEffect(() => {
+    let active = true;
+    setReleaseBusy(true);
+    void api.getLatestRelease()
+      .then((latest) => {
+        if (active) setRelease(latest);
+      })
+      .finally(() => {
+        if (active) setReleaseBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [api]);
 
   async function loadInbox() {
     setInboxBusy(true);
@@ -122,12 +153,72 @@ function ProfileScreen({
     }
   }
 
-  async function openLatestRelease() {
+  async function setThemeMode(themeMode: 'dark' | 'light') {
+    if (!settings || settingsBusy || settings.preferences.theme_mode === themeMode) return;
+    setSettingsBusy(true);
+    setSettingsError(null);
+    try {
+      const result = await api.patchPreferences({ theme_mode: themeMode }, csrfToken);
+      setSettings((current) => current ? { ...current, preferences: result.preferences } : current);
+      applyThemePreference(result.preferences.theme_mode);
+    } catch (requestError) {
+      setSettingsError(requestError instanceof Error ? requestError.message : '外观偏好保存失败');
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function setVoiceLanguage(voiceLanguage: string) {
+    if (!settings || settingsBusy || settings.preferences.voice_language === voiceLanguage) return;
+    setSettingsBusy(true);
+    setSettingsError(null);
+    try {
+      const result = await api.patchPreferences({ voice_language: voiceLanguage }, csrfToken);
+      setSettings((current) => current ? { ...current, preferences: result.preferences } : current);
+    } catch (requestError) {
+      setSettingsError(requestError instanceof Error ? requestError.message : '语音语言保存失败');
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function saveQuickReplies() {
+    if (!settings || settingsBusy) return;
+    setSettingsBusy(true);
+    setSettingsError(null);
+    try {
+      const quickReplies = parseQuickReplies(quickReplyDraft);
+      const result = await api.patchPreferences({ quick_replies: quickReplies }, csrfToken);
+      setSettings((current) => current ? { ...current, preferences: result.preferences } : current);
+      setQuickReplyDraft(quickRepliesText(result.preferences.quick_replies));
+    } catch (requestError) {
+      setSettingsError(requestError instanceof Error ? requestError.message : '快捷回复保存失败');
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  const configuredVoiceLanguages = Array.isArray(settings?.options.voice_languages)
+    ? settings.options.voice_languages
+        .filter((item): item is { value: string; label: string } => (
+          typeof item === 'object' && item !== null &&
+          typeof (item as { value?: unknown }).value === 'string' &&
+          typeof (item as { label?: unknown }).label === 'string'
+        ))
+    : [
+        { value: 'zh-CN', label: '中文' },
+        { value: 'zh-TW', label: '繁體中文' },
+        { value: 'en-US', label: 'English' },
+      ];
+
+  async function handleReleaseAction() {
     setReleaseBusy(true);
     try {
-      const latest = await api.getLatestRelease();
-      setRelease(latest);
-      await Linking.openURL(latest.downloadUrl);
+      if (release && releaseStatus.action === 'download') {
+        await Linking.openURL(release.downloadUrl);
+        return;
+      }
+      setRelease(await api.getLatestRelease());
     } finally {
       setReleaseBusy(false);
     }
@@ -140,7 +231,13 @@ function ProfileScreen({
         item.notification_id === notification.notification_id ? { ...item, status: 'read', read_at: item.read_at ?? new Date().toISOString() } : item
       )));
       setInboxOpen(false);
-      if (notification.session_id) onOpenSession(notification.session_id);
+      if (notification.source_type === 'task' && notification.source_id) onOpenTask(notification.source_id);
+      else if (notification.session_id) {
+        onOpenSession(
+          notification.session_id,
+          notification.source_type === 'permission' ? notification.source_id : null,
+        );
+      }
     } catch (requestError) {
       setInboxError(requestError instanceof Error ? requestError.message : '通知状态更新失败');
     }
@@ -152,6 +249,25 @@ function ProfileScreen({
       setNotifications((current) => current.filter((item) => item.notification_id !== notificationId));
     } catch (requestError) {
       setInboxError(requestError instanceof Error ? requestError.message : '通知收起失败');
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    if (inboxBusy || !notifications.some((item) => item.status === 'pending' || item.status === 'delivered')) return;
+    setInboxBusy(true);
+    setInboxError(null);
+    try {
+      await api.markAllNotificationsRead(csrfToken);
+      const readAt = new Date().toISOString();
+      setNotifications((current) => current.map((item) => (
+        item.status === 'pending' || item.status === 'delivered'
+          ? { ...item, status: 'read', read_at: item.read_at ?? readAt }
+          : item
+      )));
+    } catch (requestError) {
+      setInboxError(requestError instanceof Error ? requestError.message : '通知状态更新失败');
+    } finally {
+      setInboxBusy(false);
     }
   }
 
@@ -186,6 +302,21 @@ function ProfileScreen({
           </View>
         </View>
         <View style={styles.profileDetails}>
+          <Text style={styles.detailLabel}>外观</Text>
+          <View style={styles.preferenceRow}>
+            {(['light', 'dark'] as const).map((mode) => {
+              const selected = settings?.preferences.theme_mode === mode;
+              return (
+                <Pressable accessibilityLabel={`使用${mode === 'light' ? '浅色' : '深色'}外观`} accessibilityRole="button" accessibilityState={{ selected }} disabled={settingsBusy || !settings} key={mode} onPress={() => void setThemeMode(mode)} style={({ pressed }) => [styles.preferenceButton, selected && styles.preferenceButtonSelected, pressed && styles.buttonPressed]}>
+                  <Ionicons color={selected ? colors.accent : colors.muted} name={mode === 'light' ? 'sunny-outline' : 'moon-outline'} size={16} />
+                  <Text style={[styles.preferenceButtonText, selected && styles.preferenceButtonTextSelected]}>{mode === 'light' ? '浅色' : '深色'}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.settingHint}>外观偏好会同步到同一账户。</Text>
+        </View>
+        <View style={styles.profileDetails}>
           <Text style={styles.detailLabel}>语音输入</Text>
           <View style={styles.preferenceRow}>
             {(['streaming', 'standard'] as const).map((mode) => {
@@ -197,20 +328,59 @@ function ProfileScreen({
               );
             })}
           </View>
+          <Text style={styles.detailLabel}>识别语言</Text>
+          <View style={styles.preferenceRow}>
+            {configuredVoiceLanguages.map((language) => {
+              const selected = settings?.preferences.voice_language === language.value;
+              return (
+                <Pressable accessibilityLabel={`使用 ${language.label} 语音语言`} accessibilityRole="button" accessibilityState={{ selected }} disabled={settingsBusy || !settings} key={language.value} onPress={() => void setVoiceLanguage(language.value)} style={({ pressed }) => [styles.preferenceButton, selected && styles.preferenceButtonSelected, pressed && styles.buttonPressed]}>
+                  <Text style={[styles.preferenceButtonText, selected && styles.preferenceButtonTextSelected]}>{language.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
           <Text style={styles.settingHint}>{settingsBusy ? '正在同步偏好' : '偏好会同步到同一账户的控制台。'}</Text>
           {settingsError ? <Text accessibilityRole="alert" style={styles.error}>{settingsError}</Text> : null}
         </View>
         <View style={styles.profileDetails}>
           <View style={styles.settingHeader}>
             <View style={styles.settingCopy}>
-              <Text style={styles.detailLabel}>应用更新</Text>
-              <Text style={styles.settingValue}>{release?.version ? `最新 ${release.version}` : '检查签名 APK 更新'}</Text>
+              <Text style={styles.detailLabel}>快捷回复</Text>
+              <Text style={styles.settingHint}>每行一条，最多 12 条；会同步到会话输入区。</Text>
             </View>
-            <Pressable accessibilityLabel="检查并下载原生 APK" accessibilityRole="button" disabled={releaseBusy} onPress={() => void openLatestRelease()} style={({ pressed }) => [styles.settingButton, releaseBusy && styles.disabled, pressed && styles.buttonPressed]}>
-              {releaseBusy ? <ActivityIndicator color={colors.accent} size="small" /> : <Text style={styles.settingButtonText}>更新</Text>}
+            <Pressable accessibilityLabel="保存快捷回复" accessibilityRole="button" disabled={settingsBusy || !settings} onPress={() => void saveQuickReplies()} style={({ pressed }) => [styles.settingButton, (settingsBusy || !settings) && styles.disabled, pressed && styles.buttonPressed]}>
+              <Text style={styles.settingButtonText}>保存</Text>
             </Pressable>
           </View>
-          <Text style={styles.settingHint}>{release?.source === 'fallback' ? '无法读取版本信息，已使用稳定下载入口。' : '打开 GitHub Release 的最新签名 APK。'}</Text>
+          <TextInput
+            accessibilityLabel="快捷回复，每行一条"
+            editable={!settingsBusy && Boolean(settings)}
+            multiline
+            onChangeText={setQuickReplyDraft}
+            placeholder="继续"
+            placeholderTextColor={colors.muted}
+            style={styles.quickReplyInput}
+            value={quickReplyDraft}
+          />
+        </View>
+        <View style={styles.profileDetails}>
+          <Text style={styles.detailLabel}>Worker 默认参数</Text>
+          <Text style={styles.settingValue}>
+            {settings ? workerDefaultsText(settings.worker_runtime_defaults) : '正在读取默认参数'}
+          </Text>
+          <Text style={styles.settingHint}>新接入 Worker 默认采用这些值，节点实际值请在“节点”详情查看。</Text>
+        </View>
+        <View style={styles.profileDetails}>
+          <View style={styles.settingHeader}>
+            <View style={styles.settingCopy}>
+              <Text style={styles.detailLabel}>应用更新</Text>
+              <Text style={styles.settingValue}>当前 {currentVersion} · {releaseStatus.latestLabel}</Text>
+            </View>
+            <Pressable accessibilityLabel={releaseStatus.action === 'download' ? '下载原生 APK 更新' : '检查原生 APK 更新'} accessibilityRole="button" disabled={releaseBusy} onPress={() => void handleReleaseAction()} style={({ pressed }) => [styles.settingButton, releaseBusy && styles.disabled, pressed && styles.buttonPressed]}>
+              {releaseBusy ? <ActivityIndicator color={colors.accent} size="small" /> : <Text style={styles.settingButtonText}>{releaseStatus.action === 'download' ? '下载' : '检查'}</Text>}
+            </Pressable>
+          </View>
+          <Text style={styles.settingHint}>{releaseStatus.detail}</Text>
         </View>
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <View style={styles.accountActions}>
@@ -234,6 +404,22 @@ function ProfileScreen({
                 <Ionicons color={colors.text} name="close" size={21} />
               </Pressable>
             </View>
+          </View>
+          <View style={styles.inboxBulkActions}>
+            <Pressable
+              accessibilityLabel="全部通知标为已读"
+              accessibilityRole="button"
+              disabled={inboxBusy || !notifications.some((item) => item.status === 'pending' || item.status === 'delivered')}
+              onPress={() => void markAllNotificationsRead()}
+              style={({ pressed }) => [
+                styles.inlineAction,
+                (inboxBusy || !notifications.some((item) => item.status === 'pending' || item.status === 'delivered')) && styles.disabled,
+                pressed && styles.buttonPressed,
+              ]}
+            >
+              <Ionicons color={colors.accent} name="checkmark-done-outline" size={16} />
+              <Text style={styles.inlineActionText}>全部已读</Text>
+            </Pressable>
           </View>
           {inboxError ? <Text accessibilityRole="alert" style={styles.inboxError}>{inboxError}</Text> : null}
           <ScrollView contentContainerStyle={styles.inboxList}>
@@ -279,12 +465,44 @@ export function MainTabs({
   onLogout,
   onChangeServer,
 }: MainTabsProps) {
+  const colorScheme = useColorScheme();
+  const dark = colorScheme === 'dark';
+  const navigationTheme = dark
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          background: '#101722',
+          border: '#334258',
+          card: '#172131',
+          primary: '#4EA1FF',
+          text: '#E7EDF5',
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: '#F4F7FA',
+          border: '#D4DCE6',
+          card: '#FFFFFF',
+          primary: '#1473E6',
+          text: '#111827',
+        },
+      };
   const navigationRef = useRef(createNavigationContainerRef<RootTabParamList>()).current;
   const [requestedSessionId, setRequestedSessionId] = useState<string | null>(null);
+  const [requestedPermissionId, setRequestedPermissionId] = useState<string | null>(null);
+  const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
   const [requestedFileTarget, setRequestedFileTarget] = useState<{ sessionId: string; path: string } | null>(null);
-  const openNotificationSession = useCallback((sessionId: string) => {
+  const openNotificationSession = useCallback((sessionId: string, permissionId?: string | null) => {
     setRequestedSessionId(sessionId);
+    setRequestedPermissionId(permissionId ?? null);
     if (navigationRef.isReady()) navigationRef.navigate('sessions');
+  }, [navigationRef]);
+  const openNotificationTask = useCallback((taskId: string) => {
+    setRequestedTaskId(taskId);
+    if (navigationRef.isReady()) navigationRef.navigate('tasks');
   }, [navigationRef]);
   const openSessionFile = useCallback((target: { sessionId: string; path: string }) => {
     setRequestedFileTarget(target);
@@ -293,14 +511,26 @@ export function MainTabs({
   const handleRequestedSessionHandled = useCallback((sessionId: string) => {
     setRequestedSessionId((current) => current === sessionId ? null : current);
   }, []);
+  const handleRequestedPermissionHandled = useCallback((permissionId: string) => {
+    setRequestedPermissionId((current) => current === permissionId ? null : current);
+  }, []);
+  const handleRequestedTaskHandled = useCallback((taskId: string) => {
+    setRequestedTaskId((current) => current === taskId ? null : current);
+  }, []);
   const handleRequestedFileHandled = useCallback((target: { sessionId: string; path: string }) => {
     setRequestedFileTarget((current) => (
       current?.sessionId === target.sessionId && current?.path === target.path ? null : current
     ));
   }, []);
-  const notificationGuard = useNativeNotificationGuard(api, csrfToken, onRequestError, openNotificationSession);
+  const notificationGuard = useNativeNotificationGuard(
+    api,
+    csrfToken,
+    onRequestError,
+    openNotificationSession,
+    openNotificationTask,
+  );
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <Tab.Navigator
         screenOptions={({ route }) => {
           const definition = nativeTabs.find((tab) => tab.key === route.name)!;
@@ -309,8 +539,8 @@ export function MainTabs({
             headerShadowVisible: false,
             headerStyle: { backgroundColor: colors.canvas },
             headerTitleStyle: { color: colors.text, fontSize: 18, fontWeight: '700' },
-            tabBarActiveTintColor: colors.accent,
-            tabBarInactiveTintColor: colors.muted,
+            tabBarActiveTintColor: dark ? '#4EA1FF' : '#1473E6',
+            tabBarInactiveTintColor: dark ? '#A7B3C4' : '#667085',
             tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
             tabBarStyle: { borderTopColor: colors.border, height: 70, paddingBottom: 9, paddingTop: 7 },
             tabBarIcon: ({ color, size }) => (
@@ -326,12 +556,16 @@ export function MainTabs({
                 return (
                   <SessionsScreen
                     api={api}
+                    canOperate={user.role !== 'viewer'}
                     canTerminate={user.role === 'owner' || user.role === 'admin'}
                     csrfToken={csrfToken}
                     onRequestError={onRequestError}
                     onRequestedSessionHandled={handleRequestedSessionHandled}
+                    onRequestedPermissionHandled={handleRequestedPermissionHandled}
                     onOpenFile={openSessionFile}
+                    onOpenTask={openNotificationTask}
                     requestedSessionId={requestedSessionId}
+                    requestedPermissionId={requestedPermissionId}
                   />
                 );
               }
@@ -343,11 +577,20 @@ export function MainTabs({
                     csrfToken={csrfToken}
                     onOpenFile={openSessionFile}
                     onRequestError={onRequestError}
+                    onRequestedTaskHandled={handleRequestedTaskHandled}
+                    requestedTaskId={requestedTaskId}
                   />
                 );
               }
               if (tab.key === 'workers') {
-                return <WorkersScreen api={api} onRequestError={onRequestError} />;
+                return (
+                  <WorkersScreen
+                    api={api}
+                    canManage={user.role === 'owner' || user.role === 'admin'}
+                    csrfToken={csrfToken}
+                    onRequestError={onRequestError}
+                  />
+                );
               }
               if (tab.key === 'files') {
                 return (
@@ -375,6 +618,7 @@ export function MainTabs({
                     onEnableNotifications={notificationGuard.enable}
                     onLogout={onLogout}
                     onOpenSession={openNotificationSession}
+                    onOpenTask={openNotificationTask}
                     onRefreshNotifications={notificationGuard.refresh}
                     serverUrl={serverUrl}
                     user={user}
@@ -400,9 +644,9 @@ const styles = StyleSheet.create({
     paddingTop: 34,
   },
   eyebrow: { color: colors.accent, fontSize: 12, fontWeight: '800' },
-  title: { color: colors.text, fontSize: 28, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 22, fontWeight: '800', lineHeight: 28 },
   detailLabel: { color: colors.muted, fontSize: 12 },
-  serverUrl: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  serverUrl: { color: colors.text, fontSize: 13, lineHeight: 18 },
   role: { color: colors.success, fontSize: 12, fontWeight: '800' },
   error: { color: colors.danger, fontSize: 14, lineHeight: 20 },
   profileDetails: {
@@ -440,6 +684,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 7,
     borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
     justifyContent: 'center',
     minHeight: 40,
     minWidth: 76,
@@ -448,6 +694,19 @@ const styles = StyleSheet.create({
   preferenceButtonSelected: { backgroundColor: colors.surfaceMuted, borderColor: colors.accent },
   preferenceButtonText: { color: colors.muted, fontSize: 13, fontWeight: '700' },
   preferenceButtonTextSelected: { color: colors.accent },
+  quickReplyInput: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 21,
+    minHeight: 110,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    textAlignVertical: 'top',
+  },
   accountActions: { gap: 10, marginTop: 8 },
   secondaryButton: {
     alignItems: 'center',
@@ -479,6 +738,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   inboxHeaderActions: { flexDirection: 'row', gap: 8 },
+  inboxBulkActions: { alignItems: 'flex-end', paddingHorizontal: 18, paddingTop: 8 },
   iconButton: {
     alignItems: 'center',
     backgroundColor: colors.surface,

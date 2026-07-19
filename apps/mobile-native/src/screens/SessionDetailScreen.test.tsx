@@ -188,6 +188,13 @@ function createDetailApi(overrides: Record<string, unknown> = {}) {
     listPermissions: jest.fn(async () => ({ items: [] as NativePermission[] })),
     respondPermission: jest.fn(),
     sendSessionInput: jest.fn(),
+    renameSession: jest.fn(),
+    forkSession: jest.fn(),
+    askSessionBtw: jest.fn(),
+    updateSessionControls: jest.fn(),
+    archiveSession: jest.fn(),
+    unarchiveSession: jest.fn(),
+    listProviderSnapshots: jest.fn(async () => ({ items: [] })),
     transcribeVoice: jest.fn(),
     terminateSession: jest.fn(),
     ...overrides,
@@ -294,25 +301,87 @@ describe('native session detail', () => {
     expect(renderedText(renderer)).toContain('# 计划');
   });
 
-  it('shows persisted attachment metadata on a sent user message', async () => {
+  it('searches the loaded conversation without leaving the session', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+
+    await settle();
+    await act(async () => {
+      press(renderer.root.findByProps({ accessibilityLabel: '搜索会话消息' }));
+    });
+    await act(async () => {
+      changeText(renderer.root.findByProps({ accessibilityLabel: '消息搜索关键词' }), '同步游标');
+    });
+
+    expect(renderedText(renderer)).toContain('1 条匹配');
+    expect(renderedText(renderer)).toContain('已经定位到同步游标。');
+    expect(renderedText(renderer)).not.toContain('请检查消息同步。');
+  });
+
+  it('keeps polling a needs-reply session until its delayed transcript arrives', async () => {
+    jest.useFakeTimers();
+    try {
+      const delayedItem = { ...timeline[0]!, text: '审批消息已经同步到详情。' };
+      const getSessionTimeline = jest
+        .fn()
+        .mockResolvedValueOnce({ items: [], has_more: false })
+        .mockResolvedValueOnce({ items: [delayedItem], has_more: false });
+      const api = createDetailApi({ getSessionTimeline });
+      const renderer = await render(
+        <SessionDetailScreen
+          api={api}
+          canTerminate
+          csrfToken="csrf-token"
+          onBack={jest.fn()}
+          session={session}
+        />,
+      );
+      await settle();
+
+      expect(renderedText(renderer)).not.toContain('审批消息已经同步到详情。');
+      await act(async () => {
+        jest.advanceTimersByTime(15_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(getSessionTimeline).toHaveBeenCalledTimes(2);
+      expect(renderedText(renderer)).toContain('审批消息已经同步到详情。');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows persisted attachment metadata on a sent user message and opens local attachment paths', async () => {
     const attachmentTimeline: NativeTimelineItem[] = [{
       ...timeline[1]!,
       payload: {
-        attachments: [
-          { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048 },
-          { filename: '截图.png', content_type: 'image/png', size_bytes: 512 },
-        ],
+        input: {
+          attachments: [
+            { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048, path: 'docs/需求说明.md' },
+            { filename: '截图.png', content_type: 'image/png', size_bytes: 512, uri: 'https://example.com/screen.png' },
+          ],
+        },
       },
     }];
     const api = createDetailApi({
       getSessionTimeline: jest.fn(async () => ({ items: attachmentTimeline, has_more: false })),
     });
+    const onOpenFile = jest.fn();
     const renderer = await render(
       <SessionDetailScreen
         api={api}
         canTerminate
         csrfToken="csrf-token"
         onBack={jest.fn()}
+        onOpenFile={onOpenFile}
         session={session}
       />,
     );
@@ -322,6 +391,8 @@ describe('native session detail', () => {
     expect(renderedText(renderer)).toContain('需求说明.md');
     expect(renderedText(renderer)).toContain('截图.png');
     expect(renderer.root.findByProps({ accessibilityLabel: '附件 需求说明.md' })).toBeDefined();
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '附件 需求说明.md' })));
+    expect(onOpenFile).toHaveBeenCalledWith('session-1', 'docs/需求说明.md');
   });
 
   it('supports inline expand, collapse, and copy for long assistant messages', async () => {
@@ -497,6 +568,45 @@ describe('native session detail', () => {
 
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '收起工具输出' })));
     expect(renderedText(renderer)).not.toContain('build finished');
+  });
+
+  it('opens long tool output in the full-screen reader and lets the user copy it', async () => {
+    const output = `first line\n${'diagnostic output '.repeat(20)}`;
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({
+        items: [{
+          session_id: 'session-1',
+          seq: 4,
+          item_type: 'tool_call',
+          role: 'tool',
+          text: '',
+          tool_call_id: 'tool-2',
+          tool_name: 'shell_command',
+          status: 'completed',
+          payload: { summary: 'Exit code: 0', output },
+          created_at: '2026-07-11T12:04:00Z',
+        }],
+        has_more: false,
+      })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '全文阅读工具输出' })));
+    expect(renderedText(renderer)).toContain('工具输出');
+    expect(renderedText(renderer)).toContain('diagnostic output');
+    expect(() => renderer.root.findByProps({ accessibilityLabel: 'Markdown' })).toThrow();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '复制阅读内容' })));
+    expect(Clipboard.setStringAsync).toHaveBeenCalledWith(output.trim());
   });
 
   it('preserves multiline replies and exposes sending, queued, running, and failed states', async () => {
@@ -772,6 +882,7 @@ describe('native session detail', () => {
         csrfToken="csrf-token"
         onBack={jest.fn()}
         session={session}
+        voiceLanguage="en-US"
       />,
     );
     await settle();
@@ -781,10 +892,28 @@ describe('native session detail', () => {
 
     expect(stopRecording).toHaveBeenCalled();
     expect(transcribeVoice).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: 'voice.m4a', language: 'zh-CN' }),
+      expect.objectContaining({ filename: 'voice.m4a', language: 'en-US' }),
       'csrf-token',
     );
     expect(renderer.root.findByProps({ accessibilityLabel: '回复内容' }).props.value).toBe('识别后的文字');
+  });
+
+  it('renders account quick replies instead of a hardcoded list', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        quickReplies={['继续推进', '换个方案']}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderer.root.findByProps({ accessibilityLabel: '快捷回复 继续推进' })).toBeTruthy();
+    expect(renderer.root.findByProps({ accessibilityLabel: '快捷回复 换个方案' })).toBeTruthy();
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '快捷回复 Implement the plan' })).toHaveLength(0);
   });
 
   it('recovers the latest reply status when a detail screen is reopened', async () => {
@@ -912,6 +1041,174 @@ describe('native session detail', () => {
     expect(terminateSession).toHaveBeenCalledWith('session-1', 'csrf-token');
     expect(renderedText(renderer)).toContain('只有管理员可以终止会话');
     expect(renderer.root.findByProps({ accessibilityLabel: '终止会话错误' }).props.accessibilityRole).toBe('alert');
+  });
+
+  it('highlights and acknowledges the exact approval opened from a notification', async () => {
+    const onFocusedPermissionHandled = jest.fn();
+    const api = createDetailApi({
+      listPermissions: jest.fn(async () => ({ items: [questionPermission] })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        focusedPermissionId="permission-question"
+        onBack={jest.fn()}
+        onFocusedPermissionHandled={onFocusedPermissionHandled}
+        session={session}
+      />,
+    );
+
+    await settle();
+
+    expect(renderer.root.findByProps({ accessibilityLabel: '通知定位：维护窗口' })).toBeTruthy();
+    expect(onFocusedPermissionHandled).toHaveBeenCalledWith('permission-question');
+  });
+
+  it('explains why a viewer or archived session cannot accept replies', async () => {
+    const viewerRenderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canOperate={false}
+        canTerminate={false}
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+    expect(renderedText(viewerRenderer)).toContain('当前账户只有查看权限');
+    expect(viewerRenderer.root.findByProps({ accessibilityLabel: '回复内容' }).props.editable).toBe(false);
+
+    const archivedRenderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi({ getSession: jest.fn(async () => ({ session: { ...session, archived_at: '2026-07-19T01:00:00Z' } })) })}
+        canOperate
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={{ ...session, archived_at: '2026-07-19T01:00:00Z' }}
+      />,
+    );
+    await settle();
+    expect(renderedText(archivedRenderer)).toContain('会话已归档，恢复后才能回复');
+  });
+
+  it('lets an operator rename, fork, ask BTW, and archive a session through CSRF-protected actions', async () => {
+    const renamed = { ...session, title: '同步问题已定位' };
+    const renameSession = jest.fn(async () => ({ session: renamed }));
+    const forkSession = jest.fn(async () => ({ job: { job_id: 'fork-1' } }));
+    const askSessionBtw = jest.fn(async () => ({ job: { job_id: 'btw-1' } }));
+    const archiveSession = jest.fn(async () => ({ session: { ...renamed, archived_at: '2026-07-19T00:00:00Z' } }));
+    const api = createDetailApi({ archiveSession, askSessionBtw, forkSession, renameSession });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canOperate
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话操作' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '重命名会话' })));
+    await act(async () => changeText(renderer.root.findByProps({ accessibilityLabel: '会话名称' }), '同步问题已定位'));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '保存会话名称' })));
+    await settle();
+    expect(renameSession).toHaveBeenCalledWith('session-1', '同步问题已定位', 'csrf-token');
+    expect(renderedText(renderer)).toContain('同步问题已定位');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话操作' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: 'Fork 会话' })));
+    await act(async () => changeText(renderer.root.findByProps({ accessibilityLabel: 'Fork 提示词' }), '改用另一条实现路径'));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '提交 Fork' })));
+    await settle();
+    expect(forkSession).toHaveBeenCalledWith('session-1', { prompt: '改用另一条实现路径' }, 'csrf-token');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话操作' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: 'BTW 提问' })));
+    await act(async () => changeText(renderer.root.findByProps({ accessibilityLabel: 'BTW 提示词' }), '这个设计是否还有风险？'));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '提交 BTW' })));
+    await settle();
+    expect(askSessionBtw).toHaveBeenCalledWith('session-1', { prompt: '这个设计是否还有风险？' }, 'csrf-token');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话操作' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '归档会话' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '确认归档会话' })));
+    await settle();
+    expect(archiveSession).toHaveBeenCalledWith('session-1', 'csrf-token');
+    expect(renderedText(renderer)).toContain('已归档');
+  });
+
+  it('updates runtime controls from provider-reported options', async () => {
+    const updateSessionControls = jest.fn(async (_sessionId: string, controls: Record<string, unknown>) => ({
+      session: {
+        ...session,
+        controls,
+      },
+    }));
+    const api = createDetailApi({
+      listProviderSnapshots: jest.fn(async () => ({
+        items: [{
+          worker_id: 'worker-main',
+          backend: 'codex',
+          status: 'ready',
+          auth_status: 'ready',
+          models: [{ id: 'gpt-5.6', label: 'GPT-5.6' }],
+          modes: [
+            { kind: 'sandbox_mode', id: 'workspace-write' },
+            { kind: 'sandbox_mode', id: 'danger-full-access' },
+            { kind: 'approval_mode', id: 'never' },
+            { kind: 'approval_mode', id: 'on-request' },
+            { kind: 'permission_mode', id: 'default' },
+            { kind: 'permission_mode', id: 'bypassPermissions' },
+            { kind: 'interaction_bridge', id: 'compatibility' },
+            { kind: 'interaction_bridge', id: 'tmux' },
+          ],
+          features: {},
+          diagnostics: {},
+          fetched_at: '2026-07-19T00:00:00Z',
+          updated_at: '2026-07-19T00:00:00Z',
+        }],
+      })),
+      updateSessionControls,
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canOperate
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话操作' })));
+    await settle();
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择模型 GPT-5.6' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择沙箱 danger-full-access' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择审批 never' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择权限策略 bypassPermissions' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择交互桥 tmux' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '切换 Yolo' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '保存运行控制' })));
+    await settle();
+
+    expect(updateSessionControls).toHaveBeenCalledWith('session-1', {
+      model: 'gpt-5.6',
+      sandbox_mode: 'danger-full-access',
+      approval_mode: 'never',
+      permission_mode: 'bypassPermissions',
+      interaction_bridge: 'tmux',
+      yolo: true,
+    }, 'csrf-token');
+    expect(renderedText(renderer)).toContain('运行控制已更新');
   });
 
   it('keeps a successfully resolved permission hidden when the follow-up refresh fails', async () => {
