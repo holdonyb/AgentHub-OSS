@@ -47,11 +47,11 @@ Run: git commit -m "test: define native mobile console parity contract"
 
 - [ ] **Step 1: Add red transport assertions**
 
-Cover CSRF and payload shape for session file upload/create/mkdir/rename, settings/preferences, notification read/dismiss and release metadata. Each file mutation must include a session ID and retain its worker workspace scope.
+Cover CSRF and payload shape for session file upload/create/mkdir/rename, settings/preferences and notification read/dismiss. Separately test the public GitHub latest-release metadata request and its fallback download URL. Each file mutation must include a session ID and retain its worker workspace scope.
 
 - [ ] **Step 2: Add typed wrappers**
 
-Add explicit payload and result types plus methods createSessionFile, mkdirSessionFile, renameSessionFile, uploadSessionFile, getSettings, patchPreferences, dismissNotification and getReleaseMetadata. Do not add generic any-typed endpoint access.
+Add explicit payload and result types plus methods createSessionFile, mkdirSessionFile, renameSessionFile, uploadSessionFile, getSettings, patchPreferences and dismissNotification. Add a small release metadata helper that reads the public GitHub latest-release endpoint and falls back to the stable latest APK URL. Do not add generic any-typed endpoint access.
 
 - [ ] **Step 3: Verify**
 
@@ -230,4 +230,3 @@ Run: git commit -m "test: verify native mobile complete console"
 - Every end-user control loop in the V2 design has an implementation task and a focused test.
 - All mutations map to existing scoped server endpoints; no arbitrary file or shell access is introduced.
 - In-app APK replacement and desktop-density administration remain intentionally out of scope, while phone-first control loops are complete.
-
