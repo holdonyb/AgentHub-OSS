@@ -495,6 +495,17 @@ export function MainTabs({
   const [requestedPermissionId, setRequestedPermissionId] = useState<string | null>(null);
   const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
   const [requestedFileTarget, setRequestedFileTarget] = useState<{ sessionId: string; path: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.getSettings()
+      .then((settings) => {
+        if (active) applyThemePreference(settings.preferences.theme_mode);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api]);
   const openNotificationSession = useCallback((sessionId: string, permissionId?: string | null) => {
     setRequestedSessionId(sessionId);
     setRequestedPermissionId(permissionId ?? null);
