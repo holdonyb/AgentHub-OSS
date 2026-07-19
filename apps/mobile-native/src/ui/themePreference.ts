@@ -12,3 +12,14 @@ export function themePreferencePresentation(mode: NativeThemeMode) {
 export function applyThemePreference(mode: NativeThemeMode): void {
   Appearance.setColorScheme(themePreferencePresentation(mode).colorScheme);
 }
+
+export async function loadAndApplyThemePreference(
+  load: () => Promise<NativeThemeMode>,
+): Promise<boolean> {
+  try {
+    applyThemePreference(await load());
+    return true;
+  } catch {
+    return false;
+  }
+}
