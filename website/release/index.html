@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AgentHub v1.0.0 | Release Notes</title>
+    <title>AgentHub 当前稳定版 | Release Notes</title>
     <meta
       name="description"
-      content="AgentHub v1.0.0 release notes: self-hosted AI agent control plane with Workbench, WebView and native Android clients, desktop clients, and cross-platform workers."
+      content="AgentHub current stable release notes: self-hosted AI agent control plane with Session Mode, Workbench, native Android, desktop clients, and cross-platform workers."
     />
     <link rel="icon" type="image/svg+xml" href="/assets/agenthub-mark.svg" />
     <link rel="stylesheet" href="/styles.css" />
@@ -18,17 +18,17 @@
           <img src="/assets/agenthub-mark.svg" alt="AgentHub" class="brand-mark" />
           <div>
             <div class="eyebrow">Public Release Notes</div>
-            <h1>AgentHub v1.0.0</h1>
+            <h1>AgentHub 当前稳定版</h1>
           </div>
         </div>
         <p class="lead">
-          AgentHub 1.0 保留 Session 控制台并加入 Workbench，统一发布 Web、两条 Android 渠道、Windows / macOS Desktop，以及 Windows / Linux / macOS worker。
+          AgentHub 保留 Session 控制台并加入 Workbench，统一发布 Web、两条 Android 渠道、Windows / macOS Desktop，以及 Windows / Linux / macOS worker。当前官网文案默认跟随 GitHub latest release。
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="/download/">下载当前版本</a>
           <a class="button" href="/install/">安装模式选择页</a>
           <a class="button" href="/press/">分享文案</a>
-          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/tag/v1.0.0">GitHub Release</a>
+          <a class="button" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">GitHub Release</a>
         </div>
       </header>
 
@@ -60,7 +60,7 @@
         <section class="band">
           <div class="section-copy">
             <h2>当前 release 资产</h2>
-            <p>下列文件与当前 GitHub Release 一致。官网保留这组显式文件名和 SHA256，方便分享和校验。</p>
+            <p>这里保留稳定下载名和用途说明。Android 与 worker 资产使用 latest release 的稳定文件名；桌面端资产文件名带版本号，所以统一跳 GitHub Release 页面。校验请以 latest release 的 <code>SHA256SUMS</code> 为准。</p>
           </div>
           <div class="release-table-wrap">
             <table class="release-table">
@@ -73,32 +73,32 @@
               </thead>
               <tbody>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-android-release.apk"><code>agenthub-android-release.apk</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-android-release.apk"><code>agenthub-android-release.apk</code></a></td>
                   <td>WebView 覆盖更新（<code>xin.ifix.agenthub</code>）</td>
-                  <td><code>bd77640e9cffc38cf5ce4728c0ddbe74b06c65d4c6155c793abfe4638137dc50</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-native-android-release.apk"><code>agenthub-native-android-release.apk</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-native-android-release.apk"><code>agenthub-native-android-release.apk</code></a></td>
                   <td>原生 Workbench（<code>dev.myagenthub.mobile</code>），可与当前版共存</td>
-                  <td><code>4ff07d1e2172c1589b610238669e67216efb9cfdfc0ed0adad328b154b3495f7</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/AgentHub-1.0.0-x64.exe"><code>AgentHub-1.0.0-x64.exe</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest"><code>AgentHub-&lt;version&gt;-x64.exe</code></a></td>
                   <td>Windows Desktop</td>
-                  <td><code>a198c4358f989d93841b98db90af7d8cd1bb23646b6ac4f85784d6e1cb077604</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-worker-windows.zip"><code>agenthub-worker-windows.zip</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-windows.zip"><code>agenthub-worker-windows.zip</code></a></td>
                   <td>Windows worker bundle</td>
-                  <td><code>b0697922aa81819779dba15763a6dc452c80dfd7d4ddd8d2d7276448e62b664a</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/agenthub-worker-linux.tar.gz"><code>agenthub-worker-linux.tar.gz</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-worker-linux.tar.gz"><code>agenthub-worker-linux.tar.gz</code></a></td>
                   <td>Linux worker bundle</td>
-                  <td><code>03f11cd54e19bd688dc27be06bef3d9a28ae41ffe3f478e10eb4a0432d3b2297</code></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                 </tr>
                 <tr>
-                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/download/v1.0.0/SHA256SUMS"><code>SHA256SUMS</code></a></td>
+                  <td><a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></td>
                   <td>全量校验文件</td>
                   <td>以 Release 中下载的文本内容为准</td>
                 </tr>

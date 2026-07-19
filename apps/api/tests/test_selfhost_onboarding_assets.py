@@ -135,21 +135,20 @@ def test_selfhost_onboarding_assets_are_present_and_linked() -> None:
     assert "先选安装模式" in website_index
     assert "下载 release 资产" in website_download
     for android_page in [website_download, website_release]:
-        assert "v1.0.0" in android_page
         assert "agenthub-android-release.apk" in android_page
         assert "agenthub-native-android-release.apk" in android_page
         assert "xin.ifix.agenthub" in android_page
         assert "dev.myagenthub.mobile" in android_page
         assert "可与当前版共存" in android_page
-        assert "bd77640e9cffc38cf5ce4728c0ddbe74b06c65d4c6155c793abfe4638137dc50" in android_page
-        assert "4ff07d1e2172c1589b610238669e67216efb9cfdfc0ed0adad328b154b3495f7" in android_page
+        assert "releases/latest" in android_page
+        assert "SHA256SUMS" in android_page
         assert "v0.1.1" not in android_page
     assert "更新当前版" in website_download
     assert "安装原生版" in website_download
     assert "agenthub-worker-windows.zip" in website_download
     assert "SHA256SUMS" in website_download
     assert "Claude / Codex / Kimi" in website_download
-    assert "AgentHub v1.0.0" in website_release
+    assert "AgentHub 当前稳定版" in website_release
     assert "Claude / Codex / Kimi" in website_release
     assert "Launch copy, links, and assets" in website_press
     assert "docs/LAUNCH_COPY.md" in website_press
