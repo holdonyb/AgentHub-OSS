@@ -1,5 +1,11 @@
 import type { NativePermission, NativeTimelineItem } from '../api/mobileApi';
 
+export interface NativeTimelineAttachment {
+  filename: string;
+  content_type: string;
+  size_bytes: number | null;
+}
+
 export interface NativePermissionChoice {
   id: string;
   label: string;
@@ -150,5 +156,23 @@ export function sortedTimeline(items: NativeTimelineItem[]): NativeTimelineItem[
       return leftTime - rightTime;
     }
     return left.seq - right.seq;
+  });
+}
+
+export function timelineAttachments(item: NativeTimelineItem): NativeTimelineAttachment[] {
+  const rawAttachments = item.payload?.attachments;
+  if (!Array.isArray(rawAttachments)) return [];
+  return rawAttachments.flatMap((value) => {
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    const filename = textValue(record.filename);
+    if (!filename) return [];
+    return [{
+      filename,
+      content_type: textValue(record.content_type) || 'application/octet-stream',
+      size_bytes: typeof record.size_bytes === 'number' && Number.isFinite(record.size_bytes)
+        ? record.size_bytes
+        : null,
+    }];
   });
 }

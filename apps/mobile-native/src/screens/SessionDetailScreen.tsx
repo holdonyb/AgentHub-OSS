@@ -7,6 +7,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -35,9 +36,12 @@ import {
   permissionChoices,
   permissionQuestions,
   sortedTimeline,
+  timelineAttachments,
   type NativePermissionChoice,
 } from './sessionDetailPresentation';
 import { pickSessionImage, type NativePendingImage } from './nativeImagePicker';
+import { pickSessionFile, type NativePendingFile } from './nativeSessionFilePicker';
+import { RichMarkdown } from './RichMarkdown';
 import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 type SessionDetailApi = Pick<
@@ -121,9 +125,23 @@ function toolOutput(item: NativeTimelineItem) {
 }
 
 function extractLocalPaths(text: string): string[] {
-  const matches = text.match(/[A-Za-z]:[\\/][^\s)\]]+/g) ?? [];
-  const normalized = matches.map((value) => value.replace(/\\/g, '/').replace(/[)>.,]+$/g, ''));
+  const windowsMatches = text.match(/[A-Za-z]:[\\/][^\s)\]]+/g) ?? [];
+  const posixMatches = [...text.matchAll(/(?:^|[\s([{'\"：])(\/(?!\/)[^\s)\]}>，。；,]+)/g)]
+    .map((match) => match[1] ?? '');
+  const normalized = [...windowsMatches, ...posixMatches]
+    .map((value) => value.replace(/\\/g, '/').replace(/[)>，。；,;]+$/g, ''));
   return [...new Set(normalized)];
+}
+
+function attachmentSize(sizeBytes: number | null) {
+  if (sizeBytes === null || sizeBytes < 0) return '';
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isWorkerLocalPath(value: string) {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('/');
 }
 
 function itemKey(item: NativeTimelineItem): string {
@@ -356,7 +374,7 @@ export function SessionDetailScreen({
 }) {
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
-  const [attachments, setAttachments] = useState<NativePendingImage[]>([]);
+  const [attachments, setAttachments] = useState<Array<NativePendingImage | NativePendingFile>>([]);
   const [transcribing, setTranscribing] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentJob, setSentJob] = useState<NativeJob | null>(null);
@@ -372,6 +390,7 @@ export function SessionDetailScreen({
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
+  const [attachmentPickerVisible, setAttachmentPickerVisible] = useState(false);
   const [readerItem, setReaderItem] = useState<NativeTimelineItem | null>(null);
   const [readerTab, setReaderTab] = useState<'text' | 'markdown'>('text');
   const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
@@ -426,6 +445,7 @@ export function SessionDetailScreen({
     setResolvedPermissionIds(new Set());
     setReplyMode('direct');
     setReaderItem(null);
+    setAttachmentPickerVisible(false);
     setExpandedItems(new Set());
     setExpandedToolItems(new Set());
   }, [session.session_id]);
@@ -500,7 +520,7 @@ export function SessionDetailScreen({
 
   async function addImage() {
     if (attachments.length >= 5) {
-      setSendError('一次最多添加 5 张图片');
+      setSendError('一次最多添加 5 个附件');
       return;
     }
     try {
@@ -635,6 +655,37 @@ export function SessionDetailScreen({
     }
   }
 
+  async function openMarkdownLink(value: string) {
+    if (isWorkerLocalPath(value)) {
+      onOpenFile?.(session.session_id, value.replace(/\\/g, '/'));
+      return;
+    }
+    try {
+      const supported = await Linking.canOpenURL(value);
+      if (!supported) throw new Error('当前设备无法打开这个链接');
+      await Linking.openURL(value);
+    } catch (error) {
+      onRequestError?.(error);
+      setSendError(errorMessage(error));
+    }
+  }
+
+  async function addFile() {
+    if (attachments.length >= 5) {
+      setSendError('一次最多添加 5 个附件');
+      return;
+    }
+    try {
+      const file = await pickSessionFile();
+      if (!file) return;
+      setAttachments((current) => [...current, file]);
+      setSendError(null);
+    } catch (error) {
+      onRequestError?.(error);
+      setSendError(errorMessage(error));
+    }
+  }
+
   function renderTimelineItem(item: NativeTimelineItem) {
     const isTool = item.item_type === 'tool_call';
     const text = item.text || '';
@@ -645,6 +696,10 @@ export function SessionDetailScreen({
     const toolExpanded = expandedToolItems.has(itemKey(item));
     const output = isTool ? toolOutput(item) : '';
     const fileLinks = !isTool ? extractLocalPaths(text) : [];
+    const persistedAttachments = timelineAttachments(item);
+    const inlineMarkdown = canExpandInline && !expanded && text.length > 1_200
+      ? `${text.slice(0, 1_200)}…`
+      : text;
     return (
       <View style={[
         styles.timelineItem,
@@ -663,11 +718,31 @@ export function SessionDetailScreen({
               <Text selectable style={styles.toolOutput}>{output}</Text>
             ) : null}
           </View>
+        ) : supportsMarkdown ? (
+          <RichMarkdown onLinkPress={(url) => void openMarkdownLink(url)} value={inlineMarkdown || '暂无内容'} />
         ) : (
           <Text numberOfLines={canExpandInline && !expanded ? 6 : undefined} selectable style={styles.timelineText}>
             {text || '暂无内容'}
           </Text>
         )}
+        {persistedAttachments.length > 0 ? (
+          <View accessibilityLabel={`附件 ${persistedAttachments.length}`} style={styles.persistedAttachmentGroup}>
+            <Text style={styles.persistedAttachmentTitle}>附件 {persistedAttachments.length}</Text>
+            <View style={styles.persistedAttachmentRow}>
+              {persistedAttachments.map((attachment, index) => (
+                <View accessibilityLabel={`附件 ${attachment.filename}`} key={`${attachment.filename}-${index}`} style={styles.persistedAttachmentChip}>
+                  <Ionicons color={colors.accent} name={attachment.content_type.startsWith('image/') ? 'image-outline' : 'document-text-outline'} size={15} />
+                  <View style={styles.persistedAttachmentCopy}>
+                    <Text numberOfLines={1} style={styles.persistedAttachmentName}>{attachment.filename}</Text>
+                    <Text numberOfLines={1} style={styles.persistedAttachmentMeta}>
+                      {[attachment.content_type, attachmentSize(attachment.size_bytes)].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
         {fileLinks.length > 0 ? (
           <View style={styles.fileLinkRow}>
             {fileLinks.slice(0, 3).map((path) => (
@@ -961,13 +1036,22 @@ export function SessionDetailScreen({
             </Text>
           ) : null}
           {attachments.length > 0 ? (
-            <View accessibilityLabel="待发送图片" style={styles.attachmentRow}>
+            <View accessibilityLabel="待发送附件" style={styles.attachmentRow}>
               {attachments.map((attachment, index) => (
                 <View key={`${attachment.filename}-${index}`} style={styles.attachmentChip}>
-                  <Image source={{ uri: attachment.preview_uri }} style={styles.attachmentImage} />
-                  <Text numberOfLines={1} style={styles.attachmentName}>{attachment.filename}</Text>
+                  {attachment.content_type.startsWith('image/') ? (
+                    <Image source={{ uri: attachment.preview_uri }} style={styles.attachmentImage} />
+                  ) : (
+                    <View style={styles.attachmentFileIcon}>
+                      <Ionicons color={colors.accent} name="document-text-outline" size={18} />
+                    </View>
+                  )}
+                  <View style={styles.attachmentCopy}>
+                    <Text numberOfLines={1} style={styles.attachmentName}>{attachment.filename}</Text>
+                    <Text numberOfLines={1} style={styles.attachmentMeta}>{attachment.content_type}</Text>
+                  </View>
                   <Pressable
-                    accessibilityLabel={`移除图片 ${attachment.filename}`}
+                    accessibilityLabel={`移除附件 ${attachment.filename}`}
                     accessibilityRole="button"
                     onPress={() => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
                     style={styles.attachmentRemove}
@@ -1030,13 +1114,13 @@ export function SessionDetailScreen({
           </View>
           <View style={styles.composerRow}>
             <Pressable
-              accessibilityLabel="添加图片"
+              accessibilityLabel="添加附件"
               accessibilityRole="button"
               disabled={sending || currentSession.status === 'terminated'}
-              onPress={() => void addImage()}
+              onPress={() => setAttachmentPickerVisible(true)}
               style={({ pressed }) => [styles.attachButton, pressed && styles.pressed]}
             >
-              <Ionicons color={colors.accent} name="image-outline" size={21} />
+              <Ionicons color={colors.accent} name="attach-outline" size={21} />
             </Pressable>
             <Pressable
               accessibilityLabel={voiceRecorder.isRecording ? '停止录音并识别' : '开始语音输入'}
@@ -1093,6 +1177,59 @@ export function SessionDetailScreen({
           </View>
         </View>
         <Modal
+          animationType="fade"
+          onRequestClose={() => setAttachmentPickerVisible(false)}
+          transparent
+          visible={attachmentPickerVisible}
+        >
+          <Pressable
+            accessibilityLabel="关闭添加附件"
+            accessibilityRole="button"
+            onPress={() => setAttachmentPickerVisible(false)}
+            style={styles.attachmentPickerBackdrop}
+          >
+            <Pressable
+              accessibilityLabel="附件类型"
+              accessibilityRole="none"
+              onPress={(event) => event.stopPropagation()}
+              style={styles.attachmentPickerSheet}
+            >
+              <Text style={styles.attachmentPickerTitle}>添加附件</Text>
+              <Text style={styles.attachmentPickerHint}>图片、文档和压缩包均会随本次消息发送</Text>
+              <Pressable
+                accessibilityLabel="选择图片附件"
+                accessibilityRole="button"
+                onPress={() => {
+                  setAttachmentPickerVisible(false);
+                  void addImage();
+                }}
+                style={({ pressed }) => [styles.attachmentPickerAction, pressed && styles.pressed]}
+              >
+                <Ionicons color={colors.accent} name="image-outline" size={20} />
+                <View style={styles.attachmentPickerCopy}>
+                  <Text style={styles.attachmentPickerActionTitle}>选择图片</Text>
+                  <Text style={styles.attachmentPickerActionHint}>拍摄或从相册选择</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="选择文件附件"
+                accessibilityRole="button"
+                onPress={() => {
+                  setAttachmentPickerVisible(false);
+                  void addFile();
+                }}
+                style={({ pressed }) => [styles.attachmentPickerAction, pressed && styles.pressed]}
+              >
+                <Ionicons color={colors.accent} name="document-attach-outline" size={20} />
+                <View style={styles.attachmentPickerCopy}>
+                  <Text style={styles.attachmentPickerActionTitle}>选择文件</Text>
+                  <Text style={styles.attachmentPickerActionHint}>支持文本、PDF、压缩包等，单个不超过 8 MB</Text>
+                </View>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+        <Modal
           animationType="slide"
           onRequestClose={() => setReaderItem(null)}
           transparent
@@ -1140,7 +1277,11 @@ export function SessionDetailScreen({
                 ) : null}
               </View>
               <ScrollView contentContainerStyle={styles.readerScroll}>
-                <Text selectable style={styles.readerBody}>{readerItem?.text || ''}</Text>
+                {readerTab === 'markdown' && readerItem ? (
+                  <RichMarkdown onLinkPress={(url) => void openMarkdownLink(url)} value={readerItem.text || ''} />
+                ) : (
+                  <Text selectable style={styles.readerBody}>{readerItem?.text || ''}</Text>
+                )}
               </ScrollView>
             </View>
           </View>
@@ -1327,6 +1468,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   fileLinkText: { color: colors.accent, fontSize: 12, fontWeight: '700', maxWidth: 180 },
+  persistedAttachmentGroup: { gap: 6 },
+  persistedAttachmentTitle: { color: colors.muted, fontSize: 12, fontWeight: '700' },
+  persistedAttachmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  persistedAttachmentChip: {
+    alignItems: 'center',
+    backgroundColor: colors.canvas,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    maxWidth: 240,
+    minHeight: 42,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  persistedAttachmentCopy: { flexShrink: 1, gap: 1 },
+  persistedAttachmentName: { color: colors.text, flexShrink: 1, fontSize: 12, fontWeight: '700' },
+  persistedAttachmentMeta: { color: colors.muted, fontSize: 10 },
   readerButton: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 32 },
   readerButtonText: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   emptyTimeline: { alignItems: 'center', gap: 7, paddingBottom: 40, paddingTop: 34 },
@@ -1353,7 +1513,10 @@ const styles = StyleSheet.create({
     padding: 5,
   },
   attachmentImage: { borderRadius: 4, height: 32, width: 32 },
+  attachmentFileIcon: { alignItems: 'center', backgroundColor: colors.surfaceMuted, borderRadius: 4, height: 32, justifyContent: 'center', width: 32 },
+  attachmentCopy: { flexShrink: 1, gap: 1 },
   attachmentName: { color: colors.text, flexShrink: 1, fontSize: 12, fontWeight: '600' },
+  attachmentMeta: { color: colors.muted, fontSize: 10 },
   attachmentRemove: { alignItems: 'center', height: 28, justifyContent: 'center', width: 28 },
   recordingState: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 24 },
   recordingDot: { backgroundColor: colors.danger, borderRadius: 4, height: 8, width: 8 },
@@ -1412,6 +1575,39 @@ const styles = StyleSheet.create({
   sendState: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   sendStateError: { color: colors.danger },
   sendStateSuccess: { color: colors.success },
+  attachmentPickerBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(11, 18, 32, 0.42)',
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 16,
+  },
+  attachmentPickerSheet: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 10,
+    maxWidth: 520,
+    padding: 16,
+    width: '100%',
+  },
+  attachmentPickerTitle: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  attachmentPickerHint: { color: colors.muted, fontSize: 12, lineHeight: 18, marginBottom: 3 },
+  attachmentPickerAction: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 11,
+    minHeight: 62,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  attachmentPickerCopy: { flex: 1, gap: 2 },
+  attachmentPickerActionTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  attachmentPickerActionHint: { color: colors.muted, fontSize: 12, lineHeight: 17 },
   readerBackdrop: {
     backgroundColor: 'rgba(11, 18, 32, 0.42)',
     flex: 1,

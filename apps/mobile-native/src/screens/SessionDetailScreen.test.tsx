@@ -8,16 +8,19 @@ import type {
 } from '../api/mobileApi';
 import { SessionDetailScreen } from './SessionDetailScreen';
 import { pickSessionImage } from './nativeImagePicker';
+import { pickSessionFile } from './nativeSessionFilePicker';
 import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => undefined) }));
 jest.mock('./nativeImagePicker', () => ({ pickSessionImage: jest.fn() }));
+jest.mock('./nativeSessionFilePicker', () => ({ pickSessionFile: jest.fn() }));
 jest.mock('./useNativeVoiceRecorder', () => ({ useNativeVoiceRecorder: jest.fn() }));
 
 interface TestInstance {
   props: Record<string, unknown>;
   findByProps(props: Record<string, unknown>): TestInstance;
+  findAllByProps(props: Record<string, unknown>): TestInstance[];
 }
 
 interface TestRenderer {
@@ -281,7 +284,44 @@ describe('native session detail', () => {
 
     expect(renderedText(renderer)).toContain('原文');
     expect(renderedText(renderer)).toContain('Markdown');
+    expect(renderedText(renderer)).not.toContain('# 计划');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: 'Markdown' })));
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Markdown 内容' }).length).toBeGreaterThan(0);
+    expect(renderedText(renderer)).toContain('计划');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '原文' })));
     expect(renderedText(renderer)).toContain('# 计划');
+  });
+
+  it('shows persisted attachment metadata on a sent user message', async () => {
+    const attachmentTimeline: NativeTimelineItem[] = [{
+      ...timeline[1]!,
+      payload: {
+        attachments: [
+          { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 2048 },
+          { filename: '截图.png', content_type: 'image/png', size_bytes: 512 },
+        ],
+      },
+    }];
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: attachmentTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('附件 2');
+    expect(renderedText(renderer)).toContain('需求说明.md');
+    expect(renderedText(renderer)).toContain('截图.png');
+    expect(renderer.root.findByProps({ accessibilityLabel: '附件 需求说明.md' })).toBeDefined();
   });
 
   it('supports inline expand, collapse, and copy for long assistant messages', async () => {
@@ -346,6 +386,39 @@ describe('native session detail', () => {
 
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开文件 README.md' })));
     expect(onOpenFile).toHaveBeenCalledWith('session-1', 'E:/Work/AgentHub-OSS/README.md');
+  });
+
+  it('opens a Linux worker path from a plain timeline message', async () => {
+    const onOpenFile = jest.fn();
+    const linuxTimeline: NativeTimelineItem[] = [{
+      session_id: 'session-1',
+      seq: 4,
+      item_type: 'assistant_message',
+      role: 'assistant',
+      text: '报告已生成：/srv/agenthub/reports/weekly-summary.md。',
+      tool_call_id: null,
+      tool_name: null,
+      status: 'completed',
+      payload: {},
+      created_at: '2026-07-19T10:00:00Z',
+    }];
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: linuxTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        onOpenFile={onOpenFile}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开文件 weekly-summary.md' })));
+    expect(onOpenFile).toHaveBeenCalledWith('session-1', '/srv/agenthub/reports/weekly-summary.md');
   });
 
   it('does not expose a markdown reader tab for completed tool output cards', async () => {
@@ -552,7 +625,9 @@ describe('native session detail', () => {
     );
     await settle();
 
-    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '添加图片' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '添加附件' })));
+    expect(renderedText(renderer)).toContain('选择图片');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择图片附件' })));
     await settle();
     expect(renderedText(renderer)).toContain('screen.png');
 
@@ -567,6 +642,108 @@ describe('native session detail', () => {
       },
       'csrf-token',
     );
+  });
+
+  it('selects a document and sends it through the same attachment envelope', async () => {
+    const queuedJob = {
+      job_id: 'job-file',
+      kind: 'session_input',
+      target_session_id: 'session-1',
+      worker_id: 'worker-main',
+      backend: 'codex',
+      status: 'queued',
+      error_text: null,
+    } as NativeJob;
+    jest.mocked(pickSessionFile).mockResolvedValue({
+      filename: '需求说明.md',
+      content_type: 'text/markdown',
+      data_base64: 'c2FtcGxl',
+      preview_uri: 'file:///requirements.md',
+      size_bytes: 6,
+    });
+    const api = createDetailApi({
+      sendSessionInput: jest.fn(async () => ({ job: queuedJob })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '添加附件' })));
+    expect(renderedText(renderer)).toContain('选择文件');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '选择文件附件' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('需求说明.md');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '发送回复' })));
+    await settle();
+    expect(api.sendSessionInput).toHaveBeenCalledWith(
+      'session-1',
+      {
+        prompt: '',
+        reply_mode: 'direct',
+        attachments: [{ filename: '需求说明.md', content_type: 'text/markdown', data_base64: 'c2FtcGxl' }],
+      },
+      'csrf-token',
+    );
+  });
+
+  it('renders persisted markdown and attachment metadata from the session timeline', async () => {
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({
+        has_more: false,
+        items: [
+          {
+            session_id: 'session-1',
+            seq: 12,
+            item_type: 'assistant_message',
+            role: 'assistant',
+            text: '## 处理结果\n\n已生成 **报告**：[打开报告](/srv/work/report.md)',
+            tool_call_id: null,
+            tool_name: null,
+            status: 'completed',
+            payload: {},
+            created_at: '2026-07-19T10:00:00Z',
+          },
+          {
+            session_id: 'session-1',
+            seq: 13,
+            item_type: 'user_message',
+            role: 'user',
+            text: '请处理附件',
+            tool_call_id: null,
+            tool_name: null,
+            status: 'completed',
+            payload: {
+              attachments: [
+                { filename: '需求说明.md', content_type: 'text/markdown', size_bytes: 4096 },
+              ],
+            },
+            created_at: '2026-07-19T10:01:00Z',
+          },
+        ],
+      })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderer.root.findAllByProps({ accessibilityLabel: 'Markdown 内容' })).not.toHaveLength(0);
+    expect(renderedText(renderer)).toContain('需求说明.md');
+    expect(renderedText(renderer)).toContain('4 KB');
   });
 
   it('stops a native recording, transcribes it, and appends the text to the composer', async () => {
