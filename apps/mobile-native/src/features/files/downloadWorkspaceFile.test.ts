@@ -54,4 +54,3 @@ it('streams a ready workspace transfer to a temporary file and opens the system 
   );
   expect(result.filename).toBe('result.pdf');
 });
-
