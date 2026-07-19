@@ -24,6 +24,7 @@ import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
 import { pickSessionImage } from './nativeImagePicker';
+import { RichMarkdown } from './RichMarkdown';
 
 type FilesApi = Pick<
   MobileApi,
@@ -619,6 +620,7 @@ function FilePreview({
   onSave(): void;
 }) {
   const textFile = (file.preview_kind ?? 'text') === 'text';
+  const markdownFile = textFile && isMarkdownFile(file);
   const imageUri = file.preview_kind === 'image' && file.data_base64
     ? `data:${file.content_type};base64,${file.data_base64}`
     : null;
@@ -667,7 +669,11 @@ function FilePreview({
         </View>
       ) : textFile ? (
         <ScrollView contentContainerStyle={styles.textPreviewContent}>
-          <Text selectable style={styles.textPreview}>{file.text || '文件为空'}</Text>
+          {markdownFile ? (
+            <RichMarkdown value={file.text || '文件为空'} />
+          ) : (
+            <Text selectable style={styles.textPreview}>{file.text || '文件为空'}</Text>
+          )}
           {file.truncated ? <Text style={styles.truncatedText}>内容过大，当前仅显示前一部分</Text> : null}
         </ScrollView>
       ) : (
@@ -765,6 +771,11 @@ function formatFileSize(value?: number | null) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isMarkdownFile(file: NativeWorkspaceFileReadResult): boolean {
+  if (file.content_type?.toLowerCase().includes('markdown')) return true;
+  return /\.md(?:own)?$/i.test(`${file.path || ''}/${file.filename || ''}`);
 }
 
 function fileKindLabel(entry: NativeWorkspaceFileEntry) {

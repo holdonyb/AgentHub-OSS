@@ -36,6 +36,7 @@ import type {
 import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
+import { RichMarkdown } from './RichMarkdown';
 import { formatLastActivity, taskStatusLabel } from './resourcePresentation';
 
 type TasksApi = Pick<MobileApi, 'createTask' | 'getTask' | 'listTasks' | 'reviewTask'>;
@@ -781,7 +782,7 @@ function DetailSection({ title, text }: { title: string; text: string }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <Text style={styles.sectionBody}>{text}</Text>
+      <RichMarkdown value={text} />
     </View>
   );
 }
@@ -793,7 +794,7 @@ function ArtifactRow({
   artifact: NativeTaskArtifact;
   onOpenFile?: () => void;
 }) {
-  const content = (
+  const rowContent = (
     <>
       <Ionicons color={colors.accent} name="document-text-outline" size={19} />
       <View style={styles.detailRowCopy}>
@@ -805,21 +806,28 @@ function ArtifactRow({
       {onOpenFile ? <Ionicons color={colors.muted} name="chevron-forward" size={18} /> : null}
     </>
   );
-  if (onOpenFile) {
-    return (
+  const row = onOpenFile ? (
       <Pressable
         accessibilityLabel={`打开产物文件 ${artifact.title}`}
         accessibilityRole="button"
         onPress={onOpenFile}
         style={({ pressed }) => [styles.detailRow, pressed && styles.cardPressed]}
       >
-        {content}
+        {rowContent}
       </Pressable>
-    );
-  }
-  return (
+  ) : (
     <View style={styles.detailRow}>
-      {content}
+      {rowContent}
+    </View>
+  );
+  return (
+    <View style={styles.artifactBlock}>
+      {row}
+      {artifact.content_markdown?.trim() ? (
+        <View style={styles.artifactMarkdown}>
+          <RichMarkdown value={artifact.content_markdown} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -925,6 +933,8 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
   sectionBody: { color: colors.text, fontSize: 14, lineHeight: 22 },
   sectionEmpty: { color: colors.muted, fontSize: 13 },
+  artifactBlock: { gap: 10 },
+  artifactMarkdown: { paddingLeft: 30, paddingRight: 8 },
   detailRow: {
     alignItems: 'flex-start',
     backgroundColor: colors.surface,

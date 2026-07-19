@@ -398,6 +398,43 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('第 1 次执行');
   });
 
+  it('renders task briefs, acceptance criteria, and artifact bodies as Markdown', async () => {
+    const artifact = taskDetail.artifacts[0]!;
+    const markdownDetail: NativeTaskDetail = {
+      ...taskDetail,
+      task: {
+        ...task,
+        brief_markdown: '接入 **真实 API** 数据。',
+        success_criteria_markdown: '- 列表可刷新\n- 支持 `重试`',
+      },
+      artifacts: [{
+        ...artifact,
+        content_markdown: '**全部通过**\n- 原生回归通过',
+      }],
+    };
+    const renderer = await render(
+      <TasksScreen
+        api={{
+          createTask: jest.fn(),
+          getTask: jest.fn(async () => markdownDetail),
+          listTasks: jest.fn(async () => ({ items: [markdownDetail.task] })),
+          reviewTask: jest.fn(),
+        }}
+      />,
+    );
+    await settle();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看任务 实现原生列表' })));
+    await settle();
+
+    expect(renderedText(renderer)).toContain('接入 真实 API 数据。');
+    expect(renderedText(renderer)).toContain('支持 重试');
+    expect(renderedText(renderer)).toContain('全部通过');
+    expect(renderedText(renderer)).toContain('原生回归通过');
+    expect(renderedText(renderer)).not.toContain('**真实 API**');
+    expect(renderedText(renderer)).not.toContain('`重试`');
+  });
+
   it('clears tasks from the previous status when the new filter fails', async () => {
     const listTasks = jest
       .fn()
@@ -580,7 +617,7 @@ describe('native resource screens', () => {
             truncated: false,
             modified_at: '2026-07-12T00:00:00Z',
             preview_kind: 'text',
-            text: '# AgentHub\n原始内容',
+            text: '# AgentHub\n**原始内容**',
           }),
         }],
         has_more: false,
@@ -627,6 +664,8 @@ describe('native resource screens', () => {
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开文件 README.md' })));
     await settle();
     expect(renderedText(renderer)).toContain('原始内容');
+    expect(renderedText(renderer)).not.toContain('# AgentHub');
+    expect(renderedText(renderer)).not.toContain('**原始内容**');
 
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '编辑文件' })));
     await act(async () => {
