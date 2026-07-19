@@ -5,6 +5,7 @@ import {
   androidGradleExecutable,
   executable,
   missingAndroidSigningEnvironment,
+  nativeSpawnOptions,
 } from './native-build-config.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,6 +16,7 @@ if (missing.length > 0) {
 
 function run(command, args, cwd = appRoot) {
   const result = spawnSync(command, args, {
+    ...nativeSpawnOptions(),
     cwd,
     env: { ...process.env, EXPO_NO_GIT_STATUS: '1' },
     stdio: 'inherit',

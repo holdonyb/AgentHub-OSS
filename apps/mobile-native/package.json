@@ -11,7 +11,7 @@
     "build:android:debug": "node scripts/build-android-debug.mjs",
     "build:android:release": "node scripts/build-android-release.mjs",
     "build:ios:simulator": "node scripts/build-ios-simulator.mjs",
-    "test": "jest --runInBand",
+    "test": "node --test scripts/native-build-config.test.mjs && jest --runInBand",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
