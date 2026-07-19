@@ -37,6 +37,7 @@ export interface NativeSessionSummary {
   project_name?: string;
   workspace_root?: string;
   namespace?: string;
+  latest_session_id?: string | null;
   activity_summary?: string;
   last_message?: string;
 }
@@ -233,6 +234,7 @@ export interface NativeTaskSummary {
   target_worker_id: string | null;
   backend: string | null;
   workspace_root: string | null;
+  latest_session_id?: string | null;
   artifact_count: number;
   created_at: string;
   updated_at: string;
@@ -307,10 +309,15 @@ export interface NativeWorkerSummary {
   worker_id: string;
   machine_name: string;
   os: string;
+  connection_mode?: string;
+  transport_state?: string;
+  worker_version?: string | null;
   reachable_backends: string[];
+  workspace_roots?: string[];
   capabilities: Record<string, unknown>;
   status: NativeWorkerStatus;
   last_heartbeat_at: string | null;
+  runtime_settings?: NativeWorkerRuntimeDefaults;
 }
 
 export interface NativeUserPreferences {

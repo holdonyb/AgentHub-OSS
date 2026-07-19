@@ -86,11 +86,13 @@ export function TasksScreen({
   canOperate = false,
   csrfToken = '',
   onRequestError,
+  onOpenFile,
 }: {
   api: TasksApi;
   canOperate?: boolean;
   csrfToken?: string;
   onRequestError?(error: unknown): void;
+  onOpenFile?(target: { sessionId: string; path: string }): void;
 }) {
   const [filterKey, setFilterKey] = useState<TaskInboxFilter>('all');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -122,6 +124,7 @@ export function TasksScreen({
         canOperate={canOperate}
         csrfToken={csrfToken}
         onBack={() => setSelectedTaskId(null)}
+        onOpenFile={onOpenFile}
         onRequestError={onRequestError}
         taskId={selectedTaskId}
       />
@@ -504,6 +507,7 @@ function TaskDetailScreen({
   taskId,
   onBack,
   onRequestError,
+  onOpenFile,
 }: {
   api: TasksApi;
   canOperate: boolean;
@@ -511,6 +515,7 @@ function TaskDetailScreen({
   taskId: string;
   onBack(): void;
   onRequestError?(error: unknown): void;
+  onOpenFile?(target: { sessionId: string; path: string }): void;
 }) {
   const loadTask = useCallback(() => api.getTask(taskId), [api, taskId]);
   const resource = useAsyncResource(loadTask, { onError: onRequestError, resetKey: taskId });
@@ -613,7 +618,15 @@ function TaskDetailScreen({
             <Text style={styles.sectionTitle}>产物（{detail.artifacts.length}）</Text>
             {detail.artifacts.length === 0 ? (
               <Text style={styles.sectionEmpty}>暂无产物</Text>
-            ) : detail.artifacts.map((artifact) => <ArtifactRow artifact={artifact} key={artifact.artifact_id} />)}
+            ) : detail.artifacts.map((artifact) => (
+              <ArtifactRow
+                artifact={artifact}
+                key={artifact.artifact_id}
+                onOpenFile={task?.latest_session_id && artifact.path
+                  ? () => onOpenFile?.({ sessionId: task.latest_session_id!, path: artifact.path! })
+                  : undefined}
+              />
+            ))}
           </View>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>执行记录（{detail.executions.length}）</Text>
@@ -773,9 +786,15 @@ function DetailSection({ title, text }: { title: string; text: string }) {
   );
 }
 
-function ArtifactRow({ artifact }: { artifact: NativeTaskArtifact }) {
-  return (
-    <View style={styles.detailRow}>
+function ArtifactRow({
+  artifact,
+  onOpenFile,
+}: {
+  artifact: NativeTaskArtifact;
+  onOpenFile?: () => void;
+}) {
+  const content = (
+    <>
       <Ionicons color={colors.accent} name="document-text-outline" size={19} />
       <View style={styles.detailRowCopy}>
         <Text style={styles.detailRowTitle}>{artifact.title}</Text>
@@ -783,6 +802,24 @@ function ArtifactRow({ artifact }: { artifact: NativeTaskArtifact }) {
           {artifact.kind}{artifact.path ? ` · ${artifact.path}` : ''}
         </Text>
       </View>
+      {onOpenFile ? <Ionicons color={colors.muted} name="chevron-forward" size={18} /> : null}
+    </>
+  );
+  if (onOpenFile) {
+    return (
+      <Pressable
+        accessibilityLabel={`打开产物文件 ${artifact.title}`}
+        accessibilityRole="button"
+        onPress={onOpenFile}
+        style={({ pressed }) => [styles.detailRow, pressed && styles.cardPressed]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+  return (
+    <View style={styles.detailRow}>
+      {content}
     </View>
   );
 }

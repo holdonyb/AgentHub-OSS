@@ -137,6 +137,7 @@ const task: NativeTaskSummary = {
   target_worker_id: 'worker-main',
   backend: 'codex',
   workspace_root: 'E:/Work/AgentHub-OSS',
+  latest_session_id: 'session-1',
   artifact_count: 1,
   updated_at: '2026-07-11T11:55:00.000Z',
   created_at: '2026-07-11T10:00:00.000Z',
@@ -473,11 +474,13 @@ describe('native resource screens', () => {
     const getTask = jest.fn(async () => ({ ...taskDetail, task: reviewableTask }));
     const reviewTask = jest.fn(async () => ({ task: { ...reviewableTask, status: 'accepted' as const } }));
     const createTask = jest.fn();
+    const onOpenFile = jest.fn();
     const renderer = await render(
       <TasksScreen
         api={{ createTask, getTask, listTasks, reviewTask }}
         canOperate
         csrfToken="csrf-token"
+        onOpenFile={onOpenFile}
       />,
     );
     await settle();
@@ -486,6 +489,8 @@ describe('native resource screens', () => {
     await settle();
     expect(renderedText(renderer)).toContain('通过验收');
     expect(renderedText(renderer)).toContain('退回修改');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开产物文件 测试结果' })));
+    expect(onOpenFile).toHaveBeenCalledWith({ sessionId: 'session-1', path: 'reports/mobile-native.txt' });
 
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '通过验收' })));
     await settle();
@@ -498,9 +503,23 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('已完成');
   });
 
-  it('shows worker online state and enabled capabilities', async () => {
+  it('shows worker online state and opens provider readiness for the selected node', async () => {
     const listWorkers = jest.fn(async () => ({ items: [worker] }));
-    const renderer = await render(<WorkersScreen api={{ listWorkers }} />);
+    const listProviderSnapshots = jest.fn(async () => ({
+      items: [{
+        worker_id: 'worker-main',
+        backend: 'codex',
+        status: 'ready',
+        auth_status: 'ready',
+        models: [{ id: 'gpt-5.4' }],
+        modes: [{ id: 'plan', label: '计划' }],
+        features: { image_input: true },
+        diagnostics: {},
+        fetched_at: '2026-07-19T00:00:00Z',
+        updated_at: '2026-07-19T00:00:00Z',
+      }],
+    }));
+    const renderer = await render(<WorkersScreen api={{ listProviderSnapshots, listWorkers }} />);
     await settle();
 
     expect(renderedText(renderer)).toContain('开发工作站');
@@ -508,6 +527,11 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('codex');
     expect(renderedText(renderer)).toContain('claude');
     expect(renderedText(renderer)).toContain('psmux');
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看节点 开发工作站' })));
+    await settle();
+    expect(renderedText(renderer)).toContain('Provider 状态');
+    expect(renderedText(renderer)).toContain('gpt-5.4');
+    expect(renderedText(renderer)).toContain('已就绪');
   });
 
   it('browses, reads, edits, and saves workspace text files', async () => {

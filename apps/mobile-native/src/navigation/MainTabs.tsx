@@ -341,6 +341,7 @@ export function MainTabs({
                     api={api}
                     canOperate={user.role !== 'viewer'}
                     csrfToken={csrfToken}
+                    onOpenFile={openSessionFile}
                     onRequestError={onRequestError}
                   />
                 );
