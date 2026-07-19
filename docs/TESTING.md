@@ -51,6 +51,37 @@ Implemented tests cover:
 - viewer role hides admin controls
 - mobile WebView layout keeps `viewport-fit=cover`, safe-area CSS, and no fixed body width
 
+## React Native Coverage
+
+Run the native console gates with:
+
+```powershell
+npm run mobile:native:test
+npm run mobile:native:typecheck
+npm run mobile:native:build:android
+```
+
+The `1.0.2` acceptance suite covers:
+
+- session inbox search, backend/status/worker filters, archive and batch archive
+- timezone-less UTC parsing, `updated_at` fallback, recent-activity sorting, polling, and foreground refresh
+- timeline paging/search, delayed transcript refresh, Markdown, full reader/copy, local file links, persisted attachments, and collapsed tool output
+- direct/plan replies, multiline text, quick replies, image/document/voice input, delivery states, and runtime controls
+- `request_user_input`, approval rejection, notification deep links, session rename/fork/BTW/archive, and termination confirmation
+- task search/create/dispatch/review/reject/rework/archive/restore and artifact-to-Files handoff
+- worker provider readiness and provider login/logout role gates
+- workspace browse/search/recent/preview/edit/save/create/mkdir/rename/upload/download and viewer restrictions
+- notification inbox read/dismiss, appearance and composer preferences, release metadata, and server switching
+- generated Android light/dark semantic resources and theme application before the authenticated console mounts
+
+For the worker freshness regression, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest apps/api/tests/test_worker_discovery.py -q
+```
+
+The discovery gate must prove that a large Codex history cannot starve recent Claude, Kimi, or OpenCode files. After merging a discovery change, update one real installed worker and verify the newest local session from each configured backend reaches the server.
+
 ## Manual E2E Checklist
 
 1. Start API on a Tailscale-reachable host.
@@ -89,6 +120,8 @@ For releases that touch workers, job state, mobile WebView, or Android native co
 2. Send a short `session_input` to a disposable session on that worker.
 3. Confirm the job leaves `queued/running` and ends as `succeeded` or a visible `failed` error.
 4. Install the freshly built APK and check the top status/cutout area, bottom nav, and reply bar on a real phone.
+5. Compare one timezone-less API activity timestamp with local time and confirm the card is not shifted by the device UTC offset.
+6. On a worker with histories from multiple backends, confirm the newest Codex, Claude, and Kimi sessions all appear after discovery.
 
 If your public smoke domain has not switched yet, do one disposable precheck directly against the VM IP with `--skip-certbot` and `check-selfhost.sh --insecure`, then rerun the same smoke against the final HTTPS domain after DNS is correct.
 

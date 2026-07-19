@@ -9,18 +9,19 @@ Current supported scope:
 - server configuration stored through `expo-secure-store`
 - cookie-session login, restore check, logout, and server switching through `@agenthub/client-core`
 - authenticated tab shell for Sessions, Tasks, Files, Workers, and Profile
-- API-backed session inbox with status, worker/backend metadata, last activity, selection, and refresh
-- dedicated session detail with chronological timeline, older-history paging, multiline replies, and queued/running/failed delivery state
+- API-backed session inbox with search, backend/status/worker filters, archive and batch archive, status metadata, recent-activity sorting, foreground refresh, and 15-second background polling
+- dedicated session detail with chronological timeline, older-history paging, in-thread search, Markdown rendering, full-message reading/copying, collapsed tool output, persisted attachments, multiline replies, and queued/running/failed delivery state
 - pending approval and `request_user_input` handling with multi-question choices, freeform answers, notes, and duplicate-submit protection
-- owner/admin session termination with explicit confirmation and visible API errors
-- API-backed task inbox with status filters and task detail for briefs, criteria, artifacts, and executions
-- task dispatch, review, approval, rework, and artifact inspection
-- API-backed worker list with online state, heartbeat, and reported capabilities
-- workspace file browsing, text editing, image/media preview, folder creation, rename, and upload
-- image attachments and native voice dictation in session replies
+- direct/plan modes, provider-reported runtime controls, account quick replies, session rename/fork/BTW/archive, and owner/admin termination with explicit confirmation
+- API-backed task inbox with search/status filters and task detail for Markdown briefs, criteria, artifacts, and executions
+- task creation, dispatch, review, approval, rejection, rework, archive/restore, and artifact-to-workspace handoff
+- API-backed worker list with online state, heartbeat, provider readiness, login/logout controls, workspace roots, and reported capabilities
+- workspace switching, tree and whole-workspace search, recent files, Markdown/raw views, copy, bounded text editing, image/audio/video preview, file/folder creation, rename, download, and upload
+- image/document attachments and native voice dictation in session replies
 - server-ledger-backed approval/session notifications, per-device Expo Push registration, cold-start
   notification taps, session deep links, and read state
-- loading, empty, error, retry, and refresh states across the API-backed lists
+- notification inbox read/dismiss actions, server-backed appearance and composer preferences, release metadata, and safe server switching
+- UTC-safe relative activity time, deterministic recent-session ordering, and loading, empty, error, retry, and refresh states across the API-backed lists
 
 The existing Capacitor app under `apps/mobile` remains available as the compatibility Android client while the 1.0 release also produces React Native APK and AAB artifacts. The React Native client is the forward-looking cross-platform surface.
 
@@ -69,3 +70,9 @@ npm run mobile:native:build:ios
 ```
 
 `prebuild` regenerates native projects locally. Do not commit those generated directories.
+
+## Session Freshness Contract
+
+AgentHub stores SQLite timestamps as naive UTC. The native client treats API timestamps without an explicit offset as UTC, then renders them in the device locale. Session cards use the newer of `last_activity_at` and `updated_at` and sort locally by that effective activity time.
+
+Worker discovery applies `AGENTHUB_DISCOVERY_MAX_FILES` per backend. A machine with a large Codex history therefore cannot consume the Claude, Kimi, or OpenCode discovery budget. Releases that change discovery must update the installed worker bundle before freshness is considered verified.

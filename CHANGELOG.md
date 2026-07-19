@@ -7,6 +7,9 @@
 - Made task artifacts open directly in the matching session workspace instead of requiring manual path lookup.
 - Reduced mobile timeline noise by collapsing completed tool output until the user explicitly opens it.
 - Added GitHub Release metadata lookup with a stable signed-APK fallback and raised Android versionCode for in-place updates.
+- Fixed native relative times by treating timezone-less server datetimes as UTC and sorting cards by the newest activity/update timestamp.
+- Changed worker history discovery from one shared file cap to a per-backend cap so large Codex histories cannot hide Claude, Kimi, or OpenCode sessions.
+- Added stable Android light/dark semantic resources and applied the saved appearance before the authenticated console mounts.
 
 ## v1.0.0 - 2026-07-12
 
