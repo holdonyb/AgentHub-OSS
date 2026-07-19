@@ -384,6 +384,48 @@ describe('native session detail', () => {
     expect(() => renderer.root.findByProps({ accessibilityLabel: 'Markdown' })).toThrow();
   });
 
+  it('keeps completed tool output collapsed until the user asks to inspect it', async () => {
+    const toolTimeline: NativeTimelineItem[] = [
+      {
+        session_id: 'session-1',
+        seq: 3,
+        item_type: 'tool_call',
+        role: 'tool',
+        text: '',
+        tool_call_id: 'tool-1',
+        tool_name: 'shell_command',
+        status: 'completed',
+        payload: {
+          summary: 'Exit code: 0',
+          output: 'build finished',
+        },
+        created_at: '2026-07-11T12:03:00Z',
+      },
+    ];
+    const api = createDetailApi({
+      getSessionTimeline: jest.fn(async () => ({ items: toolTimeline, has_more: false })),
+    });
+    const renderer = await render(
+      <SessionDetailScreen
+        api={api}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).toContain('Exit code: 0');
+    expect(renderedText(renderer)).not.toContain('build finished');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '查看工具输出' })));
+    expect(renderedText(renderer)).toContain('build finished');
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '收起工具输出' })));
+    expect(renderedText(renderer)).not.toContain('build finished');
+  });
+
   it('preserves multiline replies and exposes sending, queued, running, and failed states', async () => {
     const sendRequest = deferred<{ job: NativeJob }>();
     let jobs: NativeJob[] = [];

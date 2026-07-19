@@ -375,6 +375,7 @@ export function SessionDetailScreen({
   const [readerItem, setReaderItem] = useState<NativeTimelineItem | null>(null);
   const [readerTab, setReaderTab] = useState<'text' | 'markdown'>('text');
   const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
+  const [expandedToolItems, setExpandedToolItems] = useState<Set<string>>(() => new Set());
   const permissionSubmitting = useRef(new Set<string>());
   const listRef = useRef<FlatList<NativeTimelineItem>>(null);
   const lastTimelineKey = useRef<string | null>(null);
@@ -426,6 +427,7 @@ export function SessionDetailScreen({
     setReplyMode('direct');
     setReaderItem(null);
     setExpandedItems(new Set());
+    setExpandedToolItems(new Set());
   }, [session.session_id]);
 
   useEffect(() => {
@@ -640,6 +642,8 @@ export function SessionDetailScreen({
     const canOpenReader = Boolean(text.trim()) && (text.length > 120 || supportsMarkdown);
     const canExpandInline = !isTool && text.trim().length > 120;
     const expanded = expandedItems.has(itemKey(item));
+    const toolExpanded = expandedToolItems.has(itemKey(item));
+    const output = isTool ? toolOutput(item) : '';
     const fileLinks = !isTool ? extractLocalPaths(text) : [];
     return (
       <View style={[
@@ -654,9 +658,9 @@ export function SessionDetailScreen({
         {isTool ? (
           <View style={styles.toolCard}>
             <Text style={styles.toolName}>{item.tool_name || 'tool_call'}</Text>
-            <Text selectable style={styles.timelineText}>{toolSummary(item)}</Text>
-            {toolOutput(item) ? (
-              <Text selectable style={styles.toolOutput}>{toolOutput(item)}</Text>
+            <Text numberOfLines={toolExpanded ? undefined : 2} selectable style={styles.timelineText}>{toolSummary(item)}</Text>
+            {toolExpanded && output ? (
+              <Text selectable style={styles.toolOutput}>{output}</Text>
             ) : null}
           </View>
         ) : (
@@ -681,6 +685,22 @@ export function SessionDetailScreen({
           </View>
         ) : null}
         <View style={styles.timelineActions}>
+          {isTool && output ? (
+            <Pressable
+              accessibilityLabel={toolExpanded ? '收起工具输出' : '查看工具输出'}
+              accessibilityRole="button"
+              onPress={() => setExpandedToolItems((current) => {
+                const next = new Set(current);
+                if (toolExpanded) next.delete(itemKey(item));
+                else next.add(itemKey(item));
+                return next;
+              })}
+              style={({ pressed }) => [styles.readerButton, pressed && styles.pressed]}
+            >
+              <Ionicons color={colors.accent} name={toolExpanded ? 'chevron-up-outline' : 'code-slash-outline'} size={15} />
+              <Text style={styles.readerButtonText}>{toolExpanded ? '收起工具输出' : '查看工具输出'}</Text>
+            </Pressable>
+          ) : null}
           {canExpandInline ? (
             <Pressable
               accessibilityLabel={expanded ? '收起全文' : '展开全文'}
