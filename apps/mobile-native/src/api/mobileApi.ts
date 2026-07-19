@@ -313,6 +313,105 @@ export interface NativeWorkerSummary {
   last_heartbeat_at: string | null;
 }
 
+export interface NativeUserPreferences {
+  locale: 'zh-CN' | 'zh-TW' | 'en-US';
+  theme_mode: 'dark' | 'light';
+  voice_mode: 'streaming' | 'standard';
+  voice_language: string;
+  quick_replies: string[];
+}
+
+export interface NativeWorkerRuntimeDefaults {
+  max_concurrent_jobs: number;
+  job_poll_interval_seconds: number;
+  heartbeat_interval_seconds: number;
+}
+
+export interface NativeSettings {
+  preferences: NativeUserPreferences;
+  worker_runtime_defaults: NativeWorkerRuntimeDefaults;
+  options: Record<string, unknown>;
+  limits: Record<string, unknown>;
+}
+
+export interface NativeProviderSnapshot {
+  worker_id: string;
+  backend: string;
+  status: 'ready' | 'loading' | 'unavailable' | 'error' | string;
+  auth_status: 'ready' | 'auth_required' | 'handoff_required' | 'unknown' | string;
+  models: Array<Record<string, unknown>>;
+  modes: Array<Record<string, unknown>>;
+  features: Record<string, unknown>;
+  diagnostics: Record<string, unknown>;
+  fetched_at: string;
+  updated_at: string;
+}
+
+export interface NativeReleaseMetadata {
+  version: string | null;
+  publishedAt: string | null;
+  releaseUrl: string;
+  downloadUrl: string;
+  source: 'github' | 'fallback';
+}
+
+export const NATIVE_ANDROID_APK_URL =
+  'https://github.com/holdonyb/AgentHub-OSS/releases/latest/download/agenthub-native-android-release.apk';
+export const AGENTHUB_LATEST_RELEASE_URL =
+  'https://github.com/holdonyb/AgentHub-OSS/releases/latest';
+const AGENTHUB_GITHUB_LATEST_RELEASE_API =
+  'https://api.github.com/repos/holdonyb/AgentHub-OSS/releases/latest';
+
+interface GitHubReleaseAsset {
+  name?: unknown;
+  browser_download_url?: unknown;
+}
+
+interface GitHubReleasePayload {
+  tag_name?: unknown;
+  html_url?: unknown;
+  published_at?: unknown;
+  assets?: unknown;
+}
+
+function releaseFallback(): NativeReleaseMetadata {
+  return {
+    version: null,
+    publishedAt: null,
+    releaseUrl: AGENTHUB_LATEST_RELEASE_URL,
+    downloadUrl: NATIVE_ANDROID_APK_URL,
+    source: 'fallback',
+  };
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+export async function getLatestReleaseMetadata(fetcher?: FetchLike): Promise<NativeReleaseMetadata> {
+  const request: FetchLike = fetcher ?? ((input, init) => globalThis.fetch(input, init));
+  try {
+    const response = await request(AGENTHUB_GITHUB_LATEST_RELEASE_API, {
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+    if (!response.ok) return releaseFallback();
+    const payload = await response.json() as GitHubReleasePayload;
+    const assets = Array.isArray(payload.assets) ? payload.assets as GitHubReleaseAsset[] : [];
+    const nativeApk = assets.find((asset) => asset.name === 'agenthub-native-android-release.apk');
+    const downloadUrl = asNonEmptyString(nativeApk?.browser_download_url);
+    if (!downloadUrl) return releaseFallback();
+    return {
+      version: asNonEmptyString(payload.tag_name),
+      publishedAt: asNonEmptyString(payload.published_at),
+      releaseUrl: asNonEmptyString(payload.html_url) ?? AGENTHUB_LATEST_RELEASE_URL,
+      downloadUrl,
+      source: 'github',
+    };
+  } catch {
+    return releaseFallback();
+  }
+}
+
 export interface NativePushDeviceInput {
   device_id: string;
   platform: 'android' | 'ios';
@@ -361,6 +460,10 @@ export interface MobileApi {
     notificationId: string,
     csrfToken: string,
   ): Promise<NativeNotificationTransitionPayload>;
+  dismissNotification(
+    notificationId: string,
+    csrfToken: string,
+  ): Promise<NativeNotificationTransitionPayload>;
   upsertPushDevice(
     payload: NativePushDeviceInput,
     csrfToken: string,
@@ -404,6 +507,32 @@ export interface MobileApi {
     payload: { path: string; text: string; expected_modified_at?: string | null },
     csrfToken: string,
   ): Promise<{ job: NativeJob }>;
+  uploadSessionFile(
+    sessionId: string,
+    payload: {
+      path: string;
+      filename: string;
+      content_type: string;
+      data_base64: string;
+      overwrite: boolean;
+    },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  createSessionFile(
+    sessionId: string,
+    payload: { path: string; text: string; overwrite: boolean },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  mkdirSessionDirectory(
+    sessionId: string,
+    payload: { path: string },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  renameSessionFile(
+    sessionId: string,
+    payload: { path: string; new_path: string; expected_modified_at?: string | null },
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
   listTasks(status?: NativeTaskStatus): Promise<NativeListPayload<NativeTaskSummary>>;
   getTask(taskId: string): Promise<NativeTaskDetail>;
   createTask(
@@ -416,6 +545,13 @@ export interface MobileApi {
     csrfToken: string,
   ): Promise<NativeTaskMutationPayload>;
   listWorkers(): Promise<NativeListPayload<NativeWorkerSummary>>;
+  listProviderSnapshots(): Promise<NativeListPayload<NativeProviderSnapshot>>;
+  getSettings(): Promise<NativeSettings>;
+  patchPreferences(
+    payload: Partial<NativeUserPreferences>,
+    csrfToken: string,
+  ): Promise<{ preferences: NativeUserPreferences }>;
+  getLatestRelease(): Promise<NativeReleaseMetadata>;
 }
 
 export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi {
@@ -469,6 +605,12 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         {},
         { csrfToken },
       ),
+    dismissNotification: (notificationId, csrfToken) =>
+      client.post<NativeNotificationTransitionPayload>(
+        `/api/notifications/${encodeURIComponent(notificationId)}/dismiss`,
+        {},
+        { csrfToken },
+      ),
     upsertPushDevice: (payload, csrfToken) =>
       client.post<{ device: NativePushDevice }>('/api/push/devices', payload, { csrfToken }),
     revokePushDevice: (deviceId, csrfToken) =>
@@ -498,6 +640,14 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/read`, payload, { csrfToken }),
     writeSessionFile: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/write`, payload, { csrfToken }),
+    uploadSessionFile: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/upload`, payload, { csrfToken }),
+    createSessionFile: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/create`, payload, { csrfToken }),
+    mkdirSessionDirectory: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/mkdir`, payload, { csrfToken }),
+    renameSessionFile: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/rename`, payload, { csrfToken }),
     listTasks: (status) =>
       client.get<NativeListPayload<NativeTaskSummary>>(
         status ? `/api/tasks?status=${encodeURIComponent(status)}` : '/api/tasks',
@@ -513,5 +663,10 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         { csrfToken },
       ),
     listWorkers: () => client.get<NativeListPayload<NativeWorkerSummary>>('/api/workers'),
+    listProviderSnapshots: () => client.get<NativeListPayload<NativeProviderSnapshot>>('/api/providers'),
+    getSettings: () => client.get<NativeSettings>('/api/settings'),
+    patchPreferences: (payload, csrfToken) =>
+      client.patch<{ preferences: NativeUserPreferences }>('/api/settings/preferences', payload, { csrfToken }),
+    getLatestRelease: () => getLatestReleaseMetadata(fetcher),
   };
 }

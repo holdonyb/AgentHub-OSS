@@ -272,6 +272,111 @@ describe('mobile API', () => {
     );
   });
 
+  it('keeps native file mutations scoped, exposes settings and provider state, and resolves the public APK release', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'upload-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'create-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'mkdir-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'rename-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ notification: { notification_id: 'notice-1', status: 'dismissed' } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          preferences: { locale: 'zh-CN', theme_mode: 'light', voice_mode: 'streaming', voice_language: 'zh-CN', quick_replies: [] },
+          worker_runtime_defaults: { max_concurrent_jobs: 2, job_poll_interval_seconds: 5, heartbeat_interval_seconds: 15 },
+          options: {},
+          limits: {},
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ preferences: { theme_mode: 'dark' } }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ worker_id: 'worker-1', backend: 'codex', status: 'ready' }] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: 'v1.2.0',
+          html_url: 'https://github.com/holdonyb/AgentHub-OSS/releases/tag/v1.2.0',
+          published_at: '2026-07-19T00:00:00Z',
+          assets: [{ name: 'agenthub-native-android-release.apk', browser_download_url: 'https://downloads.example.com/agenthub.apk' }],
+        }),
+      );
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await api.uploadSessionFile(
+      'session/1',
+      { path: 'assets', filename: 'photo.png', content_type: 'image/png', data_base64: 'aW1hZ2U=', overwrite: false },
+      'csrf-token',
+    );
+    await api.createSessionFile('session/1', { path: 'notes.md', text: '# Notes', overwrite: false }, 'csrf-token');
+    await api.mkdirSessionDirectory('session/1', { path: 'reports' }, 'csrf-token');
+    await api.renameSessionFile(
+      'session/1',
+      { path: 'notes.md', new_path: 'docs/notes.md', expected_modified_at: '2026-07-19T00:00:00Z' },
+      'csrf-token',
+    );
+    await api.dismissNotification('notice-1', 'csrf-token');
+    await api.getSettings();
+    await api.patchPreferences({ theme_mode: 'dark' }, 'csrf-token');
+    await api.listProviderSnapshots();
+    await expect(api.getLatestRelease()).resolves.toEqual({
+      version: 'v1.2.0',
+      publishedAt: '2026-07-19T00:00:00Z',
+      releaseUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/tag/v1.2.0',
+      downloadUrl: 'https://downloads.example.com/agenthub.apk',
+      source: 'github',
+    });
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/sessions/session%2F1/files/upload',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ path: 'assets', filename: 'photo.png', content_type: 'image/png', data_base64: 'aW1hZ2U=', overwrite: false }),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      4,
+      'https://agenthub.example.com/api/sessions/session%2F1/files/rename',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ path: 'notes.md', new_path: 'docs/notes.md', expected_modified_at: '2026-07-19T00:00:00Z' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      5,
+      'https://agenthub.example.com/api/notifications/notice-1/dismiss',
+      expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      6,
+      'https://agenthub.example.com/api/settings',
+      { credentials: 'include' },
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      7,
+      'https://agenthub.example.com/api/settings/preferences',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ theme_mode: 'dark' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(8, 'https://agenthub.example.com/api/providers', { credentials: 'include' });
+    expect(fetcher).toHaveBeenNthCalledWith(
+      9,
+      'https://api.github.com/repos/holdonyb/AgentHub-OSS/releases/latest',
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/vnd.github+json' }) }),
+    );
+  });
+
+  it('uses the stable native APK link when GitHub release metadata cannot be read', async () => {
+    const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () => jsonResponse({}, 503));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+
+    await expect(api.getLatestRelease()).resolves.toEqual({
+      version: null,
+      publishedAt: null,
+      releaseUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/latest',
+      downloadUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/latest/download/agenthub-native-android-release.apk',
+      source: 'fallback',
+    });
+  });
+
   it('loads a session thread and its pending interactions through encoded paths', async () => {
     const fetcher = jest
       .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
