@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -14,11 +14,22 @@ function readRepoFile(relativePath) {
 }
 
 function pythonCommand() {
-  const venvPython = path.join(repoRoot, ".venv", "Scripts", "python.exe");
-  if (process.platform === "win32") {
-    return venvPython;
+  if (process.env.AGENTHUB_TEST_PYTHON) {
+    return process.env.AGENTHUB_TEST_PYTHON;
   }
-  return "python3";
+
+  if (process.platform !== "win32") {
+    return "python3";
+  }
+
+  // Worktrees share the main repository's virtual environment rather than
+  // copying it into every feature checkout. CI still finds repoRoot/.venv
+  // first, while local worktree runs can use the common checkout venv.
+  const candidates = [
+    path.join(repoRoot, ".venv", "Scripts", "python.exe"),
+    path.resolve(repoRoot, "..", "..", ".venv", "Scripts", "python.exe"),
+  ];
+  return candidates.find(existsSync) ?? "python";
 }
 
 describe("macOS worker bundle", () => {

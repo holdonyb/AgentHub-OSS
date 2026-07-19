@@ -89,7 +89,7 @@ def backend_for_session_path(path: Path) -> str:
 
 
 def recent_session_files(search_roots: list[Path], max_files: int | None = None) -> list[tuple[str, Path]]:
-    limit = max_files or _env_int("AGENTHUB_DISCOVERY_MAX_FILES", DEFAULT_DISCOVERY_MAX_FILES)
+    per_backend_limit = max_files or _env_int("AGENTHUB_DISCOVERY_MAX_FILES", DEFAULT_DISCOVERY_MAX_FILES)
     candidates: list[tuple[float, str, str, Path]] = []
     for root in search_roots:
         if not root.exists():
@@ -111,7 +111,15 @@ def recent_session_files(search_roots: list[Path], max_files: int | None = None)
                 continue
             candidates.append((modified_at, str(path).lower(), backend, path))
     candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [(backend, path) for _, _, backend, path in candidates[:limit]]
+    selected: list[tuple[str, Path]] = []
+    backend_counts: dict[str, int] = {}
+    for _, _, backend, path in candidates:
+        count = backend_counts.get(backend, 0)
+        if count >= per_backend_limit:
+            continue
+        selected.append((backend, path))
+        backend_counts[backend] = count + 1
+    return selected
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

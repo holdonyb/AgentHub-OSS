@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import {
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type ComponentProps,
@@ -11,6 +12,7 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -24,6 +26,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type {
   MobileApi,
+  NativeProviderSnapshot,
   NativeTaskArtifact,
   NativeTaskAuthorityPreset,
   NativeTaskCreateInput,
@@ -32,13 +35,18 @@ import type {
   NativeTaskStatus,
   NativeTaskSummary,
   NativeTaskTemplateKey,
+  NativeWorkerSummary,
 } from '../api/mobileApi';
 import { useAsyncResource } from '../state/asyncResource';
 import { ResourceErrorBanner, ResourceHeader, ResourceState } from '../ui/ResourceState';
 import { colors } from '../ui/theme';
+import { RichMarkdown } from './RichMarkdown';
 import { formatLastActivity, taskStatusLabel } from './resourcePresentation';
 
-type TasksApi = Pick<MobileApi, 'createTask' | 'getTask' | 'listTasks' | 'reviewTask'>;
+type TasksApi = Pick<
+  MobileApi,
+  'createTask' | 'getTask' | 'listProviderSnapshots' | 'listTasks' | 'listWorkers' | 'reviewTask'
+>;
 
 interface TaskDraft {
   title: string;
@@ -52,14 +60,14 @@ interface TaskDraft {
   authorityPreset: NativeTaskAuthorityPreset;
 }
 
-type TaskInboxFilter = 'all' | 'ready_to_review' | 'blocked' | 'working';
+type TaskInboxFilter = 'all' | 'ready_to_review' | 'blocked' | 'working' | 'archived';
 
 const emptyTaskDraft: TaskDraft = {
   title: '',
   brief: '',
   successCriteria: '',
   targetWorkerId: '',
-  backend: 'codex',
+  backend: '',
   workspaceRoot: '',
   relevantPaths: '',
   templateKey: 'implement_feature',
@@ -71,6 +79,7 @@ const inboxFilters: ReadonlyArray<{ key: TaskInboxFilter; label: string; descrip
   { key: 'blocked', label: '已阻塞', description: '需要审批或人工处理' },
   { key: 'working', label: '执行中', description: '排队或正在执行' },
   { key: 'all', label: '全部任务', description: '查看完整任务列表' },
+  { key: 'archived', label: '已归档', description: '查看和恢复历史任务' },
 ];
 
 function matchesInboxFilter(task: NativeTaskSummary, filter: TaskInboxFilter): boolean {
@@ -78,6 +87,7 @@ function matchesInboxFilter(task: NativeTaskSummary, filter: TaskInboxFilter): b
   if (filter === 'ready_to_review') return task.status === 'ready_to_review';
   if (filter === 'blocked') return task.status === 'blocked' || task.status === 'needs_approval';
   if (filter === 'working') return task.status === 'working' || task.status === 'queued';
+  if (filter === 'archived') return task.status === 'archived';
   return true;
 }
 
@@ -86,34 +96,83 @@ export function TasksScreen({
   canOperate = false,
   csrfToken = '',
   onRequestError,
+  onOpenFile,
+  requestedTaskId = null,
+  onRequestedTaskHandled,
 }: {
   api: TasksApi;
   canOperate?: boolean;
   csrfToken?: string;
   onRequestError?(error: unknown): void;
+  onOpenFile?(target: { sessionId: string; path: string }): void;
+  requestedTaskId?: string | null;
+  onRequestedTaskHandled?(taskId: string): void;
 }) {
   const [filterKey, setFilterKey] = useState<TaskInboxFilter>('all');
+  const [query, setQuery] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState<TaskDraft>(emptyTaskDraft);
   const [mutationBusy, setMutationBusy] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
-  const loadTasks = useCallback(async () => (await api.listTasks(undefined)).items, [api]);
+  const [composerLoading, setComposerLoading] = useState(false);
+  const [composerWorkers, setComposerWorkers] = useState<NativeWorkerSummary[]>([]);
+  const [composerProviders, setComposerProviders] = useState<NativeProviderSnapshot[]>([]);
+  const loadTasks = useCallback(async () => {
+    const [active, archived] = await Promise.all([
+      api.listTasks(undefined),
+      api.listTasks(undefined, true),
+    ]);
+    return { active: active.items, archived: archived.items };
+  }, [api]);
   const resource = useAsyncResource(loadTasks, {
     onError: onRequestError,
     resetKey: 'all',
   });
-  const tasks = resource.data ?? [];
+  const activeTasks = resource.data?.active ?? [];
+  const archivedTasks = resource.data?.archived ?? [];
+  const tasks = filterKey === 'archived' ? archivedTasks : activeTasks;
   const counts = useMemo(() => ({
-    ready_to_review: tasks.filter((task) => matchesInboxFilter(task, 'ready_to_review')).length,
-    blocked: tasks.filter((task) => matchesInboxFilter(task, 'blocked')).length,
-    working: tasks.filter((task) => matchesInboxFilter(task, 'working')).length,
-    all: tasks.length,
-  }), [tasks]);
-  const filteredTasks = useMemo(
-    () => tasks.filter((task) => matchesInboxFilter(task, filterKey)),
-    [filterKey, tasks],
+    ready_to_review: activeTasks.filter((task) => matchesInboxFilter(task, 'ready_to_review')).length,
+    blocked: activeTasks.filter((task) => matchesInboxFilter(task, 'blocked')).length,
+    working: activeTasks.filter((task) => matchesInboxFilter(task, 'working')).length,
+    all: activeTasks.length,
+    archived: archivedTasks.length,
+  }), [activeTasks, archivedTasks]);
+  const filteredTasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return tasks.filter((task) => {
+      if (!matchesInboxFilter(task, filterKey)) return false;
+      if (!normalizedQuery) return true;
+      const haystack = [
+        task.title,
+        task.brief_markdown,
+        task.success_criteria_markdown,
+        task.target_worker_id,
+        task.backend,
+        task.workspace_root,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [filterKey, query, tasks]);
+  const availableWorkers = useMemo(
+    () => composerWorkers.filter((worker) => worker.status !== 'offline' && normalizedBackends(worker).length > 0),
+    [composerWorkers],
   );
+  const selectedWorker = useMemo(
+    () => availableWorkers.find((worker) => worker.worker_id === draft.targetWorkerId) ?? null,
+    [availableWorkers, draft.targetWorkerId],
+  );
+  const backendOptions = useMemo(
+    () => normalizedBackends(selectedWorker),
+    [selectedWorker],
+  );
+
+  useEffect(() => {
+    if (!requestedTaskId) return;
+    setSelectedTaskId(requestedTaskId);
+    onRequestedTaskHandled?.(requestedTaskId);
+  }, [onRequestedTaskHandled, requestedTaskId]);
 
   if (selectedTaskId) {
     return (
@@ -122,6 +181,7 @@ export function TasksScreen({
         canOperate={canOperate}
         csrfToken={csrfToken}
         onBack={() => setSelectedTaskId(null)}
+        onOpenFile={onOpenFile}
         onRequestError={onRequestError}
         taskId={selectedTaskId}
       />
@@ -169,6 +229,42 @@ export function TasksScreen({
     }
   }
 
+  async function openComposer() {
+    setComposerOpen(true);
+    setMutationError(null);
+    setComposerLoading(true);
+    try {
+      const [workersPayload, providersPayload] = await Promise.all([
+        api.listWorkers(),
+        api.listProviderSnapshots(),
+      ]);
+      const workers = workersPayload.items.filter((worker) => (
+        worker.status !== 'offline' && normalizedBackends(worker).length > 0
+      ));
+      setComposerWorkers(workers);
+      setComposerProviders(providersPayload.items);
+      const initialWorker = workers.find((worker) => worker.worker_id === draft.targetWorkerId) ?? workers[0] ?? null;
+      if (!initialWorker) {
+        setDraft((current) => ({ ...current, targetWorkerId: '', backend: '', workspaceRoot: '' }));
+        return;
+      }
+      const initialBackends = normalizedBackends(initialWorker);
+      setDraft((current) => ({
+        ...current,
+        targetWorkerId: initialWorker.worker_id,
+        backend: initialBackends.includes(current.backend) ? current.backend : initialBackends[0] ?? '',
+        workspaceRoot: initialWorker.workspace_roots?.includes(current.workspaceRoot)
+          ? current.workspaceRoot
+          : initialWorker.workspace_roots?.[0] ?? '',
+      }));
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : '任务编辑器初始化失败');
+      onRequestError?.(error);
+    } finally {
+      setComposerLoading(false);
+    }
+  }
+
   function renderTask({ item }: { item: NativeTaskSummary }) {
     return (
       <Pressable
@@ -211,8 +307,7 @@ export function TasksScreen({
             accessibilityLabel="新建任务"
             accessibilityRole="button"
             onPress={() => {
-              setMutationError(null);
-              setComposerOpen(true);
+              void openComposer();
             }}
             style={({ pressed }) => [styles.primaryAction, pressed && styles.cardPressed]}
           >
@@ -248,10 +343,33 @@ export function TasksScreen({
           );
         })}
       </View>
+      <View style={styles.searchWrap}>
+        <Ionicons color={colors.muted} name="search-outline" size={18} />
+        <TextInput
+          accessibilityLabel="搜索任务"
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setQuery}
+          placeholder="搜索任务标题、说明、节点或后端"
+          placeholderTextColor={colors.muted}
+          style={styles.searchInput}
+          value={query}
+        />
+        {query ? (
+          <Pressable
+            accessibilityLabel="清空任务搜索"
+            accessibilityRole="button"
+            onPress={() => setQuery('')}
+            style={({ pressed }) => [styles.clearButton, pressed && styles.cardPressed]}
+          >
+            <Ionicons color={colors.muted} name="close-circle" size={18} />
+          </Pressable>
+        ) : null}
+      </View>
       {fullState ? (
         <ResourceState
           empty={filteredTasks.length === 0}
-          emptyText={tasks.length === 0 ? '当前暂无任务' : '当前分组下暂无任务'}
+          emptyText={tasks.length === 0 ? '当前暂无任务' : query.trim() ? '没有匹配的任务' : '当前分组下暂无任务'}
           error={resource.error}
           failureTitle="任务加载失败"
           loading={resource.loading}
@@ -283,14 +401,31 @@ export function TasksScreen({
         />
       )}
       <TaskComposer
+        availableWorkers={availableWorkers}
+        backendOptions={backendOptions}
         busy={mutationBusy}
         draft={draft}
         error={mutationError}
+        loading={composerLoading}
         onChange={setDraft}
         onClose={() => {
           if (!mutationBusy) setComposerOpen(false);
         }}
+        onSelectBackend={(backend) => setDraft((current) => ({ ...current, backend }))}
+        onSelectWorker={(worker) => {
+          const backends = normalizedBackends(worker);
+          setDraft((current) => ({
+            ...current,
+            targetWorkerId: worker.worker_id,
+            backend: backends.includes(current.backend) ? current.backend : backends[0] ?? '',
+            workspaceRoot: worker.workspace_roots?.includes(current.workspaceRoot)
+              ? current.workspaceRoot
+              : worker.workspace_roots?.[0] ?? '',
+          }));
+        }}
+        onSelectWorkspaceRoot={(workspaceRoot) => setDraft((current) => ({ ...current, workspaceRoot }))}
         onSubmit={submitTask}
+        selectedWorker={selectedWorker}
         visible={composerOpen}
       />
     </View>
@@ -298,21 +433,35 @@ export function TasksScreen({
 }
 
 function TaskComposer({
+  availableWorkers,
+  backendOptions,
   visible,
+  loading,
   busy,
   draft,
   error,
   onChange,
   onClose,
+  onSelectBackend,
+  onSelectWorker,
+  onSelectWorkspaceRoot,
   onSubmit,
+  selectedWorker,
 }: {
+  availableWorkers: NativeWorkerSummary[];
+  backendOptions: string[];
   visible: boolean;
+  loading: boolean;
   busy: boolean;
   draft: TaskDraft;
   error: string | null;
   onChange: Dispatch<SetStateAction<TaskDraft>>;
   onClose(): void;
+  onSelectBackend(backend: string): void;
+  onSelectWorker(worker: NativeWorkerSummary): void;
+  onSelectWorkspaceRoot(workspaceRoot: string): void;
   onSubmit(): Promise<void>;
+  selectedWorker: NativeWorkerSummary | null;
 }) {
   const patchDraft = (patch: Partial<TaskDraft>) => {
     onChange((current) => ({ ...current, ...patch }));
@@ -344,6 +493,25 @@ function TaskComposer({
             contentContainerStyle={styles.composerContent}
             keyboardShouldPersistTaps="handled"
           >
+            <View style={styles.formSection}>
+              <Text style={styles.fieldTitle}>任务模板</Text>
+              <View style={styles.choiceRow}>
+                {([
+                  ['fix_bug', '修复问题'],
+                  ['implement_feature', '实现功能'],
+                  ['code_review', '代码审查'],
+                  ['release_assistant', '发布助手'],
+                ] as const).map(([templateKey, label]) => (
+                  <ChoiceChip
+                    accessibilityLabel={`选择任务模板 ${label}`}
+                    key={templateKey}
+                    label={label}
+                    onPress={() => patchDraft({ templateKey })}
+                    selected={draft.templateKey === templateKey}
+                  />
+                ))}
+              </View>
+            </View>
             <FormField
               accessibilityLabel="任务标题"
               onChangeText={(title) => patchDraft({ title })}
@@ -368,14 +536,50 @@ function TaskComposer({
               value={draft.successCriteria}
             />
             <View style={styles.formSection}>
+              <Text style={styles.fieldTitle}>执行节点</Text>
+              {loading ? (
+                <View style={styles.inlineLoading}>
+                  <ActivityIndicator color={colors.accent} size="small" />
+                  <Text style={styles.inlineLoadingText}>正在读取节点能力</Text>
+                </View>
+              ) : (
+                <View style={styles.choiceRow}>
+                  {availableWorkers.map((worker) => (
+                    <ChoiceChip
+                      accessibilityLabel={`选择任务节点 ${worker.machine_name || worker.worker_id}`}
+                      key={worker.worker_id}
+                      label={worker.machine_name || worker.worker_id}
+                      onPress={() => onSelectWorker(worker)}
+                      selected={draft.targetWorkerId === worker.worker_id}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+            <View style={styles.formSection}>
               <Text style={styles.fieldTitle}>Agent 后端</Text>
               <View style={styles.choiceRow}>
-                {['codex', 'claude', 'kimi', 'opencode'].map((backend) => (
+                {backendOptions.map((backend) => (
                   <ChoiceChip
+                    accessibilityLabel={`选择任务后端 ${backendLabel(backend)}`}
                     key={backend}
-                    label={backend === 'opencode' ? 'OpenCode' : `${backend.charAt(0).toUpperCase()}${backend.slice(1)}`}
-                    onPress={() => patchDraft({ backend })}
+                    label={backendLabel(backend)}
+                    onPress={() => onSelectBackend(backend)}
                     selected={draft.backend === backend}
+                  />
+                ))}
+              </View>
+            </View>
+            <View style={styles.formSection}>
+              <Text style={styles.fieldTitle}>工作目录</Text>
+              <View style={styles.choiceRow}>
+                {(selectedWorker?.workspace_roots ?? []).map((workspaceRoot) => (
+                  <ChoiceChip
+                    accessibilityLabel={`选择任务工作目录 ${workspaceRoot}`}
+                    key={workspaceRoot}
+                    label={workspaceRoot}
+                    onPress={() => onSelectWorkspaceRoot(workspaceRoot)}
+                    selected={draft.workspaceRoot === workspaceRoot}
                   />
                 ))}
               </View>
@@ -398,22 +602,6 @@ function TaskComposer({
                 ))}
               </View>
             </View>
-            <FormField
-              accessibilityLabel="目标节点"
-              autoCapitalize="none"
-              onChangeText={(targetWorkerId) => patchDraft({ targetWorkerId })}
-              placeholder="例如 worker-main"
-              title="目标节点"
-              value={draft.targetWorkerId}
-            />
-            <FormField
-              accessibilityLabel="工作目录"
-              autoCapitalize="none"
-              onChangeText={(workspaceRoot) => patchDraft({ workspaceRoot })}
-              placeholder="例如 E:/Work/AgentHub-OSS"
-              title="工作目录"
-              value={draft.workspaceRoot}
-            />
             <FormField
               accessibilityLabel="相关路径"
               autoCapitalize="none"
@@ -473,16 +661,19 @@ function FormField({
 }
 
 function ChoiceChip({
+  accessibilityLabel,
   label,
   selected,
   onPress,
 }: {
+  accessibilityLabel?: string;
   label: string;
   selected: boolean;
   onPress(): void;
 }) {
   return (
     <Pressable
+      accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={onPress}
@@ -504,6 +695,7 @@ function TaskDetailScreen({
   taskId,
   onBack,
   onRequestError,
+  onOpenFile,
 }: {
   api: TasksApi;
   canOperate: boolean;
@@ -511,6 +703,7 @@ function TaskDetailScreen({
   taskId: string;
   onBack(): void;
   onRequestError?(error: unknown): void;
+  onOpenFile?(target: { sessionId: string; path: string }): void;
 }) {
   const loadTask = useCallback(() => api.getTask(taskId), [api, taskId]);
   const resource = useAsyncResource(loadTask, { onError: onRequestError, resetKey: taskId });
@@ -520,6 +713,17 @@ function TaskDetailScreen({
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const task = taskOverride ?? detail?.task ?? null;
+
+  async function openDetailLink(target: string) {
+    const normalized = target.replace(/\\/g, '/').trim();
+    if (!normalized) return;
+    if (/^https?:\/\//i.test(normalized)) {
+      await Linking.openURL(normalized);
+      return;
+    }
+    if (!task?.latest_session_id) return;
+    onOpenFile?.({ sessionId: task.latest_session_id, path: normalized.replace(/^\/+/, '') });
+  }
 
   async function submitReview(action: NativeTaskReviewAction) {
     if (!task || reviewBusy || !canOperate) return;
@@ -604,8 +808,9 @@ function TaskDetailScreen({
             </Text>
             <Text style={styles.detailMetadata}>更新于 {formatLastActivity(task?.updated_at ?? detail.task.updated_at)}</Text>
           </View>
-          <DetailSection title="任务说明" text={detail.task.brief_markdown || '暂无任务说明'} />
+          <DetailSection onLinkPress={(target) => void openDetailLink(target)} title="任务说明" text={detail.task.brief_markdown || '暂无任务说明'} />
           <DetailSection
+            onLinkPress={(target) => void openDetailLink(target)}
             title="验收标准"
             text={detail.task.success_criteria_markdown || '暂无验收标准'}
           />
@@ -613,7 +818,16 @@ function TaskDetailScreen({
             <Text style={styles.sectionTitle}>产物（{detail.artifacts.length}）</Text>
             {detail.artifacts.length === 0 ? (
               <Text style={styles.sectionEmpty}>暂无产物</Text>
-            ) : detail.artifacts.map((artifact) => <ArtifactRow artifact={artifact} key={artifact.artifact_id} />)}
+            ) : detail.artifacts.map((artifact) => (
+              <ArtifactRow
+                artifact={artifact}
+                key={artifact.artifact_id}
+                onLinkPress={(target) => void openDetailLink(target)}
+                onOpenFile={task?.latest_session_id && artifact.path
+                  ? () => onOpenFile?.({ sessionId: task.latest_session_id!, path: artifact.path! })
+                  : undefined}
+              />
+            ))}
           </View>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>执行记录（{detail.executions.length}）</Text>
@@ -764,18 +978,37 @@ function ReviewButton({
   );
 }
 
-function DetailSection({ title, text }: { title: string; text: string }) {
+function DetailSection({ title, text, onLinkPress }: { title: string; text: string; onLinkPress?(target: string): void }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <Text style={styles.sectionBody}>{text}</Text>
+      <RichMarkdown onLinkPress={onLinkPress} value={text} />
     </View>
   );
 }
 
-function ArtifactRow({ artifact }: { artifact: NativeTaskArtifact }) {
-  return (
-    <View style={styles.detailRow}>
+function normalizedBackends(worker: NativeWorkerSummary | null | undefined): string[] {
+  const values = worker?.reachable_backends ?? [];
+  return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
+}
+
+function backendLabel(backend: string): string {
+  const normalized = backend.trim().toLowerCase();
+  if (normalized === 'opencode') return 'OpenCode';
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
+}
+
+function ArtifactRow({
+  artifact,
+  onOpenFile,
+  onLinkPress,
+}: {
+  artifact: NativeTaskArtifact;
+  onOpenFile?: () => void;
+  onLinkPress?(target: string): void;
+}) {
+  const rowContent = (
+    <>
       <Ionicons color={colors.accent} name="document-text-outline" size={19} />
       <View style={styles.detailRowCopy}>
         <Text style={styles.detailRowTitle}>{artifact.title}</Text>
@@ -783,6 +1016,31 @@ function ArtifactRow({ artifact }: { artifact: NativeTaskArtifact }) {
           {artifact.kind}{artifact.path ? ` · ${artifact.path}` : ''}
         </Text>
       </View>
+      {onOpenFile ? <Ionicons color={colors.muted} name="chevron-forward" size={18} /> : null}
+    </>
+  );
+  const row = onOpenFile ? (
+      <Pressable
+        accessibilityLabel={`打开产物文件 ${artifact.title}`}
+        accessibilityRole="button"
+        onPress={onOpenFile}
+        style={({ pressed }) => [styles.detailRow, pressed && styles.cardPressed]}
+      >
+        {rowContent}
+      </Pressable>
+  ) : (
+    <View style={styles.detailRow}>
+      {rowContent}
+    </View>
+  );
+  return (
+    <View style={styles.artifactBlock}>
+      {row}
+      {artifact.content_markdown?.trim() ? (
+        <View style={styles.artifactMarkdown}>
+          <RichMarkdown onLinkPress={onLinkPress} value={artifact.content_markdown} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -822,6 +1080,31 @@ const styles = StyleSheet.create({
   },
   primaryActionText: { color: colors.surface, fontSize: 14, fontWeight: '700' },
   inboxRail: { gap: 10, paddingBottom: 10, paddingHorizontal: 16 },
+  searchWrap: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+    marginHorizontal: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  searchInput: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 15,
+    paddingVertical: 0,
+  },
+  clearButton: {
+    alignItems: 'center',
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
   inboxCard: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -888,6 +1171,8 @@ const styles = StyleSheet.create({
   sectionTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
   sectionBody: { color: colors.text, fontSize: 14, lineHeight: 22 },
   sectionEmpty: { color: colors.muted, fontSize: 13 },
+  artifactBlock: { gap: 10 },
+  artifactMarkdown: { paddingLeft: 30, paddingRight: 8 },
   detailRow: {
     alignItems: 'flex-start',
     backgroundColor: colors.surface,
@@ -944,6 +1229,8 @@ const styles = StyleSheet.create({
   choiceChipSelected: { backgroundColor: colors.surfaceMuted, borderColor: colors.accent },
   choiceChipText: { color: colors.muted, fontSize: 13, fontWeight: '600' },
   choiceChipTextSelected: { color: colors.accent, fontWeight: '700' },
+  inlineLoading: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 40 },
+  inlineLoadingText: { color: colors.muted, fontSize: 13 },
   formError: { color: colors.danger, fontSize: 13, lineHeight: 19 },
   composerFooter: {
     backgroundColor: colors.surface,

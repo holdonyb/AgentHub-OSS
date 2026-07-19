@@ -4,6 +4,10 @@ import {
   consumeLastNotificationResponse,
   deliverClaimedNotification,
   deliverNewNotifications,
+  confirmStagedNotification,
+  discardStagedNotification,
+  retryStagedNotifications,
+  stageNotification,
   nativeNotificationsEnabled,
   subscribeToNotificationResponses,
 } from './nativeNotifications';
@@ -15,8 +19,12 @@ jest.mock('./nativeNotifications', () => ({
   consumeLastNotificationResponse: jest.fn(),
   deliverClaimedNotification: jest.fn(),
   deliverNewNotifications: jest.fn(),
+  confirmStagedNotification: jest.fn(),
+  discardStagedNotification: jest.fn(),
   enableNativeNotifications: jest.fn(),
   nativeNotificationsEnabled: jest.fn(),
+  retryStagedNotifications: jest.fn(),
+  stageNotification: jest.fn(),
   subscribeToNotificationResponses: jest.fn(),
 }));
 jest.mock('./notificationLedger', () => ({ syncNotificationLedger: jest.fn() }));
@@ -43,11 +51,18 @@ function Probe() {
 }
 
 const onOpenSession = jest.fn();
-let notificationResponseListener: ((target: { notificationId: string; sessionId: string | null }) => void) | undefined;
+let notificationResponseListener: ((target: {
+  notificationId: string;
+  sessionId: string | null;
+  permissionId?: string | null;
+  taskId?: string | null;
+  legacy?: boolean;
+}) => void) | undefined;
 
 beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(nativeNotificationsEnabled).mockResolvedValue(true);
+  jest.mocked(retryStagedNotifications).mockResolvedValue(0);
   jest.mocked(consumeLastNotificationResponse).mockResolvedValue(null);
   jest.mocked(syncNotificationLedger).mockResolvedValue({ available: true, pendingCount: 2 });
   jest.mocked(registerCurrentPushDevice).mockResolvedValue(true);
@@ -159,13 +174,66 @@ it('marks a tapped notification read and opens its session', async () => {
   await act(async () => renderer.unmount());
 });
 
+it('opens the exact pending interaction from a notification response', async () => {
+  jest.mocked(api.markNotificationRead).mockResolvedValue({
+    claimed: false,
+    notification: {} as never,
+  });
+  let renderer!: { unmount(): void };
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+
+  await act(async () => {
+    notificationResponseListener?.({
+      notificationId: 'notice-permission',
+      permissionId: 'permission-1',
+      sessionId: 'session-1',
+    });
+    await Promise.resolve();
+  });
+
+  expect(onOpenSession).toHaveBeenCalledWith('session-1', 'permission-1');
+  await act(async () => renderer.unmount());
+});
+
+it('opens a legacy fallback notification without marking a synthetic id read', async () => {
+  let renderer!: { unmount(): void };
+  await act(async () => {
+    renderer = create(<Probe />);
+  });
+
+  await act(async () => {
+    notificationResponseListener?.({
+      notificationId: 'job:job-2:failed',
+      sessionId: 'session-2',
+      legacy: true,
+    });
+    await Promise.resolve();
+  });
+
+  expect(onOpenSession).toHaveBeenCalledWith('session-2');
+  expect(api.markNotificationRead).not.toHaveBeenCalledWith('job:job-2:failed', 'csrf-token');
+  await act(async () => renderer.unmount());
+});
+
 it('prefers the server ledger and passes the delivery claimant the CSRF token', async () => {
   let renderer!: { unmount(): void };
   await act(async () => {
     renderer = create(<Probe />);
   });
 
-  expect(syncNotificationLedger).toHaveBeenCalledWith(api, 'csrf-token', deliverClaimedNotification, true);
+  expect(syncNotificationLedger).toHaveBeenCalledWith(
+    api,
+    'csrf-token',
+    deliverClaimedNotification,
+    true,
+    {
+      stage: stageNotification,
+      confirm: confirmStagedNotification,
+      discard: discardStagedNotification,
+    },
+  );
   expect(api.listPermissions).not.toHaveBeenCalled();
   expect(api.listJobs).not.toHaveBeenCalled();
   expect(currentHook.pendingCount).toBe(2);

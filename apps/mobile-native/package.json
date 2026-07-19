@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/mobile-native",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -11,14 +11,14 @@
     "build:android:debug": "node scripts/build-android-debug.mjs",
     "build:android:release": "node scripts/build-android-release.mjs",
     "build:ios:simulator": "node scripts/build-ios-simulator.mjs",
-    "test": "jest --runInBand",
+    "test": "node scripts/run-node-tests.mjs && jest --runInBand",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20.19.4"
   },
   "dependencies": {
-    "@agenthub/client-core": "1.0.1",
+    "@agenthub/client-core": "1.0.2",
     "@expo/vector-icons": "^15.0.2",
     "@react-navigation/bottom-tabs": "^7.18.8",
     "@react-navigation/native": "^7.3.8",
@@ -27,14 +27,17 @@
     "expo-build-properties": "~57.0.3",
     "expo-clipboard": "^57.0.1",
     "expo-constants": "~57.0.3",
+    "expo-document-picker": "~57.0.1",
     "expo-file-system": "~57.0.0",
     "expo-font": "~57.0.0",
     "expo-image-picker": "~57.0.2",
     "expo-modules-core": "~57.0.3",
     "expo-notifications": "~57.0.3",
     "expo-secure-store": "~57.0.0",
+    "expo-sharing": "~57.0.6",
     "expo-status-bar": "~57.0.0",
     "expo-system-ui": "~57.0.0",
+    "expo-video": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.0",
     "react-native-safe-area-context": "~5.7.0",

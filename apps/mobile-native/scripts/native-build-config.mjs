@@ -16,3 +16,7 @@ export function androidGradleExecutable(platform = process.platform) {
 export function executable(name, platform = process.platform) {
   return platform === 'win32' ? `${name}.cmd` : name;
 }
+
+export function nativeSpawnOptions(platform = process.platform) {
+  return platform === 'win32' ? { shell: true } : {};
+}

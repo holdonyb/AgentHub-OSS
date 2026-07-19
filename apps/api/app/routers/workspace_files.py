@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import timedelta
 import hashlib
+import hmac
 import os
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -15,6 +16,7 @@ from app.core.audit import write_event
 from app.core.deps import Actor, DbSession, require_min_role, require_worker
 from app.core.file_transfer_cleanup import cleanup_expired_file_transfers, expire_file_transfer
 from app.core.json import dumps_json, loads_json
+from app.core.secrets import secret_value_hash
 from app.models import FileTransfer, Job, Worker, utcnow
 from app.schemas import (
     WorkspaceFileCreateIn,
@@ -22,6 +24,7 @@ from app.schemas import (
     WorkspaceFileMkdirIn,
     WorkspaceFileReadIn,
     WorkspaceFileRenameIn,
+    WorkspaceFileSearchIn,
     WorkspaceFileTargetIn,
     WorkspaceFileTransferCreateIn,
     WorkspaceFileTransferUploadCreateIn,
@@ -75,6 +78,14 @@ def _require_user_transfer(db: DbSession, actor: Actor, transfer_id: str) -> Fil
         db.commit()
         raise HTTPException(status_code=410, detail={"message": "Transfer expired", "code": "TRANSFER_EXPIRED"})
     return transfer
+
+
+def _download_ticket_payload(transfer: FileTransfer, expires_at: int) -> str:
+    return f"{transfer.transfer_id}:{transfer.created_by}:{expires_at}"
+
+
+def _download_ticket_signature(transfer: FileTransfer, expires_at: int, request: Request) -> str:
+    return secret_value_hash(_download_ticket_payload(transfer, expires_at), request.app.state.settings)
 
 
 def _normalized_workspace_root(value: str, *, windows: bool) -> str:
@@ -196,6 +207,26 @@ def read_workspace_file(
             "offset_bytes": payload.offset_bytes,
             "max_bytes": payload.max_bytes,
             **({"reveal_sensitive": True} if payload.reveal_sensitive else {}),
+        },
+    )
+
+
+@router.post("/api/workspaces/files/search")
+def search_workspace_files(
+    payload: WorkspaceFileSearchIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    return _queue_file_job(
+        db=db,
+        actor=actor,
+        payload=payload,
+        kind="file_search",
+        job_payload={
+            "path": payload.path.strip() or ".",
+            "query": payload.query.strip(),
+            "max_results": payload.max_results,
+            "include_hidden": payload.include_hidden,
         },
     )
 
@@ -591,6 +622,56 @@ def download_workspace_file_transfer(
         transfer.status = "failed"
         db.commit()
         raise
+
+
+@router.post("/api/workspaces/files/transfers/{transfer_id}/download-ticket")
+def create_workspace_file_download_ticket(
+    transfer_id: str,
+    request: Request,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    transfer = _require_user_transfer(db, actor, transfer_id)
+    if transfer.status != "ready" or not transfer.temp_path:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "Transfer is not ready", "code": "TRANSFER_NOT_READY"},
+        )
+    requested_expiry = utcnow() + timedelta(seconds=request.app.state.settings.file_transfer_download_ticket_seconds)
+    expires_at = int(min(requested_expiry, transfer.expires_at).timestamp())
+    signature = _download_ticket_signature(transfer, expires_at, request)
+    return {
+        "download_url": (
+            f"/api/workspaces/files/transfers/{transfer.transfer_id}/download"
+            f"?expires={expires_at}&signature={signature}"
+        ),
+        "expires_at": expires_at,
+    }
+
+
+@router.get("/api/workspaces/files/transfers/{transfer_id}/download")
+def download_workspace_file_with_ticket(
+    transfer_id: str,
+    expires: int,
+    signature: str,
+    request: Request,
+    db: DbSession,
+    range_header: str = Header(default="", alias="Range"),
+):
+    transfer = db.query(FileTransfer).filter(FileTransfer.transfer_id == transfer_id).one_or_none()
+    now = utcnow()
+    if transfer is None or expires < int(now.timestamp()) or transfer.expires_at <= now:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": "Download ticket is invalid or expired", "code": "TRANSFER_TICKET_INVALID"},
+        )
+    expected = _download_ticket_signature(transfer, expires, request)
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(
+            status_code=403,
+            detail={"message": "Download ticket is invalid or expired", "code": "TRANSFER_TICKET_INVALID"},
+        )
+    return _transfer_content_response(transfer, range_header=range_header)
 
 
 @router.put("/api/workspaces/files/transfers/{transfer_id}/content")

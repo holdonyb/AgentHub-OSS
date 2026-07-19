@@ -2,11 +2,11 @@
   "expo": {
     "name": "AgentHub",
     "slug": "agenthub-native",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "agenthub-native",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "platforms": [
       "android",
@@ -14,6 +14,7 @@
     ],
     "plugins": [
       "./plugins/withAgentHubAndroidSigning.cjs",
+      "./plugins/withAgentHubThemeColors.cjs",
       "expo-secure-store",
       [
         "expo-image-picker",
@@ -37,11 +38,13 @@
           "enableBackgroundPlayback": false
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      "expo-video",
+      "expo-sharing"
     ],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "2",
+      "buildNumber": "3",
       "bundleIdentifier": "dev.myagenthub.mobile",
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -57,9 +60,8 @@
     },
     "android": {
       "package": "dev.myagenthub.mobile",
-      "versionCode": 2,
+      "versionCode": 3,
       "predictiveBackGestureEnabled": true
     }
-  },
-  "version": "1.0.1"
+  }
 }

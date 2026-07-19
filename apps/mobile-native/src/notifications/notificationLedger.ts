@@ -8,11 +8,18 @@ export interface NotificationLedgerSyncResult {
   pendingCount: number;
 }
 
+export interface NotificationDeliveryLifecycle {
+  stage(notification: NativeNotificationRecord): Promise<void>;
+  confirm(notification: NativeNotificationRecord): Promise<void>;
+  discard(notificationId: string): Promise<void>;
+}
+
 export async function syncNotificationLedger(
   api: LedgerApi,
   csrfToken: string,
   deliver: (notification: NativeNotificationRecord) => Promise<unknown>,
   deliveryEnabled: boolean,
+  lifecycle?: NotificationDeliveryLifecycle,
 ): Promise<NotificationLedgerSyncResult> {
   let records: NativeNotificationRecord[];
   try {
@@ -28,8 +35,15 @@ export async function syncNotificationLedger(
   if (!deliveryEnabled) return { available: true, pendingCount: activeRecords.length };
   for (const record of activeRecords) {
     if (record.status !== 'pending') continue;
+    await lifecycle?.stage(record);
     const transition = await api.markNotificationDelivered(record.notification_id, csrfToken);
-    if (transition.claimed) await deliver(transition.notification);
+    if (!transition.claimed) {
+      await lifecycle?.discard(record.notification_id);
+      continue;
+    }
+    await lifecycle?.confirm(transition.notification);
+    await deliver(transition.notification);
+    await lifecycle?.discard(record.notification_id);
   }
   return { available: true, pendingCount: activeRecords.length };
 }

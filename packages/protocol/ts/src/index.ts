@@ -14,6 +14,7 @@ export type JobKind =
   | 'provider_login'
   | 'provider_logout'
   | 'file_list'
+  | 'file_search'
   | 'file_read'
   | 'file_write'
   | 'file_upload'

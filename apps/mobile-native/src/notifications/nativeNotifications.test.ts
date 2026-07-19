@@ -2,9 +2,13 @@ import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import {
   consumeLastNotificationResponse,
+  confirmStagedNotification,
+  discardStagedNotification,
   deliverClaimedNotification,
   deliverNewNotifications,
   enableNativeNotifications,
+  retryStagedNotifications,
+  stageNotification,
   subscribeToNotificationResponses,
   type NativeNotificationSignal,
 } from './nativeNotifications';
@@ -75,7 +79,11 @@ it('notifies only signals not present in the durable delivered set', async () =>
     content: expect.objectContaining({
       title: '任务失败',
       body: '模型容量不足',
-      data: { sessionId: 'session-2', signalId: 'job:job-2:failed' },
+      data: {
+        sessionId: 'session-2',
+        notificationId: 'job:job-2:failed',
+        legacy: true,
+      },
     }),
     trigger: null,
   });
@@ -102,6 +110,104 @@ it('delivers an authoritative ledger record without using the legacy local basel
   });
 });
 
+it('routes a legacy fallback response without treating it as an authoritative ledger record', async () => {
+  jest.mocked(Notifications.getLastNotificationResponseAsync).mockResolvedValue({
+    notification: {
+      request: {
+        content: {
+          data: {
+            notificationId: 'job:job-2:failed',
+            sessionId: 'session-2',
+            legacy: true,
+          },
+        },
+      },
+    },
+  } as never);
+
+  await expect(consumeLastNotificationResponse()).resolves.toEqual({
+    notificationId: 'job:job-2:failed',
+    sessionId: 'session-2',
+    legacy: true,
+  });
+});
+
+it('retries only claimed staged notifications and removes them after delivery', async () => {
+  const staged = {
+    notification_id: 'notice-retry',
+    title: '等待审批',
+    body: '请确认执行',
+    session_id: 'session-retry',
+  };
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(null);
+  await stageNotification(staged);
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(JSON.stringify({
+    items: [{ notification: staged, claimed: false }],
+  }));
+  await confirmStagedNotification(staged);
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValueOnce(JSON.stringify({
+    items: [{ notification: staged, claimed: true }],
+  }));
+  const deliver = jest.fn().mockResolvedValue(true);
+
+  await expect(retryStagedNotifications(deliver)).resolves.toBe(1);
+
+  expect(deliver).toHaveBeenCalledWith(staged);
+  expect(SecureStore.setItemAsync).toHaveBeenLastCalledWith(
+    'agenthub.pendingNotifications.v1',
+    JSON.stringify({ items: [] }),
+  );
+  await discardStagedNotification('missing');
+});
+
+it('routes a claimed task notification to its Workbench task', async () => {
+  jest.mocked(Notifications.getPermissionsAsync).mockResolvedValue({ granted: true } as never);
+
+  await deliverClaimedNotification({
+    notification_id: 'notice-task-1',
+    title: '任务等待验收',
+    body: '打开任务查看产物',
+    session_id: 'session-1',
+    source_type: 'task',
+    source_id: 'task-1',
+  });
+
+  expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith({
+    content: expect.objectContaining({
+      data: {
+        notificationId: 'notice-task-1',
+        sessionId: 'session-1',
+        taskId: 'task-1',
+      },
+    }),
+    trigger: null,
+  });
+});
+
+it('routes a claimed approval notification to the exact pending interaction', async () => {
+  jest.mocked(Notifications.getPermissionsAsync).mockResolvedValue({ granted: true } as never);
+
+  await deliverClaimedNotification({
+    notification_id: 'notice-permission-1',
+    title: '等待你的选择',
+    body: '请选择维护窗口',
+    session_id: 'session-1',
+    source_type: 'permission',
+    source_id: 'permission-1',
+  });
+
+  expect(Notifications.scheduleNotificationAsync).toHaveBeenCalledWith({
+    content: expect.objectContaining({
+      data: {
+        notificationId: 'notice-permission-1',
+        permissionId: 'permission-1',
+        sessionId: 'session-1',
+      },
+    }),
+    trigger: null,
+  });
+});
+
 it('consumes the notification response that launched the app', async () => {
   jest.mocked(Notifications.getLastNotificationResponseAsync).mockResolvedValue({
     notification: {
@@ -118,6 +224,28 @@ it('consumes the notification response that launched the app', async () => {
     sessionId: 'session-cold',
   });
   expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+});
+
+it('preserves the pending interaction id from a cold-start notification', async () => {
+  jest.mocked(Notifications.getLastNotificationResponseAsync).mockResolvedValue({
+    notification: {
+      request: {
+        content: {
+          data: {
+            notificationId: 'notice-cold-permission',
+            permissionId: 'permission-cold',
+            sessionId: 'session-cold',
+          },
+        },
+      },
+    },
+  } as never);
+
+  await expect(consumeLastNotificationResponse()).resolves.toEqual({
+    notificationId: 'notice-cold-permission',
+    permissionId: 'permission-cold',
+    sessionId: 'session-cold',
+  });
 });
 
 it('subscribes to notification responses and removes the native listener on cleanup', () => {

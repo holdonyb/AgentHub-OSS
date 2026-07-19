@@ -13,6 +13,7 @@ import { LoadingScreen } from './screens/LoadingScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { ServerSetupScreen } from './screens/ServerSetupScreen';
 import { expoSecureStore } from './storage/expoSecureStore';
+import { loadAndApplyThemePreference } from './ui/themePreference';
 
 interface RuntimeState {
   route: AuthRoute;
@@ -36,6 +37,7 @@ export default function App() {
     error: null,
   });
   const [busy, setBusy] = useState(false);
+  const [themeReady, setThemeReady] = useState(false);
   const api = useMemo(
     () => runtime.config ? createMobileApi(runtime.config.serverUrl) : null,
     [runtime.config],
@@ -50,6 +52,20 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!api || runtime.route !== 'main') return;
+    let active = true;
+    setThemeReady(false);
+    void loadAndApplyThemePreference(async () => (
+      await api.getSettings()
+    ).preferences.theme_mode).finally(() => {
+      if (active) setThemeReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [api, runtime.route]);
 
   async function handleServerSave(config: ServerConfig) {
     setBusy(true);
@@ -67,6 +83,7 @@ export default function App() {
     setRuntime((current) => ({ ...current, error: null }));
     try {
       const auth = await api.login(email, password);
+      setThemeReady(false);
       setRuntime({ route: 'main', config: runtime.config, auth, error: null });
     } catch (error) {
       setRuntime((current) => ({ ...current, route: 'login', error: loginErrorMessage(error) }));
@@ -77,6 +94,7 @@ export default function App() {
 
   function handleRequestError(error: unknown) {
     if (!(error instanceof AgentHubApiError) || error.status !== 401) return;
+    setThemeReady(false);
     setRuntime((current) => current.config ? {
       route: 'login',
       config: current.config,
@@ -91,6 +109,7 @@ export default function App() {
     try {
       const deviceId = await currentPushDeviceId().catch(() => null);
       await api.logout(runtime.auth.csrf_token, deviceId ?? undefined);
+      setThemeReady(false);
       setRuntime({ route: 'login', config: runtime.config, auth: null, error: null });
     } catch (error) {
       if (error instanceof AgentHubApiError && error.status === 401) {
@@ -110,6 +129,7 @@ export default function App() {
         await revokeCurrentPushDevice(api, runtime.auth.csrf_token).catch(() => false);
       }
       await repository.clear();
+      setThemeReady(false);
       setRuntime({ route: 'server-setup', config: null, auth: null, error: null });
     } catch (error) {
       setRuntime((current) => ({ ...current, error: loginErrorMessage(error) }));
@@ -132,7 +152,7 @@ export default function App() {
       />
     );
   } else if (runtime.route === 'main' && runtime.config && runtime.auth && api) {
-    content = (
+    content = themeReady ? (
       <MainTabs
         api={api}
         busy={busy}
@@ -144,14 +164,14 @@ export default function App() {
         serverUrl={runtime.config.serverUrl}
         user={runtime.auth.user}
       />
-    );
+    ) : <LoadingScreen />;
   } else {
     content = <LoadingScreen />;
   }
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="dark" />
+      <StatusBar style="auto" />
       {content}
     </SafeAreaProvider>
   );

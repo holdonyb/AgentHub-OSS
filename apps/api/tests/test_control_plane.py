@@ -3341,6 +3341,46 @@ def test_session_file_read_creates_read_job_without_mutating_session_status(clie
     assert source_after_enqueue["status"] == "ready"
 
 
+def test_session_file_search_creates_bounded_sidecar_job(client: TestClient) -> None:
+    bootstrap_owner(client)
+    owner_login = login(client)
+    worker = create_worker(client)
+    worker_id = worker["worker"]["worker_id"]
+    headers = auth_headers(owner_login)
+    created = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "session_id": "files-search-source",
+            "backend": "codex",
+            "worker_id": worker_id,
+            "workspace_root": "E:/work/AgentHub",
+            "project_name": "AgentHub",
+            "runtime_session_ref": "codex/files-search-source.jsonl",
+            "status": "ready",
+            "title": "搜索文件",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.post(
+        "/api/sessions/files-search-source/files/search",
+        headers=headers,
+        json={"path": ".", "query": "release", "max_results": 80, "include_hidden": False},
+    )
+
+    assert response.status_code == 200, response.text
+    job = response.json()["job"]
+    assert job["kind"] == "file_search"
+    assert job["payload"] == {
+        "path": ".",
+        "query": "release",
+        "max_results": 80,
+        "include_hidden": False,
+    }
+    assert client.get("/api/sessions/files-search-source", headers=headers).json()["session"]["status"] == "ready"
+
+
 def test_session_file_read_accepts_large_mobile_preview_request(client: TestClient) -> None:
     bootstrap_owner(client)
     owner_login = login(client)

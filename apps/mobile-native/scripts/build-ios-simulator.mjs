@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { executable } from './native-build-config.mjs';
+import { executable, nativeSpawnOptions } from './native-build-config.mjs';
 
 if (process.platform !== 'darwin') {
   throw new Error('The AgentHub iOS native client must be compiled on macOS with Xcode');
@@ -11,6 +11,7 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 function run(command, args, cwd = appRoot) {
   const result = spawnSync(command, args, {
+    ...nativeSpawnOptions(),
     cwd,
     env: { ...process.env, EXPO_NO_GIT_STATUS: '1' },
     stdio: 'inherit',

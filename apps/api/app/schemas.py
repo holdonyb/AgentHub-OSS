@@ -23,6 +23,7 @@ JobKind = Literal[
     "provider_login",
     "provider_logout",
     "file_list",
+    "file_search",
     "file_read",
     "file_write",
     "file_upload",
@@ -588,6 +589,13 @@ class SessionFileListIn(BaseModel):
     path: str = Field(default=".", min_length=1, max_length=1000)
 
 
+class SessionFileSearchIn(BaseModel):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+    query: str = Field(min_length=1, max_length=200)
+    max_results: int = Field(default=100, ge=1, le=200)
+    include_hidden: bool = False
+
+
 class SessionFileReadIn(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
     max_bytes: int = Field(default=200_000, ge=1, le=5_000_000)
@@ -631,6 +639,13 @@ class WorkspaceFileTargetIn(BaseModel):
 
 class WorkspaceFileListIn(WorkspaceFileTargetIn):
     path: str = Field(default=".", min_length=1, max_length=1000)
+
+
+class WorkspaceFileSearchIn(WorkspaceFileTargetIn):
+    path: str = Field(default=".", min_length=1, max_length=1000)
+    query: str = Field(min_length=1, max_length=200)
+    max_results: int = Field(default=100, ge=1, le=200)
+    include_hidden: bool = False
 
 
 class WorkspaceFileReadIn(WorkspaceFileTargetIn):

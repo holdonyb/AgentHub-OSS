@@ -26,6 +26,7 @@ from app.schemas import (
     SessionFileMkdirIn,
     SessionFileReadIn,
     SessionFileRenameIn,
+    SessionFileSearchIn,
     SessionFileUploadIn,
     SessionFileWriteIn,
     SessionForkIn,
@@ -930,6 +931,47 @@ def read_session_file(
             "max_bytes": payload.max_bytes,
             **({"reveal_sensitive": True} if payload.reveal_sensitive else {}),
         },
+    )
+    db.commit()
+    return {"job": job_out(job)}
+
+
+@router.post("/api/sessions/{session_id}/files/search")
+def search_session_files(
+    session_id: str,
+    payload: SessionFileSearchIn,
+    db: DbSession,
+    actor: Actor = Depends(require_min_role("operator")),
+):
+    session = db.query(AgentSession).filter(AgentSession.space_id == actor.space_id, AgentSession.session_id == session_id).one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail={"message": "Session not found", "code": "SESSION_NOT_FOUND"})
+    _require_worker_backend(db, session)
+    job = _create_worker_job(
+        db=db,
+        actor=actor,
+        kind="file_search",
+        target_session_id=session.session_id,
+        worker_id=session.worker_id,
+        backend=session.backend,
+        workspace_root=session.workspace_root,
+        namespace=session.namespace,
+        payload={
+            "path": payload.path.strip() or ".",
+            "query": payload.query.strip(),
+            "max_results": payload.max_results,
+            "include_hidden": payload.include_hidden,
+        },
+    )
+    write_event(
+        db,
+        space_id=actor.space_id,
+        actor_type="user",
+        actor_id=actor.actor_id,
+        source_type="job",
+        source_id=job.job_id,
+        event_type="file.search",
+        payload={"session_id": session.session_id, "path": payload.path, "query": payload.query},
     )
     db.commit()
     return {"job": job_out(job)}

@@ -1,12 +1,17 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { androidGradleExecutable, executable } from './native-build-config.mjs';
+import {
+  androidGradleExecutable,
+  executable,
+  nativeSpawnOptions,
+} from './native-build-config.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function run(command, args, cwd = appRoot) {
   const result = spawnSync(command, args, {
+    ...nativeSpawnOptions(),
     cwd,
     env: {
       ...process.env,

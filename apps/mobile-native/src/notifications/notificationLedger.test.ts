@@ -30,12 +30,47 @@ it('claims pending ledger records before delivering them locally', async () => {
   } as unknown as MobileApi;
   const deliver = jest.fn().mockResolvedValue(true);
 
-  await expect(syncNotificationLedger(api, 'csrf-token', deliver, true)).resolves.toEqual({
+  const lifecycle = {
+    stage: jest.fn().mockResolvedValue(undefined),
+    confirm: jest.fn().mockResolvedValue(undefined),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+
+  await expect(syncNotificationLedger(api, 'csrf-token', deliver, true, lifecycle)).resolves.toEqual({
     available: true,
     pendingCount: 1,
   });
   expect(api.markNotificationDelivered).toHaveBeenCalledWith('notice-1', 'csrf-token');
+  expect(lifecycle.stage).toHaveBeenCalledWith(pendingRecord);
+  expect(lifecycle.confirm).toHaveBeenCalledWith(expect.objectContaining({ notification_id: 'notice-1' }));
   expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ notification_id: 'notice-1' }));
+  expect(lifecycle.discard).toHaveBeenCalledWith('notice-1');
+});
+
+it('keeps a claimed notification staged when local delivery fails', async () => {
+  const api = {
+    listNotifications: jest.fn().mockResolvedValue({ items: [pendingRecord] }),
+    markNotificationDelivered: jest.fn().mockResolvedValue({
+      claimed: true,
+      notification: { ...pendingRecord, status: 'delivered' },
+    }),
+  } as unknown as MobileApi;
+  const lifecycle = {
+    stage: jest.fn().mockResolvedValue(undefined),
+    confirm: jest.fn().mockResolvedValue(undefined),
+    discard: jest.fn().mockResolvedValue(undefined),
+  };
+
+  await expect(syncNotificationLedger(
+    api,
+    'csrf-token',
+    jest.fn().mockRejectedValue(new Error('native schedule failed')),
+    true,
+    lifecycle,
+  )).rejects.toThrow('native schedule failed');
+
+  expect(lifecycle.confirm).toHaveBeenCalled();
+  expect(lifecycle.discard).not.toHaveBeenCalled();
 });
 
 it('does not display a record claimed by another client', async () => {

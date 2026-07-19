@@ -56,6 +56,18 @@ CODEX_CAPACITY_FALLBACK_MODELS_ENV = "AGENTHUB_CODEX_CAPACITY_FALLBACK_MODELS"
 DEFAULT_JOB_TIMEOUT_SECONDS = 3600
 IMAGE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 MAX_FILE_LIST_ENTRIES = 300
+MAX_FILE_SEARCH_RESULTS = 200
+MAX_FILE_SEARCH_VISITS = 20_000
+FILE_SEARCH_IGNORED_DIRECTORIES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+}
 DEFAULT_FILE_READ_BYTES = 200_000
 MAX_FILE_READ_BYTES = 5_000_000
 MAX_INLINE_FILE_BYTES = 512_000
@@ -210,6 +222,89 @@ def _execute_file_list(job: dict[str, Any]) -> str:
     )
 
 
+def _execute_file_search(job: dict[str, Any]) -> str:
+    payload = _payload(job)
+    root = _workspace_root(job)
+    target, relative_text = _relative_workspace_path(root, payload.get("path", "."))
+    if not target.exists() or not target.is_dir():
+        raise ValueError("Search path is not a directory")
+    query = str(payload.get("query") or "").strip().casefold()
+    if not query:
+        raise ValueError("File search query cannot be empty")
+    try:
+        requested_limit = int(payload.get("max_results", 100))
+    except (TypeError, ValueError):
+        requested_limit = 100
+    max_results = max(1, min(requested_limit, MAX_FILE_SEARCH_RESULTS))
+    include_hidden = payload.get("include_hidden") is True
+    entries: list[dict[str, Any]] = []
+    pending = [target]
+    visited = 0
+    truncated = False
+
+    while pending:
+        current = pending.pop()
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold(), reverse=True)
+        except OSError:
+            continue
+        for child in children:
+            visited += 1
+            if visited > MAX_FILE_SEARCH_VISITS:
+                truncated = True
+                pending.clear()
+                break
+            if child.is_symlink():
+                continue
+            name = child.name
+            if not include_hidden and name.startswith("."):
+                continue
+            try:
+                child_relative = child.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if child.is_dir():
+                if name.casefold() not in FILE_SEARCH_IGNORED_DIRECTORIES:
+                    pending.append(child)
+                continue
+            if query not in child_relative.casefold():
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            content_type = mimetypes.guess_type(child.name)[0] or "application/octet-stream"
+            entries.append(
+                {
+                    "name": child.name,
+                    "path": child_relative,
+                    "kind": "file",
+                    "content_type": content_type,
+                    "extension": child.suffix.lower(),
+                    "preview_capability": _preview_capability_for_file(child.name, content_type),
+                    "is_editable": _is_editable_path(child, content_type),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+            )
+            if len(entries) >= max_results:
+                truncated = True
+                pending.clear()
+                break
+
+    entries.sort(key=lambda item: str(item["path"]).casefold())
+    return _json_result(
+        {
+            "path": relative_text,
+            "query": query,
+            "workspace_root": str(root),
+            "entries": entries,
+            "truncated": truncated,
+            "visited_entries": visited,
+        }
+    )
+
+
 def _execute_file_read(job: dict[str, Any]) -> str:
     payload = _payload(job)
     root = _workspace_root(job)
@@ -249,6 +344,8 @@ def _execute_file_read(job: dict[str, Any]) -> str:
         "next_offset_bytes": next_offset_bytes if truncated else None,
         "truncated": truncated,
         "modified_at": _modified_at(target),
+        "is_editable": not content_type.startswith(("image/", "audio/", "video/"))
+        and _is_probably_text_file(target, content_type, preview),
     }
     inline_downloadable = effective_offset == 0 and not truncated and size_bytes <= MAX_INLINE_FILE_BYTES
     if content_type.startswith("image/"):
@@ -378,6 +475,8 @@ def _is_probably_text_file(path: Path, content_type: str, sample: bytes) -> bool
 
 
 def _is_editable_path(path: Path, content_type: str) -> bool:
+    if content_type.startswith(("image/", "audio/", "video/")):
+        return False
     return _is_probably_text_file(path, content_type, b"")
 
 
@@ -2125,6 +2224,8 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
         return _execute_provider_auth(job, "logout")
     if kind == "file_list":
         return _execute_file_list(job)
+    if kind == "file_search":
+        return _execute_file_search(job)
     if kind == "file_read":
         return _execute_file_read(job)
     if kind == "file_transfer_prepare":

@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 const STORAGE_KEY = 'agenthub.nativeNotifications.v1';
+const PENDING_STORAGE_KEY = 'agenthub.pendingNotifications.v1';
 const CHANNEL_ID = 'agenthub-urgent-v1';
 const MAX_DELIVERED_IDS = 500;
 
@@ -18,11 +19,16 @@ export interface ClaimedNativeNotification {
   title: string;
   body: string;
   session_id: string | null;
+  source_type?: string;
+  source_id?: string;
 }
 
 export interface NativeNotificationResponseTarget {
   notificationId: string;
   sessionId: string | null;
+  permissionId?: string | null;
+  taskId?: string | null;
+  legacy?: boolean;
 }
 
 function responseTarget(
@@ -31,10 +37,79 @@ function responseTarget(
   const data = response.notification.request.content.data ?? {};
   const notificationId = typeof data.notificationId === 'string' ? data.notificationId : '';
   if (!notificationId) return null;
+  const taskId = typeof data.taskId === 'string' ? data.taskId : null;
+  const permissionId = typeof data.permissionId === 'string' ? data.permissionId : null;
   return {
     notificationId,
     sessionId: typeof data.sessionId === 'string' ? data.sessionId : null,
+    ...(permissionId ? { permissionId } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(data.legacy === true ? { legacy: true } : {}),
   };
+}
+
+interface StagedNotification {
+  notification: ClaimedNativeNotification;
+  claimed: boolean;
+}
+
+async function readStagedNotifications(): Promise<StagedNotification[]> {
+  try {
+    const raw = await SecureStore.getItemAsync(PENDING_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { items?: unknown };
+    if (!Array.isArray(parsed.items)) return [];
+    return parsed.items.filter((item): item is StagedNotification => {
+      if (!item || typeof item !== 'object') return false;
+      const candidate = item as Partial<StagedNotification>;
+      return Boolean(candidate.notification?.notification_id) && typeof candidate.claimed === 'boolean';
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function writeStagedNotifications(items: StagedNotification[]) {
+  await SecureStore.setItemAsync(PENDING_STORAGE_KEY, JSON.stringify({ items }));
+}
+
+export async function stageNotification(notification: ClaimedNativeNotification): Promise<void> {
+  const items = await readStagedNotifications();
+  const existing = items.find((item) => item.notification.notification_id === notification.notification_id);
+  if (existing) existing.notification = notification;
+  else items.push({ notification, claimed: false });
+  await writeStagedNotifications(items);
+}
+
+export async function confirmStagedNotification(notification: ClaimedNativeNotification): Promise<void> {
+  const items = await readStagedNotifications();
+  const existing = items.find((item) => item.notification.notification_id === notification.notification_id);
+  if (existing) {
+    existing.notification = notification;
+    existing.claimed = true;
+  } else {
+    items.push({ notification, claimed: true });
+  }
+  await writeStagedNotifications(items);
+}
+
+export async function discardStagedNotification(notificationId: string): Promise<void> {
+  const items = await readStagedNotifications();
+  await writeStagedNotifications(items.filter((item) => item.notification.notification_id !== notificationId));
+}
+
+export async function retryStagedNotifications(
+  deliver: (notification: ClaimedNativeNotification) => Promise<unknown> = deliverClaimedNotification,
+): Promise<number> {
+  const items = await readStagedNotifications();
+  let delivered = 0;
+  for (const item of items) {
+    if (!item.claimed) continue;
+    await deliver(item.notification);
+    delivered += 1;
+    await discardStagedNotification(item.notification.notification_id);
+  }
+  return delivered;
 }
 
 interface DeliveryState {
@@ -113,7 +188,11 @@ export async function deliverNewNotifications(signals: NativeNotificationSignal[
       content: {
         title: signal.title,
         body: signal.body,
-        data: { sessionId: signal.sessionId, signalId: signal.id },
+        data: {
+          sessionId: signal.sessionId,
+          notificationId: signal.id,
+          legacy: true,
+        },
         sound: 'default',
       },
       trigger: null,
@@ -129,6 +208,12 @@ export async function deliverClaimedNotification(
   notification: ClaimedNativeNotification,
 ): Promise<boolean> {
   if (!(await Notifications.getPermissionsAsync()).granted) return false;
+  const taskId = notification.source_type === 'task' && notification.source_id
+    ? notification.source_id
+    : null;
+  const permissionId = notification.source_type === 'permission' && notification.source_id
+    ? notification.source_id
+    : null;
   await Notifications.scheduleNotificationAsync({
     content: {
       title: notification.title,
@@ -136,6 +221,8 @@ export async function deliverClaimedNotification(
       data: {
         sessionId: notification.session_id,
         notificationId: notification.notification_id,
+        ...(permissionId ? { permissionId } : {}),
+        ...(taskId ? { taskId } : {}),
       },
       sound: 'default',
     },

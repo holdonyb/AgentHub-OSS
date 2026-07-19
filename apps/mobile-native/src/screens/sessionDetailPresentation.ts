@@ -1,5 +1,13 @@
 import type { NativePermission, NativeTimelineItem } from '../api/mobileApi';
 
+export interface NativeTimelineAttachment {
+  filename: string;
+  content_type: string;
+  size_bytes: number | null;
+  path?: string | null;
+  url?: string | null;
+}
+
 export interface NativePermissionChoice {
   id: string;
   label: string;
@@ -150,5 +158,48 @@ export function sortedTimeline(items: NativeTimelineItem[]): NativeTimelineItem[
       return leftTime - rightTime;
     }
     return left.seq - right.seq;
+  });
+}
+
+export function timelineAttachments(item: NativeTimelineItem): NativeTimelineAttachment[] {
+  const sources = [
+    item.payload?.attachments,
+    item.payload?.input && typeof item.payload.input === 'object'
+      ? (item.payload.input as Record<string, unknown>).attachments
+      : null,
+    item.payload?.detail && typeof item.payload.detail === 'object'
+      ? (item.payload.detail as Record<string, unknown>).attachments
+      : null,
+    item.payload?.result && typeof item.payload.result === 'object'
+      ? (item.payload.result as Record<string, unknown>).attachments
+      : null,
+    item.payload?.job && typeof item.payload.job === 'object'
+      ? ((item.payload.job as Record<string, unknown>).payload as Record<string, unknown> | undefined)?.attachments
+      : null,
+    item.payload?.files,
+  ];
+  const rawAttachments = sources.find(Array.isArray);
+  if (!Array.isArray(rawAttachments)) return [];
+  return rawAttachments.flatMap((value) => {
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    const filename = textValue(record.filename);
+    if (!filename) return [];
+    return [{
+      filename,
+      content_type: textValue(record.content_type) || 'application/octet-stream',
+      size_bytes: typeof record.size_bytes === 'number' && Number.isFinite(record.size_bytes)
+        ? record.size_bytes
+        : null,
+      path:
+        textValue(record.path)
+        || textValue(record.file_path)
+        || textValue(record.local_path)
+        || null,
+      url:
+        textValue(record.url)
+        || textValue(record.uri)
+        || null,
+    }];
   });
 }
