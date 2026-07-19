@@ -503,6 +503,76 @@ describe('mobile API', () => {
     );
   });
 
+  it('exposes the full session lifecycle with scoped CSRF-protected requests', async () => {
+    const fetcher = jest
+      .fn<ReturnType<FetchLike>, Parameters<FetchLike>>()
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'start-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'fork-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ job: { job_id: 'btw-job', status: 'queued' } }))
+      .mockResolvedValueOnce(jsonResponse({ session: { session_id: 'session/1', title: '新的标题' } }))
+      .mockResolvedValueOnce(jsonResponse({ session: { session_id: 'session/1', controls: { model: 'gpt-5.6' } } }))
+      .mockResolvedValueOnce(jsonResponse({ session: { session_id: 'session/1', archived_at: '2026-07-19T00:00:00Z' } }))
+      .mockResolvedValueOnce(jsonResponse({ session: { session_id: 'session/1', archived_at: null } }));
+    const api = createMobileApi('https://agenthub.example.com', fetcher);
+    const startPayload = {
+      worker_id: 'worker-main',
+      backend: 'codex',
+      workspace_root: 'E:/Work/AgentHub-OSS',
+      namespace: 'default',
+      prompt: '创建一个新会话',
+      title: '移动端新会话',
+      controls: { model: 'gpt-5.6' },
+    };
+
+    await api.startSession(startPayload, 'csrf-token');
+    await api.forkSession('session/1', { prompt: '从这里继续分支', backend: 'claude' }, 'csrf-token');
+    await api.askSessionBtw('session/1', { prompt: '顺便确认一个问题' }, 'csrf-token');
+    await api.renameSession('session/1', '新的标题', 'csrf-token');
+    await api.updateSessionControls('session/1', { model: 'gpt-5.6', approval_mode: 'on-request' }, 'csrf-token');
+    await api.archiveSession('session/1', 'csrf-token');
+    await api.unarchiveSession('session/1', 'csrf-token');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://agenthub.example.com/api/sessions/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(startPayload),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'csrf-token' }),
+      }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://agenthub.example.com/api/sessions/session%2F1/fork',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ prompt: '从这里继续分支', backend: 'claude' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      'https://agenthub.example.com/api/sessions/session%2F1/btw',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ prompt: '顺便确认一个问题' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      4,
+      'https://agenthub.example.com/api/sessions/session%2F1/rename',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ custom_title: '新的标题' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      5,
+      'https://agenthub.example.com/api/sessions/session%2F1/controls',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ model: 'gpt-5.6', approval_mode: 'on-request' }) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      6,
+      'https://agenthub.example.com/api/sessions/session%2F1/archive',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({}) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      7,
+      'https://agenthub.example.com/api/sessions/session%2F1/unarchive',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({}) }),
+    );
+  });
+
   it('submits native audio for server-side transcription', async () => {
     const fetcher = jest.fn<ReturnType<FetchLike>, Parameters<FetchLike>>(async () =>
       jsonResponse({ text: '识别后的文字', diagnostics: { input_bytes: 12 } }),

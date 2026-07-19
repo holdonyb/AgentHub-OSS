@@ -27,6 +27,21 @@ export type NativeSessionStatus =
   | 'failed'
   | 'terminated';
 
+export interface NativeSessionControls {
+  model?: string;
+  approval_mode?: string;
+  sandbox_mode?: string;
+  permission_mode?: string;
+  interaction_bridge?: string;
+  yolo?: boolean;
+  thinking?: boolean;
+  agent?: string;
+  extra_workspace_dirs?: string[];
+  secret_refs?: string[];
+  secret_environment?: string;
+  secret_namespace?: string;
+}
+
 export interface NativeSessionSummary {
   session_id: string;
   title: string;
@@ -40,6 +55,38 @@ export interface NativeSessionSummary {
   latest_session_id?: string | null;
   activity_summary?: string;
   last_message?: string;
+  controls?: NativeSessionControls;
+  runtime_metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  archived_at?: string | null;
+}
+
+export interface NativeSessionStartInput {
+  worker_id: string;
+  backend: string;
+  workspace_root: string;
+  project_name?: string;
+  namespace?: string;
+  prompt: string;
+  title?: string;
+  controls?: NativeSessionControls;
+}
+
+export interface NativeSessionForkInput {
+  worker_id?: string;
+  backend?: string;
+  workspace_root?: string;
+  project_name?: string;
+  namespace?: string;
+  prompt: string;
+  title?: string;
+  controls?: NativeSessionControls;
+}
+
+export interface NativeSessionBtwInput {
+  prompt: string;
+  title?: string;
+  controls?: NativeSessionControls;
 }
 
 export interface NativeTimelineItem {
@@ -447,6 +494,7 @@ export interface MobileApi {
   me(): Promise<NativeAuthPayload>;
   logout(csrfToken: string, deviceId?: string): Promise<{ ok: boolean }>;
   listSessions(): Promise<NativeListPayload<NativeSessionSummary>>;
+  startSession(payload: NativeSessionStartInput, csrfToken: string): Promise<{ job: NativeJob }>;
   getSession(sessionId: string): Promise<{ session: NativeSessionSummary }>;
   getSessionTimeline(
     sessionId: string,
@@ -499,6 +547,28 @@ export interface MobileApi {
     sessionId: string,
     csrfToken: string,
   ): Promise<{ session: NativeSessionSummary }>;
+  forkSession(
+    sessionId: string,
+    payload: NativeSessionForkInput,
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  askSessionBtw(
+    sessionId: string,
+    payload: NativeSessionBtwInput,
+    csrfToken: string,
+  ): Promise<{ job: NativeJob }>;
+  renameSession(
+    sessionId: string,
+    title: string,
+    csrfToken: string,
+  ): Promise<{ session: NativeSessionSummary }>;
+  updateSessionControls(
+    sessionId: string,
+    controls: NativeSessionControls,
+    csrfToken: string,
+  ): Promise<{ session: NativeSessionSummary }>;
+  archiveSession(sessionId: string, csrfToken: string): Promise<{ session: NativeSessionSummary }>;
+  unarchiveSession(sessionId: string, csrfToken: string): Promise<{ session: NativeSessionSummary }>;
   listSessionFiles(
     sessionId: string,
     payload: { path: string },
@@ -575,6 +645,8 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         { csrfToken },
       ),
     listSessions: () => client.get<NativeListPayload<NativeSessionSummary>>('/api/sessions'),
+    startSession: (payload, csrfToken) =>
+      client.post<{ job: NativeJob }>('/api/sessions/start', payload, { csrfToken }),
     getSession: (sessionId) =>
       client.get<{ session: NativeSessionSummary }>(sessionPath(sessionId)),
     getSessionTimeline: (sessionId, options = {}) => {
@@ -641,6 +713,26 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
         {},
         { csrfToken },
       ),
+    forkSession: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/fork`, payload, { csrfToken }),
+    askSessionBtw: (sessionId, payload, csrfToken) =>
+      client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/btw`, payload, { csrfToken }),
+    renameSession: (sessionId, title, csrfToken) =>
+      client.post<{ session: NativeSessionSummary }>(
+        `${sessionPath(sessionId)}/rename`,
+        { custom_title: title },
+        { csrfToken },
+      ),
+    updateSessionControls: (sessionId, controls, csrfToken) =>
+      client.patch<{ session: NativeSessionSummary }>(
+        `${sessionPath(sessionId)}/controls`,
+        controls,
+        { csrfToken },
+      ),
+    archiveSession: (sessionId, csrfToken) =>
+      client.post<{ session: NativeSessionSummary }>(`${sessionPath(sessionId)}/archive`, {}, { csrfToken }),
+    unarchiveSession: (sessionId, csrfToken) =>
+      client.post<{ session: NativeSessionSummary }>(`${sessionPath(sessionId)}/unarchive`, {}, { csrfToken }),
     listSessionFiles: (sessionId, payload, csrfToken) =>
       client.post<{ job: NativeJob }>(`${sessionPath(sessionId)}/files/list`, payload, { csrfToken }),
     readSessionFile: (sessionId, payload, csrfToken) =>
