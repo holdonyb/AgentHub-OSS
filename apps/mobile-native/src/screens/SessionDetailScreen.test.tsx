@@ -692,6 +692,7 @@ describe('native session detail', () => {
     );
     await settle();
 
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '展开回复选项' })));
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '切换到计划模式' })));
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '快捷回复 继续' })));
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '发送回复' })));
@@ -911,9 +912,26 @@ describe('native session detail', () => {
     );
     await settle();
 
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '快捷回复 继续推进' })).toHaveLength(0);
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '展开回复选项' })));
     expect(renderer.root.findByProps({ accessibilityLabel: '快捷回复 继续推进' })).toBeTruthy();
     expect(renderer.root.findByProps({ accessibilityLabel: '快捷回复 换个方案' })).toBeTruthy();
     expect(renderer.root.findAllByProps({ accessibilityLabel: '快捷回复 Implement the plan' })).toHaveLength(0);
+  });
+
+  it('does not expose completed as raw internal status copy', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    expect(renderedText(renderer)).not.toContain('completed');
   });
 
   it('recovers the latest reply status when a detail screen is reopened', async () => {

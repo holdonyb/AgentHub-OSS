@@ -113,6 +113,25 @@ function timelineTime(value: string): string {
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function timelineItemStatusLabel(status: string | null | undefined): string | null {
+  switch (status?.trim().toLowerCase()) {
+    case 'queued':
+      return '排队中';
+    case 'running':
+      return '运行中';
+    case 'needs_reply':
+      return '待回复';
+    case 'failed':
+    case 'error':
+      return '失败';
+    case 'cancelled':
+    case 'canceled':
+      return '已取消';
+    default:
+      return null;
+  }
+}
+
 function sendStateText(job: NativeJob | null, sending: boolean, sendError: string | null) {
   if (sending) return { kind: 'active' as const, text: '正在发送' };
   if (sendError) return { kind: 'error' as const, text: `发送失败：${sendError}` };
@@ -508,6 +527,7 @@ export function SessionDetailScreen({
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [attachmentPickerVisible, setAttachmentPickerVisible] = useState(false);
   const [readerContent, setReaderContent] = useState<{ title: string; text: string; markdown: boolean } | null>(null);
   const [readerTab, setReaderTab] = useState<'text' | 'markdown'>('text');
@@ -1137,9 +1157,11 @@ export function SessionDetailScreen({
             </Pressable>
           ) : null}
         </View>
-        <View style={styles.timelineFooter}>
-          {item.status ? <Text style={styles.timelineStatus}>{item.status}</Text> : <View />}
-        </View>
+        {timelineItemStatusLabel(item.status) ? (
+          <View style={styles.timelineFooter}>
+            <Text style={styles.timelineStatus}>{timelineItemStatusLabel(item.status)}</Text>
+          </View>
+        ) : null}
       </View>
     );
   }
@@ -1463,53 +1485,72 @@ export function SessionDetailScreen({
               </Text>
             </View>
           ) : null}
-          <View style={styles.modeRow}>
-            <Pressable
-              accessibilityLabel="切换到直接模式"
-              accessibilityRole="button"
-              accessibilityState={{ selected: replyMode === 'direct' }}
-              disabled={replyDisabled}
-              onPress={() => setReplyMode('direct')}
-              style={({ pressed }) => [
-                styles.modeButton,
-                replyMode === 'direct' && styles.modeButtonSelected,
-                replyDisabled && styles.disabled,
-                pressed && styles.pressed,
-              ]}
+          <Pressable
+            accessibilityLabel={composerOptionsOpen ? '收起回复选项' : '展开回复选项'}
+            accessibilityRole="button"
+            onPress={() => setComposerOptionsOpen((open) => !open)}
+            style={({ pressed }) => [styles.composerOptionsToggle, pressed && styles.pressed]}
+          >
+            <Ionicons color={colors.accent} name="options-outline" size={16} />
+            <Text style={styles.composerOptionsText}>{replyMode === 'plan' ? '计划模式' : '直接模式'}</Text>
+            {quickReplies.length > 0 ? <Text style={styles.composerOptionsMeta}>快捷回复 {quickReplies.length}</Text> : null}
+            <Ionicons color={colors.muted} name={composerOptionsOpen ? 'chevron-up' : 'chevron-down'} size={15} />
+          </Pressable>
+          {composerOptionsOpen ? (
+            <ScrollView
+              contentContainerStyle={styles.modeRow}
+              horizontal
+              keyboardShouldPersistTaps="handled"
+              showsHorizontalScrollIndicator={false}
             >
-              <Text style={[styles.modeButtonText, replyMode === 'direct' && styles.modeButtonTextSelected]}>直接</Text>
-            </Pressable>
-            <Pressable
-              accessibilityLabel="切换到计划模式"
-              accessibilityRole="button"
-              accessibilityState={{ selected: replyMode === 'plan' }}
-              disabled={replyDisabled}
-              onPress={() => setReplyMode('plan')}
-              style={({ pressed }) => [
-                styles.modeButton,
-                replyMode === 'plan' && styles.modeButtonSelected,
-                replyDisabled && styles.disabled,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={[styles.modeButtonText, replyMode === 'plan' && styles.modeButtonTextSelected]}>计划</Text>
-            </Pressable>
-            {quickReplies.map((quickReply) => (
               <Pressable
-                accessibilityLabel={`快捷回复 ${quickReply}`}
+                accessibilityLabel="切换到直接模式"
                 accessibilityRole="button"
+                accessibilityState={{ selected: replyMode === 'direct' }}
                 disabled={replyDisabled}
-                key={quickReply}
-                onPress={() => {
-                  setReply(quickReply);
-                  setSendError(null);
-                }}
-                style={({ pressed }) => [styles.quickReplyButton, replyDisabled && styles.disabled, pressed && styles.pressed]}
+                onPress={() => setReplyMode('direct')}
+                style={({ pressed }) => [
+                  styles.modeButton,
+                  replyMode === 'direct' && styles.modeButtonSelected,
+                  replyDisabled && styles.disabled,
+                  pressed && styles.pressed,
+                ]}
               >
-                <Text style={styles.quickReplyText}>{quickReply}</Text>
+                <Text style={[styles.modeButtonText, replyMode === 'direct' && styles.modeButtonTextSelected]}>直接</Text>
               </Pressable>
-            ))}
-          </View>
+              <Pressable
+                accessibilityLabel="切换到计划模式"
+                accessibilityRole="button"
+                accessibilityState={{ selected: replyMode === 'plan' }}
+                disabled={replyDisabled}
+                onPress={() => setReplyMode('plan')}
+                style={({ pressed }) => [
+                  styles.modeButton,
+                  replyMode === 'plan' && styles.modeButtonSelected,
+                  replyDisabled && styles.disabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.modeButtonText, replyMode === 'plan' && styles.modeButtonTextSelected]}>计划</Text>
+              </Pressable>
+              {quickReplies.map((quickReply) => (
+                <Pressable
+                  accessibilityLabel={`快捷回复 ${quickReply}`}
+                  accessibilityRole="button"
+                  disabled={replyDisabled}
+                  key={quickReply}
+                  onPress={() => {
+                    setReply(quickReply);
+                    setSendError(null);
+                    setComposerOptionsOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.quickReplyButton, replyDisabled && styles.disabled, pressed && styles.pressed]}
+                >
+                  <Text style={styles.quickReplyText}>{quickReply}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          ) : null}
           <View style={styles.composerRow}>
             <Pressable
               accessibilityLabel="添加附件"
@@ -2310,10 +2351,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopColor: colors.border,
     borderTopWidth: 1,
-    gap: 7,
-    paddingBottom: 10,
-    paddingHorizontal: 12,
-    paddingTop: 9,
+    gap: 6,
+    paddingBottom: 8,
+    paddingHorizontal: 10,
+    paddingTop: 7,
   },
   replyDisabledNotice: {
     alignItems: 'center',
@@ -2346,7 +2387,17 @@ const styles = StyleSheet.create({
   recordingState: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 24 },
   recordingDot: { backgroundColor: colors.danger, borderRadius: 4, height: 8, width: 8 },
   recordingText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
-  modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  composerOptionsToggle: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 28,
+    paddingHorizontal: 2,
+  },
+  composerOptionsText: { color: colors.accent, fontSize: 12, fontWeight: '800' },
+  composerOptionsMeta: { color: colors.muted, fontSize: 11 },
+  modeRow: { flexDirection: 'row', gap: 7, paddingRight: 12 },
   modeButton: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -2354,8 +2405,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 34,
-    paddingHorizontal: 14,
+    minHeight: 32,
+    paddingHorizontal: 12,
   },
   modeButtonSelected: { backgroundColor: '#EEF6FF', borderColor: colors.accent },
   modeButtonText: { color: colors.text, fontSize: 12, fontWeight: '700' },
@@ -2367,19 +2418,19 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 34,
-    paddingHorizontal: 12,
+    minHeight: 32,
+    paddingHorizontal: 11,
   },
   quickReplyText: { color: colors.text, fontSize: 12, fontWeight: '600' },
-  composerRow: { alignItems: 'flex-end', flexDirection: 'row', gap: 9 },
+  composerRow: { alignItems: 'flex-end', flexDirection: 'row', gap: 7 },
   attachButton: {
     alignItems: 'center',
     borderColor: colors.border,
     borderRadius: 7,
     borderWidth: 1,
-    height: 48,
+    height: 44,
     justifyContent: 'center',
-    width: 48,
+    width: 44,
   },
   recordingButton: { backgroundColor: colors.danger, borderColor: colors.danger },
   replyInput: {
@@ -2392,11 +2443,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     maxHeight: 132,
-    minHeight: 48,
+    minHeight: 44,
     paddingHorizontal: 12,
-    paddingVertical: 11,
+    paddingVertical: 9,
   },
-  sendButton: { alignItems: 'center', backgroundColor: colors.accent, borderRadius: 7, height: 48, justifyContent: 'center', width: 48 },
+  sendButton: { alignItems: 'center', backgroundColor: colors.accent, borderRadius: 7, height: 44, justifyContent: 'center', width: 44 },
   sendState: { color: colors.accent, fontSize: 12, fontWeight: '700' },
   sendStateError: { color: colors.danger },
   sendStateSuccess: { color: colors.success },

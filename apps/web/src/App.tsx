@@ -3573,6 +3573,7 @@ function App() {
     !isRecording &&
     !isTranscribing &&
     !isPreparingAttachment;
+  const composerFocusedState = !composerExpanded && !composerCompact;
   const threadPaneClassName = `thread-pane ${isTranscriptScrolled && !statusDetailsOpen ? 'is-reading' : ''}`.trim();
   const selectedJobs = selectedSession
     ? jobs
@@ -7684,7 +7685,7 @@ function App() {
               )}
 
               <form
-                className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''} ${composerCompact ? 'is-compact' : ''}`}
+                className={`reply-box ${isTranscribing ? 'is-transcribing' : ''} ${composerExpanded ? 'is-expanded' : ''} ${composerCompact ? 'is-compact' : ''} ${composerFocusedState ? 'is-focused' : ''}`}
                 onSubmit={handleReply}
                 onFocus={() => setComposerFocused(true)}
                 onBlur={handleComposerBlur}

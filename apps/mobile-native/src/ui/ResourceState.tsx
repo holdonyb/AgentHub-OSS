@@ -1,9 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from './theme';
 
 interface ResourceHeaderProps {
-  eyebrow: string;
+  actions?: ReactNode;
+  compact?: boolean;
+  eyebrow?: string;
   title: string;
   refreshLabel: string;
   refreshing: boolean;
@@ -11,6 +14,8 @@ interface ResourceHeaderProps {
 }
 
 export function ResourceHeader({
+  actions,
+  compact = false,
   eyebrow,
   title,
   refreshLabel,
@@ -18,28 +23,31 @@ export function ResourceHeader({
   onRefresh,
 }: ResourceHeaderProps) {
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, compact && styles.headerCompact]}>
       <View style={styles.headerCopy}>
-        <Text style={styles.eyebrow}>{eyebrow}</Text>
-        <Text style={styles.title}>{title}</Text>
+        {!compact && eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
+        <Text style={[styles.title, compact && styles.titleCompact]}>{title}</Text>
       </View>
-      <Pressable
-        accessibilityLabel={refreshLabel}
-        accessibilityRole="button"
-        disabled={refreshing}
-        onPress={() => void onRefresh()}
-        style={({ pressed }) => [
-          styles.iconButton,
-          pressed && styles.buttonPressed,
-          refreshing && styles.buttonDisabled,
-        ]}
-      >
-        {refreshing ? (
-          <ActivityIndicator color={colors.accent} size="small" />
-        ) : (
-          <Ionicons color={colors.accent} name="refresh" size={21} />
-        )}
-      </Pressable>
+      <View style={styles.headerActions}>
+        {actions}
+        <Pressable
+          accessibilityLabel={refreshLabel}
+          accessibilityRole="button"
+          disabled={refreshing}
+          onPress={() => void onRefresh()}
+          style={({ pressed }) => [
+            styles.iconButton,
+            pressed && styles.buttonPressed,
+            refreshing && styles.buttonDisabled,
+          ]}
+        >
+          {refreshing ? (
+            <ActivityIndicator color={colors.accent} size="small" />
+          ) : (
+            <Ionicons color={colors.accent} name="refresh" size={21} />
+          )}
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -136,9 +144,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
   },
+  headerCompact: { paddingBottom: 10, paddingTop: 10 },
   headerCopy: { flex: 1, gap: 4 },
+  headerActions: { alignItems: 'center', flexDirection: 'row', gap: 7 },
   eyebrow: { color: colors.accent, fontSize: 11, fontWeight: '800' },
   title: { color: colors.text, fontSize: 26, fontWeight: '700' },
+  titleCompact: { fontSize: 22 },
   iconButton: {
     alignItems: 'center',
     backgroundColor: colors.surface,

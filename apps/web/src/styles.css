@@ -4972,7 +4972,7 @@ textarea:disabled {
     --mobile-topbar-height: 50px;
     --mobile-nav-height: 60px;
     --mobile-toast-clearance: 0px;
-    --mobile-composer-clearance: 224px;
+    --mobile-composer-clearance: 156px;
     --mobile-message-bottom-gutter: 20px;
     min-height: 100dvh;
     padding-top: env(safe-area-inset-top, 0px);
@@ -5972,11 +5972,13 @@ textarea:disabled {
 
   .timeline-tabs {
     order: 2;
-    position: sticky;
-    top: 0;
-    z-index: 4;
+    position: static;
+    top: auto;
+    z-index: auto;
     gap: 6px;
     min-height: 30px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
     padding-bottom: 4px;
     border-bottom-color: rgba(91, 141, 184, 0.14);
   }
@@ -6086,6 +6088,21 @@ textarea:disabled {
   .reply-box.is-compact .voice-mode-bar,
   .reply-box.is-compact .quick-reply-strip {
     display: none;
+  }
+
+  .reply-box.is-focused .voice-mode-bar,
+  .reply-box.is-focused .quick-reply-strip {
+    display: none;
+  }
+
+  .reply-box.is-focused .reply-mode-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .reply-box.is-focused textarea {
+    min-height: 64px;
+    max-height: 96px;
   }
 
   .reply-box.is-compact textarea {

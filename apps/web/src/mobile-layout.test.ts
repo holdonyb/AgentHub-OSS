@@ -55,7 +55,7 @@ describe('mobile WebView layout guardrails', () => {
     expect(mobileBlock).toContain('--mobile-topbar-height: 50px');
     expect(mobileBlock).toContain('--mobile-nav-height: 60px');
     expect(mobileBlock).toContain('--mobile-toast-clearance: 0px');
-    expect(mobileBlock).toContain('--mobile-composer-clearance: 224px');
+    expect(mobileBlock).toContain('--mobile-composer-clearance: 156px');
     expect(mobileBlock).toContain('--mobile-message-bottom-gutter: 20px');
     expect(mobileBlock).toMatch(/\.topbar\s*{[^}]*height:\s*var\(--mobile-topbar-height\)/s);
     expect(mobileBlock).toMatch(/\.workspace\s*{[^}]*height:\s*calc\([^}]*var\(--mobile-toast-clearance\)/s);
@@ -133,6 +133,9 @@ describe('mobile WebView layout guardrails', () => {
     expect(styles).toContain('.reply-box.is-compact .reply-mode-tabs');
     expect(styles).toContain('.reply-box.is-compact .voice-mode-bar');
     expect(styles).toContain('.reply-box.is-compact .quick-reply-strip');
+    expect(styles).toContain('.reply-box.is-focused .voice-mode-bar');
+    expect(styles).toContain('.reply-box.is-focused .quick-reply-strip');
+    expect(mobileBlock).toMatch(/\.reply-box\.is-focused textarea\s*{[^}]*min-height:\s*64px[^}]*max-height:\s*96px/s);
     expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*min-height:\s*142px/s);
     expect(mobileBlock).toMatch(/\.reply-box\.is-expanded textarea\s*{[^}]*max-height:\s*min\(42dvh,\s*260px\)/s);
   });
