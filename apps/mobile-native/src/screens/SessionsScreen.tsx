@@ -117,6 +117,7 @@ export function SessionsScreen({
 }) {
   const [selectedSession, setSelectedSession] = useState<NativeSessionSummary | null>(null);
   const [viewMode, setViewMode] = useState<'overview' | 'inbox'>('inbox');
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [archiveView, setArchiveView] = useState<SessionArchiveView>('active');
   const [backendFilter, setBackendFilter] = useState('all');
@@ -480,7 +481,7 @@ export function SessionsScreen({
           <View style={styles.badge}><Text style={styles.badgeText}>{item.backend}</Text></View>
           <Text numberOfLines={1} style={styles.workerText}>{item.worker_id}</Text>
         </View>
-        {summary ? <Text numberOfLines={3} style={styles.summaryText}>{summary}</Text> : null}
+        {summary ? <Text numberOfLines={2} style={styles.summaryText}>{summary}</Text> : null}
         <View style={styles.footerRow}>
           <Text style={styles.statusText}>{sessionStatusLabel(item.status)}</Text>
           <Text style={styles.activityText}>{formatLastActivity(sessionActivityAt(item))}</Text>
@@ -496,25 +497,39 @@ export function SessionsScreen({
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
       <ResourceHeader
-        eyebrow="SESSION INBOX"
+        actions={(
+          <>
+            {viewMode === 'inbox' ? (
+              <Pressable
+                accessibilityLabel={searchOpen ? '关闭会话搜索' : '打开会话搜索'}
+                accessibilityRole="button"
+                onPress={() => {
+                  if (searchOpen && query) setQuery('');
+                  setSearchOpen((open) => !open);
+                }}
+                style={({ pressed }) => [styles.headerIconAction, searchOpen && styles.headerIconActionSelected, pressed && styles.cardPressed]}
+              >
+                <Ionicons color={searchOpen ? colors.surface : colors.accent} name={searchOpen ? 'close' : 'search-outline'} size={20} />
+              </Pressable>
+            ) : null}
+            {canOperate ? (
+              <Pressable
+                accessibilityLabel="新建会话"
+                accessibilityRole="button"
+                onPress={() => void openLaunch()}
+                style={({ pressed }) => [styles.headerIconAction, styles.headerPrimaryAction, pressed && styles.cardPressed]}
+              >
+                <Ionicons color={colors.surface} name="add" size={21} />
+              </Pressable>
+            ) : null}
+          </>
+        )}
+        compact
         onRefresh={resource.reload}
         refreshLabel="刷新会话"
         refreshing={resource.loading || resource.refreshing}
         title="会话"
       />
-      {canOperate ? (
-        <View style={styles.launchActionWrap}>
-          <Pressable
-            accessibilityLabel="新建会话"
-            accessibilityRole="button"
-            onPress={() => void openLaunch()}
-            style={({ pressed }) => [styles.launchAction, pressed && styles.cardPressed]}
-          >
-            <Ionicons color={colors.surface} name="add" size={18} />
-            <Text style={styles.launchActionText}>新建会话</Text>
-          </Pressable>
-        </View>
-      ) : null}
       <View style={styles.viewModeSwitch}>
         <Pressable
           accessibilityLabel="查看运行总览"
@@ -542,7 +557,7 @@ export function SessionsScreen({
           <Text style={[styles.viewModeText, viewMode === 'inbox' && styles.viewModeTextSelected]}>会话</Text>
         </Pressable>
       </View>
-      {viewMode === 'inbox' ? <View style={styles.searchWrap}>
+      {viewMode === 'inbox' && searchOpen ? <View style={styles.searchWrap}>
         <Ionicons color={colors.muted} name="search-outline" size={18} />
         <TextInput
           accessibilityLabel="搜索会话"
@@ -599,66 +614,43 @@ export function SessionsScreen({
             {activeFilterCount > 0 ? `已筛选 ${activeFilterCount} 项` : '筛选'}
           </Text>
         </Pressable>
+        {canOperate && !batchSelecting ? (
+          <Pressable
+            accessibilityLabel="批量选择会话"
+            accessibilityRole="button"
+            onPress={() => setBatchSelecting(true)}
+            style={({ pressed }) => [styles.utilityIconButton, pressed && styles.cardPressed]}
+          >
+            <Ionicons color={colors.accent} name="checkbox-outline" size={18} />
+          </Pressable>
+        ) : null}
       </View> : null}
-      {viewMode === 'inbox' && canOperate ? (
+      {viewMode === 'inbox' && canOperate && batchSelecting ? (
         <View style={styles.batchBar}>
-          {batchSelecting ? (
-            <>
-              <Text style={styles.batchCount}>已选 {selectedSessionIds.size} 个</Text>
-              <Pressable
-                accessibilityLabel="取消批量选择"
-                accessibilityRole="button"
-                disabled={batchBusy}
-                onPress={() => {
-                  setBatchSelecting(false);
-                  setSelectedSessionIds(new Set());
-                }}
-                style={({ pressed }) => [styles.batchSecondary, pressed && styles.cardPressed]}
-              >
-                <Text style={styles.batchSecondaryText}>取消</Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={archiveView === 'archived' ? '恢复所选会话' : '归档所选会话'}
-                accessibilityRole="button"
-                disabled={selectedSessionIds.size === 0 || batchBusy}
-                onPress={() => setBatchConfirmOpen(true)}
-                style={({ pressed }) => [styles.batchPrimary, (selectedSessionIds.size === 0 || batchBusy) && styles.disabled, pressed && styles.cardPressed]}
-              >
-                <Text style={styles.batchPrimaryText}>{archiveView === 'archived' ? '恢复' : '归档'}</Text>
-              </Pressable>
-            </>
-          ) : (
-            <Pressable
-              accessibilityLabel="批量选择会话"
-              accessibilityRole="button"
-              onPress={() => setBatchSelecting(true)}
-              style={({ pressed }) => [styles.batchSecondary, pressed && styles.cardPressed]}
-            >
-              <Ionicons color={colors.accent} name="checkbox-outline" size={17} />
-              <Text style={styles.batchSecondaryText}>批量选择</Text>
-            </Pressable>
-          )}
+          <Text style={styles.batchCount}>已选 {selectedSessionIds.size} 个</Text>
+          <Pressable
+            accessibilityLabel="取消批量选择"
+            accessibilityRole="button"
+            disabled={batchBusy}
+            onPress={() => {
+              setBatchSelecting(false);
+              setSelectedSessionIds(new Set());
+            }}
+            style={({ pressed }) => [styles.batchSecondary, pressed && styles.cardPressed]}
+          >
+            <Text style={styles.batchSecondaryText}>取消</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel={archiveView === 'archived' ? '恢复所选会话' : '归档所选会话'}
+            accessibilityRole="button"
+            disabled={selectedSessionIds.size === 0 || batchBusy}
+            onPress={() => setBatchConfirmOpen(true)}
+            style={({ pressed }) => [styles.batchPrimary, (selectedSessionIds.size === 0 || batchBusy) && styles.disabled, pressed && styles.cardPressed]}
+          >
+            <Text style={styles.batchPrimaryText}>{archiveView === 'archived' ? '恢复' : '归档'}</Text>
+          </Pressable>
         </View>
       ) : null}
-      {viewMode === 'inbox' ? <ScrollView
-        contentContainerStyle={styles.filterWrap}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-      >
-        {availableBackends.map((backend) => {
-          const selected = backend === backendFilter;
-          return (
-            <ChoiceChip
-              accessibilityLabel={backend === 'all' ? '筛选全部后端' : `筛选后端 ${backend}`}
-              key={backend}
-              label={backend === 'all' ? '全部' : backend}
-              onPress={() => setBackendFilter(backend)}
-              selected={selected}
-            />
-          );
-        })}
-      </ScrollView> : null}
       {launchNotice ? (
         <View style={styles.noticeBanner}>
           <Ionicons color={colors.success} name="checkmark-circle-outline" size={18} />
@@ -737,6 +729,18 @@ export function SessionsScreen({
               <Pressable accessibilityLabel="关闭会话筛选" accessibilityRole="button" onPress={() => setFilterOpen(false)} style={styles.sheetClose}>
                 <Ionicons color={colors.text} name="close" size={22} />
               </Pressable>
+            </View>
+            <Text style={styles.filterSectionTitle}>后端</Text>
+            <View style={styles.filterChoices}>
+              {availableBackends.map((backend) => (
+                <ChoiceChip
+                  accessibilityLabel={backend === 'all' ? '筛选全部后端' : `筛选后端 ${backend}`}
+                  key={backend}
+                  label={backend === 'all' ? '全部' : backend}
+                  onPress={() => setBackendFilter(backend)}
+                  selected={backendFilter === backend}
+                />
+              ))}
             </View>
             <Text style={styles.filterSectionTitle}>状态</Text>
             <View style={styles.filterChoices}>
@@ -1075,7 +1079,29 @@ function errorMessage(error: unknown): string {
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: colors.canvas, flex: 1 },
-  batchBar: { alignItems: 'center', flexDirection: 'row', gap: 10, justifyContent: 'flex-end', paddingBottom: 8, paddingHorizontal: 16 },
+  headerIconAction: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 7,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  headerIconActionSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
+  headerPrimaryAction: { backgroundColor: colors.accent, borderColor: colors.accent },
+  utilityIconButton: {
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    marginLeft: 'auto',
+    width: 38,
+  },
+  batchBar: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'flex-end', paddingBottom: 7, paddingHorizontal: 16 },
   batchCount: { color: colors.muted, flex: 1, fontSize: 13, fontWeight: '700' },
   batchPrimary: { alignItems: 'center', backgroundColor: colors.accent, borderRadius: 7, minHeight: 36, justifyContent: 'center', paddingHorizontal: 16 },
   batchPrimaryText: { color: colors.surface, fontSize: 14, fontWeight: '800' },
@@ -1093,7 +1119,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 8,
     padding: 3,
   },
   viewModeButton: {
@@ -1102,26 +1128,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     justifyContent: 'center',
-    minHeight: 36,
-    minWidth: 104,
-    paddingHorizontal: 14,
+    minHeight: 34,
+    minWidth: 98,
+    paddingHorizontal: 12,
   },
   viewModeButtonSelected: { backgroundColor: colors.accent },
   viewModeText: { color: colors.muted, fontSize: 14, fontWeight: '800' },
   viewModeTextSelected: { color: colors.surface },
-  launchActionWrap: { paddingBottom: 10, paddingHorizontal: 16 },
-  launchAction: {
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    borderRadius: 7,
-    flexDirection: 'row',
-    gap: 7,
-    justifyContent: 'center',
-    minHeight: 44,
-  },
-  launchActionText: { color: colors.surface, fontSize: 14, fontWeight: '800' },
-  list: { gap: 10, paddingBottom: 28, paddingHorizontal: 16 },
-  archiveSwitch: { flexDirection: 'row', gap: 8, marginBottom: 10, paddingHorizontal: 16 },
+  list: { gap: 8, paddingBottom: 24, paddingHorizontal: 16 },
+  archiveSwitch: { alignItems: 'center', flexDirection: 'row', gap: 6, marginBottom: 8, paddingHorizontal: 16 },
   archiveChip: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -1129,9 +1144,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 38,
-    minWidth: 88,
-    paddingHorizontal: 16,
+    minHeight: 34,
+    minWidth: 72,
+    paddingHorizontal: 13,
   },
   archiveChipSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
   archiveChipText: { color: colors.text, fontSize: 14, fontWeight: '700' },
@@ -1145,14 +1160,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 6,
     justifyContent: 'center',
-    minHeight: 38,
-    paddingHorizontal: 13,
+    minHeight: 34,
+    paddingHorizontal: 11,
   },
   filterButtonActive: { backgroundColor: colors.accent, borderColor: colors.accent },
   filterButtonText: { color: colors.accent, fontSize: 13, fontWeight: '700' },
   filterButtonTextActive: { color: colors.surface },
-  filterScroll: { marginBottom: 12 },
-  filterWrap: { gap: 8, paddingHorizontal: 16 },
   searchWrap: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -1161,7 +1174,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 8,
     marginHorizontal: 16,
     paddingHorizontal: 12,
   },
@@ -1169,7 +1182,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     flex: 1,
     fontSize: 14,
-    minHeight: 46,
+    minHeight: 42,
   },
   clearButton: {
     alignItems: 'center',
@@ -1182,15 +1195,15 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 7,
     borderWidth: 1,
-    gap: 12,
-    padding: 15,
+    gap: 7,
+    padding: 12,
   },
   cardPressed: { opacity: 0.72 },
   cardTitleRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 10 },
-  cardTitle: { color: colors.text, flex: 1, fontSize: 16, fontWeight: '700', lineHeight: 22 },
-  metadataRow: { alignItems: 'center', flexDirection: 'row', gap: 9 },
-  summaryText: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: -2 },
-  badge: { backgroundColor: colors.surfaceMuted, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4 },
+  cardTitle: { color: colors.text, flex: 1, fontSize: 15, fontWeight: '700', lineHeight: 20 },
+  metadataRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
+  summaryText: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  badge: { backgroundColor: colors.surfaceMuted, borderRadius: 4, paddingHorizontal: 7, paddingVertical: 3 },
   badgeText: { color: colors.text, fontSize: 12, fontWeight: '700' },
   workerText: { color: colors.muted, flex: 1, fontSize: 12 },
   footerRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },

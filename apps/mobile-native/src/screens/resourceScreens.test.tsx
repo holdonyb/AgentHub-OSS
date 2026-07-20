@@ -283,6 +283,7 @@ describe('native resource screens', () => {
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话 修复登录问题' })));
     await settle();
 
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '展开回复选项' })));
     expect(renderer.root.findByProps({ accessibilityLabel: '快捷回复 继续推进' })).toBeTruthy();
     expect(renderer.root.findAllByProps({ accessibilityLabel: '快捷回复 Implement the plan' })).toHaveLength(0);
   });
@@ -310,6 +311,7 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('修复登录问题');
     expect(renderedText(renderer)).toContain('处理 Claude API 报错');
 
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话搜索' })));
     await act(async () => {
       changeText(renderer.root.findByProps({ accessibilityLabel: '搜索会话' }), 'claude');
     });
@@ -348,6 +350,8 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).not.toContain('修复登录问题');
     expect(renderedText(renderer)).toContain('Claude 后台任务');
     expect(renderedText(renderer)).toContain('已筛选 2 项');
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '筛选后端 claude' })).toHaveLength(0);
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话筛选' })));
     expect(renderer.root.findByProps({ accessibilityLabel: '筛选后端 claude' })).toBeTruthy();
   });
 
@@ -368,7 +372,9 @@ describe('native resource screens', () => {
     const renderer = await render(<SessionsScreen api={createSessionsApi(listSessions)} />);
     await settle();
 
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话筛选' })));
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选后端 claude' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '完成会话筛选' })));
 
     expect(renderedText(renderer)).toContain('已筛选 1 项');
     expect(renderedText(renderer)).not.toContain('修复登录问题');
@@ -526,7 +532,7 @@ describe('native resource screens', () => {
     await act(async () => {
       press(renderer.root.findByProps({ accessibilityLabel: '返回会话列表' }));
     });
-    expect(renderedText(renderer)).toContain('SESSION INBOX');
+    expect(renderedText(renderer)).toContain('会话');
     expect(renderedText(renderer)).toContain('修复登录问题');
   });
 
@@ -637,7 +643,9 @@ describe('native resource screens', () => {
     expect(renderedText(renderer)).toContain('等待你回复：请确认新的修复方案');
     expect(renderedText(renderer)).toContain('Invalid API key');
 
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话筛选' })));
     await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '筛选后端 claude' })));
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '完成会话筛选' })));
     expect(renderedText(renderer)).toContain('处理 Claude API 报错');
     expect(renderedText(renderer)).not.toContain('修复登录问题');
 
@@ -647,6 +655,22 @@ describe('native resource screens', () => {
     expect(listSessions).toHaveBeenLastCalledWith({ archived: true });
     expect(renderedText(renderer)).toContain('历史 Claude 会话');
     expect(renderedText(renderer)).toContain('历史归档摘要');
+  });
+
+  it('keeps search and backend filters out of the default session viewport', async () => {
+    const renderer = await render(
+      <SessionsScreen api={createSessionsApi(jest.fn(async () => ({ items: [session] })))} canOperate csrfToken="csrf-token" />,
+    );
+    await settle();
+
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '搜索会话' })).toHaveLength(0);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '筛选后端 codex' })).toHaveLength(0);
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话搜索' })));
+    expect(renderer.root.findByProps({ accessibilityLabel: '搜索会话' })).toBeTruthy();
+
+    await act(async () => press(renderer.root.findByProps({ accessibilityLabel: '打开会话筛选' })));
+    expect(renderer.root.findByProps({ accessibilityLabel: '筛选后端 codex' })).toBeTruthy();
   });
 
   it('batch archives selected sessions only after explicit confirmation', async () => {

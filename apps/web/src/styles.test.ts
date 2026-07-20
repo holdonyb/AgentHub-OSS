@@ -93,7 +93,7 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/\.message-block\s*{[^}]*min-height:\s*0/s);
     expect(styles).toMatch(/\.timeline-tabs\s*{[^}]*position:\s*relative/s);
     const mobileBlock = styles.match(/@media \(max-width: 760px\) \{(?<body>[\s\S]+?)\n\}/)?.groups?.body ?? '';
-    expect(mobileBlock).toMatch(/\.timeline-tabs\s*{[^}]*position:\s*sticky/s);
+    expect(mobileBlock).toMatch(/\.timeline-tabs\s*{[^}]*position:\s*static/s);
   });
 
   it('keeps desktop dark theme surfaces readable instead of mixing white admin cards', () => {
