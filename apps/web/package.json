@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/web",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,8 +9,8 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@agenthub/client-core": "1.0.2",
-    "@agenthub/protocol": "1.0.2",
+    "@agenthub/client-core": "1.0.3",
+    "@agenthub/protocol": "1.0.3",
     "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.6.2",
     "@capacitor/local-notifications": "^7.0.6",

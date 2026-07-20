@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.3 - 2026-07-20
+
+- Reworked the native Android session inbox into a denser phone-first layout with compact actions, on-demand search, and backend/status/worker filters in a bottom sheet.
+- Reduced native session-card height while preserving title, backend, worker, attention state, activity time, and a bounded transcript preview.
+- Simplified the native session detail composer so reply modes and quick actions stay collapsed until needed, leaving substantially more space for the timeline.
+- Localized native execution states and stopped exposing raw terminal values such as `completed` in the conversation UI.
+- Reduced the WebView mobile composer footprint, collapsed secondary controls while typing, and made timeline filters horizontally scrollable instead of consuming sticky viewport space.
+- Verified the native layout against the configured production server in an Android emulator, including login, real sessions, filters, detail navigation, and reply-option expansion.
+
 ## v1.0.2 - 2026-07-19
 
 - Expanded the React Native console into a complete mobile control surface: session search and reply, approvals, full-message reader, image and voice input, task creation and review, worker diagnostics, notification inbox, and update checks.
