@@ -96,6 +96,14 @@ describe('AgentHub responsive layout styles', () => {
     expect(mobileBlock).toMatch(/\.timeline-tabs\s*{[^}]*position:\s*static/s);
   });
 
+  it('uses progressive disclosure for the desktop quiet cockpit', () => {
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.session-filter-drawer:not\(\.is-open\)\s*{[^}]*display:\s*none/s);
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.ops-rail\[data-inspector-mode='overview'\] > \.rail-panel\s*{[^}]*display:\s*none/s);
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-actions\s*{[^}]*opacity:\s*0/s);
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.reply-box:not\(\.is-focused\):not\(\.is-expanded\):not\(\.is-transcribing\) \.voice-mode-bar/s);
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-block > \*\s*{[^}]*max-width:\s*920px/s);
+  });
+
   it('keeps desktop dark theme surfaces readable instead of mixing white admin cards', () => {
     expect(styles).toMatch(/\.app-shell\.theme-dark \.reply-box\s*{[^}]*background:\s*rgba\(20,\s*29,\s*42,\s*0\.96\)/s);
     expect(styles).toMatch(/\.app-shell\.theme-dark \.permission-card,\s*\n\.app-shell\.theme-dark \.rail-panel,\s*\n\.app-shell\.theme-dark \.inspector-overview\s*{[^}]*background:\s*#141d2a/s);
