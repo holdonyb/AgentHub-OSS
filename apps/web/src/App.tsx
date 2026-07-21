@@ -98,6 +98,7 @@ type LoadState = 'loading' | 'ready' | 'login' | 'error';
 type MobilePane = 'sessions' | 'thread' | 'controls' | 'files' | 'workers' | 'me';
 type WorkspaceView = 'explorer' | 'preview';
 type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi' | 'opencode';
+type InspectorMode = 'overview' | 'controls';
 type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
 type ReplyMode = 'direct' | 'plan';
@@ -3295,6 +3296,8 @@ function App() {
   const [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  const [sessionFiltersOpen, setSessionFiltersOpen] = useState(false);
+  const [inspectorMode, setInspectorMode] = useState<InspectorMode>('overview');
   const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
   const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
@@ -7325,60 +7328,76 @@ function App() {
               </button>
             )}
           </label>
-          <div className="provider-filter" aria-label={pickLocale(locale, 'Provider 筛选', 'Provider filters')}>
-            {providerFilters(locale).map((filter) => (
-              <button
-                key={filter.id}
-                type="button"
-                className={providerFilter === filter.id ? 'selected' : ''}
-                onClick={() => setProviderFilter(filter.id)}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-          <div className="sort-row">
-            <span>{text.sortRecent}</span>
+          <button
+            type="button"
+            className="session-filter-toggle"
+            aria-label={pickLocale(locale, '筛选会话', 'Filter sessions')}
+            aria-expanded={sessionFiltersOpen}
+            onClick={() => setSessionFiltersOpen((open) => !open)}
+          >
             <SlidersHorizontal size={15} />
-          </div>
-          {canOperate(user) && (
-            <div className="session-bulk-toolbar" role="group" aria-label={t(locale, 'sessionBulkActions')}>
-              {sessionSelectionMode ? (
-                <>
-                  <button type="button" onClick={() => setAllVisibleSessionsSelected(true)}>
-                    {t(locale, 'selectAllVisible')}
-                  </button>
-                  <button type="button" onClick={() => setAllVisibleSessionsSelected(false)}>
-                    {t(locale, 'clearSelection')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleBatchArchiveSessions(sessionArchiveView !== 'archived')}
-                    disabled={selectedVisibleSessionIds.length === 0}
-                  >
-                    {sessionArchiveView === 'archived' ? t(locale, 'restoreSelected') : t(locale, 'archiveSelected')}
-                  </button>
-                  <span className="session-bulk-count">
-                    {t(locale, 'selectedCount', { count: String(selectedVisibleSessionIds.length) })}
-                  </span>
-                  <button
-                    type="button"
-                    className="session-bulk-cancel"
-                    onClick={() => {
-                      setSessionSelectionMode(false);
-                      setSelectedSessionIds(new Set());
-                    }}
-                  >
-                    {t(locale, 'cancelSelection')}
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => setSessionSelectionMode(true)}>
-                  {t(locale, 'selectSessions')}
+            <span>{pickLocale(locale, '筛选会话', 'Filter sessions')}</span>
+            <ChevronDown size={14} />
+          </button>
+          <div
+            className={`session-filter-drawer ${sessionFiltersOpen ? 'is-open' : ''}`}
+            data-open={sessionFiltersOpen}
+          >
+            <div className="provider-filter" aria-label={pickLocale(locale, 'Provider 筛选', 'Provider filters')}>
+              {providerFilters(locale).map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  className={providerFilter === filter.id ? 'selected' : ''}
+                  onClick={() => setProviderFilter(filter.id)}
+                >
+                  {filter.label}
                 </button>
-              )}
+              ))}
             </div>
-          )}
+            <div className="sort-row">
+              <span>{text.sortRecent}</span>
+              <SlidersHorizontal size={15} />
+            </div>
+            {canOperate(user) && (
+              <div className="session-bulk-toolbar" role="group" aria-label={t(locale, 'sessionBulkActions')}>
+                {sessionSelectionMode ? (
+                  <>
+                    <button type="button" onClick={() => setAllVisibleSessionsSelected(true)}>
+                      {t(locale, 'selectAllVisible')}
+                    </button>
+                    <button type="button" onClick={() => setAllVisibleSessionsSelected(false)}>
+                      {t(locale, 'clearSelection')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleBatchArchiveSessions(sessionArchiveView !== 'archived')}
+                      disabled={selectedVisibleSessionIds.length === 0}
+                    >
+                      {sessionArchiveView === 'archived' ? t(locale, 'restoreSelected') : t(locale, 'archiveSelected')}
+                    </button>
+                    <span className="session-bulk-count">
+                      {t(locale, 'selectedCount', { count: String(selectedVisibleSessionIds.length) })}
+                    </span>
+                    <button
+                      type="button"
+                      className="session-bulk-cancel"
+                      onClick={() => {
+                        setSessionSelectionMode(false);
+                        setSelectedSessionIds(new Set());
+                      }}
+                    >
+                      {t(locale, 'cancelSelection')}
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setSessionSelectionMode(true)}>
+                    {t(locale, 'selectSessions')}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           {filteredSessions.length === 0 && (
             <p className="empty">{sessionArchiveView === 'archived' ? t(locale, 'noArchivedSessions') : t(locale, 'noSessions')}</p>
           )}
@@ -7896,8 +7915,39 @@ function App() {
           )}
         </section>
 
-        <aside className="ops-rail" aria-label="Controls">
+        <aside className="ops-rail" aria-label="Controls" data-inspector-mode={inspectorMode}>
           <h2 className="rail-title">{text.controls}</h2>
+          <div className="inspector-switch">
+            <div className="inspector-tabs" role="tablist" aria-label={pickLocale(locale, '检查器视图', 'Inspector view')}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'overview'}
+                className={inspectorMode === 'overview' ? 'selected' : ''}
+                onClick={() => setInspectorMode('overview')}
+              >
+                {pickLocale(locale, '概览', 'Overview')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'controls'}
+                className={inspectorMode === 'controls' ? 'selected' : ''}
+                onClick={() => setInspectorMode('controls')}
+              >
+                {pickLocale(locale, '控制', 'Controls')}
+              </button>
+            </div>
+            <button
+              type="button"
+              className="inspector-files-button"
+              onClick={navigateRemoteWorkspace}
+              aria-label={pickLocale(locale, '打开工作区', 'Open workspace')}
+              title={pickLocale(locale, '打开工作区', 'Open workspace')}
+            >
+              <Folder size={16} />
+            </button>
+          </div>
           <Panel title={text.preferences} icon={<Smartphone size={16} />} defaultOpen={false}>
             <PreferencesEditor
               locale={locale}
