@@ -5,7 +5,11 @@ import os
 import hashlib
 import re
 import shutil
+import sqlite3
 import subprocess
+import threading
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,11 @@ from agenthub_worker.paths import infer_claude_workspace_root_from_runtime_ref, 
 GENERIC_TITLES = {"codex session", "claude session", "kimi session", "opencode session", "session"}
 DEFAULT_DISCOVERY_MAX_FILES = 80
 DEFAULT_RUNNING_STALE_SECONDS = 1800
+DEFAULT_DISCOVERY_HEAD_BYTES = 131_072
+DEFAULT_DISCOVERY_TAIL_BYTES = 786_432
+DEFAULT_DISCOVERY_CURSOR_TTL_SECONDS = 300
+DISCOVERY_CACHE_VERSION = 2
+WINDOWS_ACL_REQUIRED = os.name == "nt"
 DISCOVERY_PRUNED_DIRS = {
     ".git",
     ".hg",
@@ -55,11 +64,715 @@ CLAUDE_LOCAL_COMMAND_TAGS = (
 CODEX_ROLLOUT_SESSION_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$")
 
 
+@dataclass
+class _SessionFileRecord:
+    backend: str
+    path: Path
+    mtime: float
+    size: int
+
+
+@dataclass
+class _RootScanState:
+    root: Path
+    records: dict[str, _SessionFileRecord] = field(default_factory=dict)
+    last_full_scan_at: float = 0.0
+
+
+@dataclass
+class _CacheStat:
+    st_size: int
+    st_mtime: float
+    st_mtime_ns: int
+
+
 def _env_int(name: str, fallback: int) -> int:
     try:
         return max(1, int(os.getenv(name, str(fallback))))
     except ValueError:
         return fallback
+
+
+def _runtime_dir() -> Path:
+    configured = os.getenv("AGENTHUB_DISCOVERY_RUNTIME_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    return Path.home() / ".agenthub"
+
+
+def _snapshot_cache_path() -> Path:
+    configured = os.getenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", "").strip()
+    if configured:
+        return Path(configured)
+    return _runtime_dir() / "discovery-cache.sqlite3"
+
+
+class _SnapshotCache:
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+        self._lock = threading.Lock()
+        self._initialized = False
+        self._acl_identity: str | None = None
+        self._acl_secured_paths: set[str] = set()
+
+    @staticmethod
+    def _is_corruption_error(error: sqlite3.DatabaseError) -> bool:
+        message = str(error).lower()
+        return any(
+            marker in message
+            for marker in (
+                "file is not a database",
+                "database disk image is malformed",
+                "malformed database schema",
+                "unsupported file format",
+            )
+        )
+
+    @staticmethod
+    def _chmod_private(path: Path, mode: int) -> None:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+    def _secure_cache_files(self) -> None:
+        self._chmod_private(self._db_path.parent, 0o700)
+        if WINDOWS_ACL_REQUIRED and self._db_path.parent.exists():
+            self._apply_windows_private_acl(self._db_path.parent, directory=True)
+        for path in (
+            self._db_path,
+            Path(f"{self._db_path}-wal"),
+            Path(f"{self._db_path}-shm"),
+        ):
+            if path.exists():
+                self._chmod_private(path, 0o600)
+                if WINDOWS_ACL_REQUIRED:
+                    self._apply_windows_private_acl(path, directory=False)
+
+    def _windows_identity_name(self) -> str:
+        if self._acl_identity is not None:
+            return self._acl_identity
+        completed = subprocess.run(
+            ["whoami"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        identity = completed.stdout.strip()
+        if completed.returncode != 0 or not identity:
+            raise PermissionError("unable to resolve the Windows account for discovery cache ACLs")
+        self._acl_identity = identity
+        return identity
+
+    def _apply_windows_private_acl(self, path: Path, *, directory: bool) -> None:
+        key = str(path)
+        if key in self._acl_secured_paths:
+            return
+        identity = self._windows_identity_name()
+        script = r"""
+$targetPath = $env:AGENTHUB_DISCOVERY_ACL_PATH
+$identity = $env:AGENTHUB_DISCOVERY_ACL_IDENTITY
+$isDirectory = $env:AGENTHUB_DISCOVERY_ACL_DIRECTORY -eq '1'
+$acl = if ($isDirectory) {
+    New-Object System.Security.AccessControl.DirectorySecurity
+} else {
+    New-Object System.Security.AccessControl.FileSecurity
+}
+$acl.SetAccessRuleProtection($true, $false)
+$inheritance = if ($isDirectory) {
+    [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+} else {
+    [System.Security.AccessControl.InheritanceFlags]::None
+}
+$propagation = [System.Security.AccessControl.PropagationFlags]::None
+$allow = [System.Security.AccessControl.AccessControlType]::Allow
+$principals = @($identity)
+foreach ($principal in $principals) {
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $principal,
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        $propagation,
+        $allow
+    )
+    [void]$acl.AddAccessRule($rule)
+}
+$accessSections = [System.Security.AccessControl.AccessControlSections]::Access
+if ($isDirectory) {
+    [System.IO.Directory]::SetAccessControl($targetPath, $acl)
+    $verifiedAcl = [System.IO.Directory]::GetAccessControl($targetPath, $accessSections)
+} else {
+    [System.IO.File]::SetAccessControl($targetPath, $acl)
+    $verifiedAcl = [System.IO.File]::GetAccessControl($targetPath, $accessSections)
+}
+$allowedSids = @(
+    (New-Object System.Security.Principal.NTAccount -ArgumentList $identity).Translate(
+        [System.Security.Principal.SecurityIdentifier]
+    ).Value
+)
+$actualSids = @()
+foreach ($rule in $verifiedAcl.Access) {
+    $sid = $rule.IdentityReference.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+    ).Value
+    $actualSids += $sid
+    if ($rule.AccessControlType -ne $allow -or $sid -notin $allowedSids) {
+        throw "unexpected ACL entry on discovery cache: $sid"
+    }
+}
+foreach ($requiredSid in $allowedSids) {
+    if ($requiredSid -notin $actualSids) {
+        throw "missing ACL entry on discovery cache: $requiredSid"
+    }
+}
+"""
+        acl_environment = os.environ.copy()
+        acl_environment.update(
+            {
+                "AGENTHUB_DISCOVERY_ACL_PATH": str(path),
+                "AGENTHUB_DISCOVERY_ACL_IDENTITY": identity,
+                "AGENTHUB_DISCOVERY_ACL_DIRECTORY": "1" if directory else "0",
+            }
+        )
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env=acl_environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode != 0:
+            raise PermissionError(f"unable to secure discovery cache ACL for {path}")
+        self._acl_secured_paths.add(key)
+
+    def _discard_cache_files(self) -> None:
+        for path in (
+            self._db_path,
+            Path(f"{self._db_path}-wal"),
+            Path(f"{self._db_path}-shm"),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _open_connection(db_path: Path) -> sqlite3.Connection:
+        connection = sqlite3.connect(db_path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
+
+    def _connect(self) -> sqlite3.Connection:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._secure_cache_files()
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = self._open_connection(self._db_path)
+            connection.execute("PRAGMA schema_version").fetchone()
+            self._ensure_schema(connection)
+        except sqlite3.DatabaseError as error:
+            if connection is not None:
+                connection.close()
+            if not self._is_corruption_error(error):
+                raise
+            self._discard_cache_files()
+            self._initialized = False
+            connection = self._open_connection(self._db_path)
+            try:
+                self._ensure_schema(connection)
+            except Exception:
+                connection.close()
+                raise
+        try:
+            self._secure_cache_files()
+        except Exception:
+            if connection is not None:
+                connection.close()
+            raise
+        return connection
+
+    def _ensure_schema(self, connection: sqlite3.Connection) -> None:
+        if self._initialized:
+            return
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_snapshot_cache (
+                path TEXT PRIMARY KEY,
+                backend TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                cache_version INTEGER NOT NULL DEFAULT 1,
+                snapshot_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_file_index (
+                root TEXT NOT NULL,
+                path TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(root, path)
+            )
+            """
+        )
+        index_primary_key = [
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(session_file_index)").fetchall()
+            if int(row[5]) > 0
+        ]
+        if index_primary_key != ["root", "path"]:
+            connection.execute("ALTER TABLE session_file_index RENAME TO session_file_index_legacy")
+            connection.execute(
+                """
+                CREATE TABLE session_file_index (
+                    root TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    backend TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    mtime REAL NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(root, path)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO session_file_index(root, path, backend, size, mtime, updated_at)
+                SELECT root, path, backend, size, mtime, updated_at
+                FROM session_file_index_legacy
+                """
+            )
+            connection.execute("DROP TABLE session_file_index_legacy")
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_session_file_index_root
+            ON session_file_index(root)
+            """
+        )
+        snapshot_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(session_snapshot_cache)").fetchall()
+        }
+        if "cache_version" not in snapshot_columns:
+            connection.execute(
+                "ALTER TABLE session_snapshot_cache ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 1"
+            )
+        connection.commit()
+        self._initialized = True
+
+    def load(self, path: Path, backend: str, stat: os.stat_result) -> SessionSnapshot | None:
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    row = connection.execute(
+                        """
+                        SELECT snapshot_json
+                        FROM session_snapshot_cache
+                        WHERE path = ? AND backend = ? AND size = ? AND mtime_ns = ? AND cache_version = ?
+                        """,
+                        (
+                            str(path),
+                            backend,
+                            int(stat.st_size),
+                            int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+                            DISCOVERY_CACHE_VERSION,
+                        ),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return None
+        if row is None:
+            return None
+        try:
+            return SessionSnapshot.model_validate(json.loads(str(row["snapshot_json"])))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return None
+
+    def store(self, path: Path, backend: str, stat: os.stat_result, snapshot: SessionSnapshot) -> None:
+        payload = json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":"))
+        mtime_ns = int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    connection.execute(
+                        """
+                        INSERT INTO session_snapshot_cache(
+                            path, backend, size, mtime_ns, cache_version, snapshot_json, updated_at
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                            backend = excluded.backend,
+                            size = excluded.size,
+                            mtime_ns = excluded.mtime_ns,
+                            cache_version = excluded.cache_version,
+                            snapshot_json = excluded.snapshot_json,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            str(path),
+                            backend,
+                            int(stat.st_size),
+                            mtime_ns,
+                            DISCOVERY_CACHE_VERSION,
+                            payload,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return
+
+    def load_file_records(self, root: Path) -> list[_SessionFileRecord]:
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    rows = connection.execute(
+                        """
+                        SELECT path, backend, size, mtime
+                        FROM session_file_index
+                        WHERE root = ?
+                        """,
+                        (str(root),),
+                    ).fetchall()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return []
+        return [
+            _SessionFileRecord(
+                backend=str(row["backend"]),
+                path=Path(str(row["path"])),
+                mtime=float(row["mtime"]),
+                size=int(row["size"]),
+            )
+            for row in rows
+        ]
+
+    def upsert_file_records(self, root: Path, records: list[_SessionFileRecord]) -> None:
+        if not records:
+            return
+        updated_at = datetime.now(timezone.utc).isoformat()
+        values = [
+            (str(root), str(record.path), record.backend, record.size, record.mtime, updated_at)
+            for record in records
+        ]
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    connection.executemany(
+                        """
+                        INSERT INTO session_file_index(root, path, backend, size, mtime, updated_at)
+                        VALUES(?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(root, path) DO UPDATE SET
+                            backend = excluded.backend,
+                            size = excluded.size,
+                            mtime = excluded.mtime,
+                            updated_at = excluded.updated_at
+                        """,
+                        values,
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return
+
+    def replace_file_records(self, root: Path, records: list[_SessionFileRecord]) -> None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        values = [
+            (str(root), str(record.path), record.backend, record.size, record.mtime, updated_at)
+            for record in records
+        ]
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    connection.execute("DELETE FROM session_file_index WHERE root = ?", (str(root),))
+                    if values:
+                        connection.executemany(
+                            """
+                            INSERT INTO session_file_index(root, path, backend, size, mtime, updated_at)
+                            VALUES(?, ?, ?, ?, ?, ?)
+                            """,
+                            values,
+                        )
+                    self._prune_unindexed_snapshots(connection)
+                    connection.commit()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return
+
+    @staticmethod
+    def _prune_unindexed_snapshots(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            DELETE FROM session_snapshot_cache
+            WHERE NOT EXISTS (
+                SELECT 1 FROM session_file_index
+                WHERE session_file_index.path = session_snapshot_cache.path
+            )
+            """
+        )
+
+    def delete_file_records(self, root: Path, paths: list[Path]) -> None:
+        if not paths:
+            return
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    self._ensure_schema(connection)
+                    connection.executemany(
+                        "DELETE FROM session_file_index WHERE root = ? AND path = ?",
+                        [(str(root), str(path)) for path in paths],
+                    )
+                    self._prune_unindexed_snapshots(connection)
+                    connection.commit()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return
+
+    def reset(self) -> None:
+        with self._lock:
+            self._initialized = False
+            self._acl_secured_paths.clear()
+            self._discard_cache_files()
+
+
+_snapshot_cache: _SnapshotCache | None = None
+
+
+def _get_snapshot_cache() -> _SnapshotCache:
+    global _snapshot_cache
+    if _snapshot_cache is None:
+        _snapshot_cache = _SnapshotCache(_snapshot_cache_path())
+    return _snapshot_cache
+
+
+def reset_discovery_snapshot_cache() -> None:
+    global _snapshot_cache
+    cache = _snapshot_cache
+    if cache is not None:
+        cache.reset()
+    else:
+        db_path = _snapshot_cache_path()
+        if db_path.exists():
+            db_path.unlink()
+    _snapshot_cache = None
+
+
+class _RecentSessionIndex:
+    def __init__(self) -> None:
+        self._states: dict[str, _RootScanState] = {}
+        self._lock = threading.Lock()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._states.clear()
+            _reset_direct_probe_cursors()
+
+    def recent_files(self, search_roots: list[Path], per_backend_limit: int) -> list[tuple[str, Path]]:
+        now = time.time()
+        with self._lock:
+            candidates: list[_SessionFileRecord] = []
+            for root in search_roots:
+                if not root.exists():
+                    continue
+                state = self._states.setdefault(str(root), _RootScanState(root=root))
+                if not state.records:
+                    self._seed_scan(state, now, per_backend_limit)
+                else:
+                    self._refresh_known_files(state)
+                    self._probe_new_files(state, per_backend_limit)
+                candidates.extend(state.records.values())
+        candidates.sort(key=lambda item: (item.mtime, str(item.path).lower()), reverse=True)
+        selected: list[tuple[str, Path]] = []
+        backend_counts: dict[str, int] = {}
+        for record in candidates:
+            count = backend_counts.get(record.backend, 0)
+            if count >= per_backend_limit:
+                continue
+            selected.append((record.backend, record.path))
+            backend_counts[record.backend] = count + 1
+        return selected
+
+    def rebuild(self, search_roots: list[Path]) -> dict[str, Any]:
+        now = time.time()
+        per_backend_limit = _env_int("AGENTHUB_DISCOVERY_MAX_FILES", DEFAULT_DISCOVERY_MAX_FILES)
+        backend_counts: dict[str, int] = {}
+        total = 0
+        with self._lock:
+            for root in search_roots:
+                if not root.exists():
+                    continue
+                state = self._states.setdefault(str(root), _RootScanState(root=root))
+                self._full_scan(state, now, per_backend_limit)
+                for record in state.records.values():
+                    backend_counts[record.backend] = backend_counts.get(record.backend, 0) + 1
+                    total += 1
+        return {
+            "roots": len([root for root in search_roots if root.exists()]),
+            "files": total,
+            "backends": dict(sorted(backend_counts.items())),
+        }
+
+    def _full_scan(self, state: _RootScanState, now: float, per_backend_limit: int) -> None:
+        records: dict[str, _SessionFileRecord] = {}
+        for record in self._iter_root_candidates(state.root, full_scan=True, probe_limit=per_backend_limit):
+            records[str(record.path)] = record
+        state.records = self._select_recent_records(records.values(), per_backend_limit)
+        state.last_full_scan_at = now
+        _get_snapshot_cache().replace_file_records(state.root, list(state.records.values()))
+
+    def _seed_scan(self, state: _RootScanState, now: float, per_backend_limit: int) -> None:
+        state.records = {
+            str(record.path): record
+            for record in _get_snapshot_cache().load_file_records(state.root)
+        }
+        self._refresh_known_files(state)
+        self._probe_new_files(state, per_backend_limit)
+        state.last_full_scan_at = now
+
+    def _refresh_known_files(self, state: _RootScanState) -> None:
+        refreshed: dict[str, _SessionFileRecord] = {}
+        changed: list[_SessionFileRecord] = []
+        deleted: list[Path] = []
+        for key, record in state.records.items():
+            try:
+                stat = record.path.stat()
+            except OSError:
+                deleted.append(record.path)
+                continue
+            next_record = _SessionFileRecord(
+                backend=record.backend,
+                path=record.path,
+                mtime=stat.st_mtime,
+                size=int(stat.st_size),
+            )
+            refreshed[key] = next_record
+            if next_record.mtime != record.mtime or next_record.size != record.size:
+                changed.append(next_record)
+        state.records = refreshed
+        cache = _get_snapshot_cache()
+        cache.upsert_file_records(state.root, changed)
+        cache.delete_file_records(state.root, deleted)
+
+    def _probe_new_files(self, state: _RootScanState, per_backend_limit: int) -> None:
+        changed: list[_SessionFileRecord] = []
+        superseded: list[Path] = []
+        for record in self._iter_root_candidates(
+            state.root, full_scan=False, probe_limit=per_backend_limit
+        ):
+            key = str(record.path)
+            if record.backend == "kimi" and record.path.name.lower() == "wire.jsonl":
+                context_path = record.path.parent / "context.jsonl"
+                if state.records.pop(str(context_path), None) is not None:
+                    superseded.append(context_path)
+            if state.records.get(key) == record:
+                continue
+            state.records[key] = record
+            changed.append(record)
+        cache = _get_snapshot_cache()
+        cache.upsert_file_records(state.root, changed)
+        cache.delete_file_records(state.root, superseded)
+        trimmed = self._select_recent_records(state.records.values(), per_backend_limit)
+        if trimmed.keys() != state.records.keys():
+            state.records = trimmed
+            cache.replace_file_records(state.root, list(trimmed.values()))
+
+    @staticmethod
+    def _select_recent_records(
+        records: Any, per_backend_limit: int
+    ) -> dict[str, _SessionFileRecord]:
+        selected: dict[str, _SessionFileRecord] = {}
+        backend_counts: dict[str, int] = {}
+        ordered = sorted(records, key=lambda item: (item.mtime, str(item.path).lower()), reverse=True)
+        for record in ordered:
+            count = backend_counts.get(record.backend, 0)
+            if count >= per_backend_limit:
+                continue
+            selected[str(record.path)] = record
+            backend_counts[record.backend] = count + 1
+        return selected
+
+    def _iter_root_candidates(
+        self, root: Path, *, full_scan: bool, probe_limit: int
+    ) -> list[_SessionFileRecord]:
+        records: list[_SessionFileRecord] = []
+        iterator = _iter_jsonl_paths(root) if full_scan else _probe_recent_jsonl_paths(root, probe_limit)
+        for path in iterator:
+            lower_parts = [part.lower() for part in path.parts]
+            if "subagents" in lower_parts:
+                continue
+            backend = backend_for_session_path(path)
+            if path.name.lower() == "wire.jsonl" and ".kimi" not in lower_parts:
+                continue
+            if backend == "kimi" and path.name.lower() == "context.jsonl" and (path.parent / "wire.jsonl").exists():
+                continue
+            if backend not in {"codex", "claude", "kimi", "opencode"}:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            records.append(
+                _SessionFileRecord(
+                    backend=backend,
+                    path=path,
+                    mtime=stat.st_mtime,
+                    size=int(stat.st_size),
+                )
+            )
+        return records
+
+
+_recent_session_index = _RecentSessionIndex()
+
+
+def reset_recent_session_index() -> None:
+    _recent_session_index.reset()
+
+
+def rebuild_recent_session_index(search_roots: list[Path]) -> dict[str, Any]:
+    return _recent_session_index.rebuild(search_roots)
 
 
 def _iter_jsonl_paths(root: Path):
@@ -72,6 +785,362 @@ def _iter_jsonl_paths(root: Path):
                     yield Path(dirpath) / filename
     except OSError:
         return
+
+
+def _codex_runtime_index_paths(root: Path, limit: int) -> list[Path]:
+    database_path = root.parent / "state_5.sqlite"
+    if not database_path.exists():
+        return []
+    connection: sqlite3.Connection | None = None
+    try:
+        uri = database_path.resolve().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(threads)").fetchall()
+        }
+        if "rollout_path" not in columns:
+            return []
+        order_column = next(
+            (name for name in ("updated_at_ms", "recency_at_ms", "updated_at", "created_at") if name in columns),
+            "rollout_path",
+        )
+        rows = connection.execute(
+            f'SELECT rollout_path FROM threads ORDER BY "{order_column}" DESC LIMIT ?',
+            (limit,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        if connection is not None:
+            connection.close()
+    results: list[Path] = []
+    for row in rows:
+        path = Path(str(row[0] or ""))
+        if path.is_file() and path.suffix.lower() == ".jsonl":
+            results.append(path)
+    return results
+
+
+def _probe_entry_budget(limit: int) -> int:
+    return max(64, limit * 4)
+
+
+@dataclass
+class _DirectProbeCursor:
+    iterator: Any | None
+    last_used: float
+    pending: list[tuple[float, str, Path]] = field(default_factory=list)
+
+
+@dataclass
+class _KimiProbeCursor:
+    registry_signature: tuple[int, int] | None = None
+    registry_offset: int = 0
+    workdir_iterator: Any | None = None
+    session_iterator: Any | None = None
+    last_used: float = 0.0
+
+
+_direct_probe_iterators: dict[str, _DirectProbeCursor] = {}
+_kimi_probe_cursors: dict[str, _KimiProbeCursor] = {}
+_direct_probe_lock = threading.Lock()
+
+
+def _close_probe_iterator(iterator: Any | None) -> None:
+    if iterator is None:
+        return
+    try:
+        iterator.close()
+    except OSError:
+        pass
+
+
+def _evict_idle_probe_cursors(now: float) -> None:
+    cutoff = now - DEFAULT_DISCOVERY_CURSOR_TTL_SECONDS
+    for key, cursor in list(_direct_probe_iterators.items()):
+        if cursor.last_used >= cutoff:
+            continue
+        _close_probe_iterator(cursor.iterator)
+        _direct_probe_iterators.pop(key, None)
+    for key, cursor in list(_kimi_probe_cursors.items()):
+        if cursor.last_used >= cutoff:
+            continue
+        _close_probe_iterator(cursor.session_iterator)
+        _close_probe_iterator(cursor.workdir_iterator)
+        _kimi_probe_cursors.pop(key, None)
+
+
+def _reset_direct_probe_cursors() -> None:
+    with _direct_probe_lock:
+        for cursor in _direct_probe_iterators.values():
+            _close_probe_iterator(cursor.iterator)
+        _direct_probe_iterators.clear()
+        for cursor in _kimi_probe_cursors.values():
+            _close_probe_iterator(cursor.session_iterator)
+            _close_probe_iterator(cursor.workdir_iterator)
+        _kimi_probe_cursors.clear()
+
+
+def _bounded_direct_jsonl_paths(root: Path, limit: int) -> list[Path]:
+    if limit <= 0:
+        return []
+    key = str(root)
+    now = time.time()
+    with _direct_probe_lock:
+        _evict_idle_probe_cursors(now)
+        cursor = _direct_probe_iterators.get(key)
+        if cursor is None:
+            try:
+                entries = os.scandir(root)
+            except OSError:
+                return []
+            cursor = _DirectProbeCursor(iterator=entries, last_used=now)
+            _direct_probe_iterators[key] = cursor
+        cursor.last_used = now
+        candidates = list(cursor.pending)
+        cursor.pending.clear()
+        if len(candidates) < limit and cursor.iterator is not None:
+            for _ in range(_probe_entry_budget(limit)):
+                try:
+                    entry = next(cursor.iterator)
+                except StopIteration:
+                    _close_probe_iterator(cursor.iterator)
+                    cursor.iterator = None
+                    break
+                except OSError:
+                    _close_probe_iterator(cursor.iterator)
+                    cursor.iterator = None
+                    break
+                try:
+                    if not entry.is_file() or not entry.name.lower().endswith(".jsonl"):
+                        continue
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                path = Path(entry.path)
+                candidates.append((stat.st_mtime, str(path).lower(), path))
+        candidates.sort(reverse=True)
+        selected = candidates[:limit]
+        cursor.pending.extend(candidates[limit:])
+        if cursor.iterator is None and not cursor.pending:
+            _direct_probe_iterators.pop(key, None)
+    return [path for _, _, path in selected]
+
+
+def _provider_home(root: Path, marker: str) -> Path | None:
+    for candidate in (root, *root.parents):
+        if candidate.name.lower() == marker:
+            return candidate
+    return None
+
+
+def _probe_codex_recent_paths(root: Path, limit: int) -> list[Path]:
+    results: list[Path] = []
+    seen: set[str] = set()
+
+    def append(path: Path) -> None:
+        key = str(path)
+        if key in seen or not path.is_file():
+            return
+        seen.add(key)
+        results.append(path)
+
+    for path in _codex_runtime_index_paths(root, limit):
+        append(path)
+    if len(results) >= limit:
+        return results[:limit]
+    for path in _bounded_direct_jsonl_paths(root, limit - len(results)):
+        append(path)
+    if len(results) >= limit:
+        return results[:limit]
+    today = datetime.now()
+    for days_back in range(0, 14):
+        if len(results) >= limit:
+            break
+        stamp = today - timedelta(days=days_back)
+        day_dir = root / stamp.strftime("%Y") / stamp.strftime("%m") / stamp.strftime("%d")
+        if not day_dir.exists():
+            continue
+        for entry in _bounded_direct_jsonl_paths(day_dir, limit - len(results)):
+            append(entry)
+    return results[:limit]
+
+
+def _claude_project_bucket(project: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "-", project)
+
+
+def _probe_claude_recent_paths(root: Path, limit: int) -> list[Path]:
+    results: list[Path] = []
+    seen_paths: set[str] = set()
+
+    def append(path: Path) -> None:
+        key = str(path)
+        if key in seen_paths or not path.is_file():
+            return
+        seen_paths.add(key)
+        results.append(path)
+
+    claude_home = _provider_home(root, ".claude")
+    projects_root = claude_home / "projects" if claude_home is not None else root
+    history_path = claude_home / "history.jsonl" if claude_home is not None else root.parent / "history.jsonl"
+    if history_path.exists():
+        seen_sessions: set[str] = set()
+        for row in reversed(_bounded_jsonl_rows(history_path)):
+            session_id = str(row.get("sessionId") or row.get("session_id") or "").strip()
+            project = str(row.get("project") or row.get("cwd") or "").strip()
+            if not session_id or not project or session_id in seen_sessions:
+                continue
+            seen_sessions.add(session_id)
+            append(projects_root / _claude_project_bucket(project) / f"{session_id}.jsonl")
+            if len(results) >= limit:
+                break
+    if len(results) < limit:
+        for candidate in _bounded_direct_jsonl_paths(root, limit):
+            append(candidate)
+            if len(results) >= limit:
+                break
+    return results[:limit]
+
+
+def _probe_kimi_recent_paths(root: Path, limit: int) -> list[Path]:
+    kimi_home = _provider_home(root, ".kimi")
+    sessions_root = kimi_home / "sessions" if kimi_home is not None else root
+    registry_path = kimi_home / "kimi.json" if kimi_home is not None else root.parent / "kimi.json"
+    try:
+        registry_stat = registry_path.stat()
+        registry_signature = (
+            int(getattr(registry_stat, "st_mtime_ns", int(registry_stat.st_mtime * 1_000_000_000))),
+            int(registry_stat.st_size),
+        )
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        registry_signature = None
+        registry = {}
+    work_dirs = registry.get("work_dirs") if isinstance(registry, dict) else []
+    if not isinstance(work_dirs, list):
+        work_dirs = []
+    results: list[Path] = []
+    seen: set[str] = set()
+
+    def append_session(session_dir: Path) -> None:
+        wire_path = session_dir / "wire.jsonl"
+        context_path = session_dir / "context.jsonl"
+        candidate = wire_path if wire_path.is_file() else context_path
+        if not candidate.is_file() or str(candidate) in seen:
+            return
+        seen.add(str(candidate))
+        results.append(candidate)
+
+    key = str(sessions_root)
+    now = time.time()
+    with _direct_probe_lock:
+        _evict_idle_probe_cursors(now)
+        cursor = _kimi_probe_cursors.setdefault(key, _KimiProbeCursor())
+        cursor.last_used = now
+        if cursor.registry_signature != registry_signature:
+            cursor.registry_signature = registry_signature
+            cursor.registry_offset = 0
+
+        registry_budget = min(_probe_entry_budget(limit), len(work_dirs))
+        if work_dirs:
+            start = cursor.registry_offset % len(work_dirs)
+            for offset in range(registry_budget):
+                item = work_dirs[(start + offset) % len(work_dirs)]
+                if not isinstance(item, dict):
+                    continue
+                raw_path = str(item.get("path") or "").strip()
+                session_id = str(item.get("last_session_id") or "").strip()
+                if not raw_path or not session_id:
+                    continue
+                workdir_hash = hashlib.md5(raw_path.encode()).hexdigest()
+                append_session(sessions_root / workdir_hash / session_id)
+            cursor.registry_offset = (start + registry_budget) % len(work_dirs)
+
+        remaining_budget = _probe_entry_budget(limit)
+        while remaining_budget > 0:
+            if cursor.session_iterator is not None:
+                try:
+                    session_entry = next(cursor.session_iterator)
+                except StopIteration:
+                    _close_probe_iterator(cursor.session_iterator)
+                    cursor.session_iterator = None
+                    continue
+                except OSError:
+                    _close_probe_iterator(cursor.session_iterator)
+                    cursor.session_iterator = None
+                    continue
+                remaining_budget -= 1
+                try:
+                    if session_entry.is_dir():
+                        append_session(Path(session_entry.path))
+                except OSError:
+                    continue
+                continue
+
+            if cursor.workdir_iterator is None:
+                try:
+                    cursor.workdir_iterator = os.scandir(sessions_root)
+                except OSError:
+                    break
+            try:
+                workdir_entry = next(cursor.workdir_iterator)
+            except StopIteration:
+                _close_probe_iterator(cursor.workdir_iterator)
+                cursor.workdir_iterator = None
+                break
+            except OSError:
+                _close_probe_iterator(cursor.workdir_iterator)
+                cursor.workdir_iterator = None
+                break
+            remaining_budget -= 1
+            try:
+                if workdir_entry.is_dir():
+                    cursor.session_iterator = os.scandir(workdir_entry.path)
+            except OSError:
+                cursor.session_iterator = None
+    return results
+
+
+def _probe_recent_jsonl_paths(root: Path, limit: int):
+    backend = backend_for_session_path(root)
+    if backend == "codex":
+        yield from _probe_codex_recent_paths(root, limit)
+        return
+    if backend == "claude":
+        yield from _probe_claude_recent_paths(root, limit)
+        return
+    if backend == "kimi":
+        yield from _probe_kimi_recent_paths(root, limit)
+        return
+    seen: set[str] = set()
+
+    def emit(paths: list[Path]):
+        for path in paths:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            yield path
+
+    direct_counts: dict[str, int] = {}
+    direct_limit = limit * 4
+    for path in _bounded_direct_jsonl_paths(root, direct_limit):
+        backend = backend_for_session_path(path)
+        count = direct_counts.get(backend, 0)
+        if count >= limit:
+            continue
+        direct_counts[backend] = count + 1
+        yield from emit([path])
+    known_roots = (
+        (root / ".codex" / "sessions", _probe_codex_recent_paths),
+        (root / ".claude" / "projects", _probe_claude_recent_paths),
+        (root / ".kimi" / "sessions", _probe_kimi_recent_paths),
+    )
+    for provider_root, probe in known_roots:
+        if not provider_root.exists():
+            continue
+        yield from emit(probe(provider_root, limit))
 
 
 def backend_for_session_path(path: Path) -> str:
@@ -90,36 +1159,7 @@ def backend_for_session_path(path: Path) -> str:
 
 def recent_session_files(search_roots: list[Path], max_files: int | None = None) -> list[tuple[str, Path]]:
     per_backend_limit = max_files or _env_int("AGENTHUB_DISCOVERY_MAX_FILES", DEFAULT_DISCOVERY_MAX_FILES)
-    candidates: list[tuple[float, str, str, Path]] = []
-    for root in search_roots:
-        if not root.exists():
-            continue
-        for path in _iter_jsonl_paths(root):
-            lower_parts = [part.lower() for part in path.parts]
-            if "subagents" in lower_parts:
-                continue
-            backend = backend_for_session_path(path)
-            if path.name.lower() == "wire.jsonl" and ".kimi" not in lower_parts:
-                continue
-            if backend == "kimi" and path.name.lower() == "context.jsonl" and (path.parent / "wire.jsonl").exists():
-                continue
-            if backend not in {"codex", "claude", "kimi", "opencode"}:
-                continue
-            try:
-                modified_at = path.stat().st_mtime
-            except OSError:
-                continue
-            candidates.append((modified_at, str(path).lower(), backend, path))
-    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    selected: list[tuple[str, Path]] = []
-    backend_counts: dict[str, int] = {}
-    for _, _, backend, path in candidates:
-        count = backend_counts.get(backend, 0)
-        if count >= per_backend_limit:
-            continue
-        selected.append((backend, path))
-        backend_counts[backend] = count + 1
-    return selected
+    return _recent_session_index.recent_files(search_roots, per_backend_limit)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -136,6 +1176,100 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(value, dict):
                 rows.append(value)
     return rows
+
+
+def _parse_jsonl_lines(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def _complete_head_text(data: bytes) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if not text:
+        return ""
+    if text.endswith("\n"):
+        return text
+    return text.rsplit("\n", 1)[0] if "\n" in text else ""
+
+
+def _complete_tail_text(data: bytes) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if not text:
+        return ""
+    if text.startswith("\n"):
+        return text.lstrip("\n")
+    if "\n" in text:
+        return text.split("\n", 1)[1]
+    return ""
+
+
+def _bounded_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    head_bytes = _env_int("AGENTHUB_DISCOVERY_HEAD_BYTES", DEFAULT_DISCOVERY_HEAD_BYTES)
+    tail_bytes = _env_int("AGENTHUB_DISCOVERY_TAIL_BYTES", DEFAULT_DISCOVERY_TAIL_BYTES)
+    stat = path.stat()
+    if stat.st_size <= head_bytes + tail_bytes:
+        return _read_jsonl(path)
+
+    with path.open("rb") as handle:
+        head = handle.read(head_bytes)
+        handle.seek(max(0, stat.st_size - tail_bytes))
+        tail = handle.read(tail_bytes)
+    return _parse_jsonl_lines(_complete_head_text(head) + "\n" + _complete_tail_text(tail))
+
+
+def _cached_session_snapshot(
+    path: Path,
+    backend: str,
+    parser: Any,
+    stat: Any | None = None,
+) -> SessionSnapshot:
+    stat = stat or path.stat()
+    cached = _get_snapshot_cache().load(path, backend, stat)
+    if cached is not None and not _cached_running_status_is_stale(cached):
+        return cached
+    snapshot = parser(path, stat)
+    _get_snapshot_cache().store(path, backend, stat, snapshot)
+    return snapshot
+
+
+def _cached_running_status_is_stale(snapshot: SessionSnapshot) -> bool:
+    if snapshot.status != "running" or snapshot.last_activity_at is None:
+        return False
+    last_activity_at = snapshot.last_activity_at
+    if last_activity_at.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.now().replace(tzinfo=None)
+    stale_seconds = _env_int(
+        "AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS",
+        DEFAULT_RUNNING_STALE_SECONDS,
+    )
+    return last_activity_at < now - timedelta(seconds=stale_seconds)
+
+
+def _combined_cache_stat(paths: list[Path]) -> _CacheStat:
+    digest = hashlib.sha256()
+    total_size = 0
+    latest_mtime = 0.0
+    for path in sorted((path for path in paths if path.exists()), key=lambda item: str(item).lower()):
+        stat = path.stat()
+        total_size += int(stat.st_size)
+        latest_mtime = max(latest_mtime, stat.st_mtime)
+        digest.update(str(path).encode("utf-8", errors="surrogatepass"))
+        digest.update(str(int(stat.st_size)).encode())
+        digest.update(str(int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))).encode())
+    signature = int.from_bytes(digest.digest()[:8], "big") & ((1 << 63) - 1)
+    return _CacheStat(st_size=total_size, st_mtime=latest_mtime, st_mtime_ns=signature)
 
 
 def _text_from_content(content: Any) -> str:
@@ -630,9 +1764,8 @@ def _kimi_tool_result_text(payload: dict[str, Any]) -> str:
     return "工具结果:" if not detail else f"工具结果:\n{detail[:4000]}"
 
 
-def parse_codex_jsonl(path: Path) -> SessionSnapshot:
-    rows = _read_jsonl(path)
-    stat = path.stat()
+def _parse_codex_jsonl_uncached(path: Path, stat: os.stat_result) -> SessionSnapshot:
+    rows = _bounded_jsonl_rows(path)
     fallback_mtime = datetime.fromtimestamp(stat.st_mtime)
     session_id = _codex_session_id_from_path(path)
     session_id_from_path = session_id
@@ -714,9 +1847,12 @@ def parse_codex_jsonl(path: Path) -> SessionSnapshot:
     return snapshot
 
 
-def parse_claude_jsonl(path: Path) -> SessionSnapshot:
-    rows = _read_jsonl(path)
-    stat = path.stat()
+def parse_codex_jsonl(path: Path) -> SessionSnapshot:
+    return _cached_session_snapshot(path, "codex", _parse_codex_jsonl_uncached)
+
+
+def _parse_claude_jsonl_uncached(path: Path, stat: os.stat_result) -> SessionSnapshot:
+    rows = _bounded_jsonl_rows(path)
     fallback_mtime = datetime.fromtimestamp(stat.st_mtime)
     session_id = path.stem
     workspace_root = ""
@@ -801,6 +1937,10 @@ def parse_claude_jsonl(path: Path) -> SessionSnapshot:
     return snapshot
 
 
+def parse_claude_jsonl(path: Path) -> SessionSnapshot:
+    return _cached_session_snapshot(path, "claude", _parse_claude_jsonl_uncached)
+
+
 def _kimi_root_for_session(session_dir: Path) -> Path | None:
     for parent in session_dir.parents:
         if parent.name == ".kimi":
@@ -843,7 +1983,7 @@ def _kimi_workspace_from_registry(session_dir: Path, session_id: str) -> tuple[s
     return fallback_root, fallback_hash
 
 
-def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
+def _parse_kimi_session_uncached(session_dir: Path, stat: Any) -> SessionSnapshot:
     wire_path = session_dir / "wire.jsonl"
     context_path = session_dir / "context.jsonl"
     state_path = session_dir / "state.json"
@@ -855,7 +1995,7 @@ def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
     messages: list[dict[str, Any]] = []
 
     if wire_path.exists():
-        for row in _read_jsonl(wire_path):
+        for row in _bounded_jsonl_rows(wire_path):
             message = row.get("message") if isinstance(row.get("message"), dict) else {}
             payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
             timestamp = _timestamp(row.get("timestamp"), fallback_mtime)
@@ -889,7 +2029,7 @@ def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
                     messages.append(item)
 
     if not messages and context_path.exists():
-        for row in _read_jsonl(context_path):
+        for row in _bounded_jsonl_rows(context_path):
             role = str(row.get("role") or "")
             if role.startswith("_"):
                 continue
@@ -918,4 +2058,23 @@ def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
         fallback_mtime=fallback_mtime,
         metadata={"source": "kimi_session", "path": str(session_dir), "workdir_hash": workdir_hash},
         controls=controls,
+    )
+
+
+def parse_kimi_session(session_dir: Path) -> SessionSnapshot:
+    kimi_root = _kimi_root_for_session(session_dir)
+    related_paths = [
+        session_dir / "wire.jsonl",
+        session_dir / "context.jsonl",
+        session_dir / "state.json",
+    ]
+    if kimi_root is not None:
+        related_paths.append(kimi_root / "kimi.json")
+    stat = _combined_cache_stat(related_paths)
+    cache_path = next((path for path in related_paths[:2] if path.exists()), session_dir)
+    return _cached_session_snapshot(
+        cache_path,
+        "kimi",
+        lambda _cache_path, cache_stat: _parse_kimi_session_uncached(session_dir, cache_stat),
+        stat=stat,
     )
