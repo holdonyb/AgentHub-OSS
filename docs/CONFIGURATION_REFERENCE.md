@@ -155,6 +155,33 @@ Notes:
 - The retry is bounded. If all fallback models also report capacity, the job fails with the original diagnostics.
 - Configure this on each local worker machine, because the worker is the process that runs Codex.
 
+## Worker Session Discovery Cache
+
+Workers keep a disposable local SQLite index of known session files and parsed session snapshots. Normal polling checks indexed file metadata and reads each runtime's own bounded activity index: Codex `state_5.sqlite`, Claude `history.jsonl`, and Kimi `kimi.json`. It does not recursively walk the complete history tree. A bounded compatibility probe covers older layouts and explicitly configured roots without allowing work to grow with the total history size.
+
+Defaults:
+
+```env
+AGENTHUB_DISCOVERY_RUNTIME_DIR=.runtime
+AGENTHUB_DISCOVERY_MAX_FILES=80
+AGENTHUB_DISCOVERY_HEAD_BYTES=131072
+AGENTHUB_DISCOVERY_TAIL_BYTES=786432
+```
+
+`AGENTHUB_DISCOVERY_SNAPSHOT_DB` can override the database path. Installed workers normally use `<worker-root>/.runtime/discovery-cache.sqlite3`.
+
+Large JSONL histories are read through bounded head and tail windows. An unchanged file is then served from its cached snapshot. File size or modification-time changes invalidate that snapshot without requiring a full-history scan. A cached `running` state is also re-evaluated after `AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS`, so an unchanged transcript cannot remain running forever.
+
+The current index record already establishes the identity needed for append-only parsing: session path, backend, size, modification time, and parser version. A later cursor upgrade can add `parsed_offset` and a rolling digest to the same record. If the file grows without changing identity, the parser consumes only `[parsed_offset, new_size)`; truncation, replacement, or parser-version changes fall back to the bounded head/tail snapshot. This migration does not require changing the server protocol or rescanning history.
+
+Recent sessions are indexed automatically. The persistent index retains up to `AGENTHUB_DISCOVERY_MAX_FILES` entries per backend and session root, so routine metadata checks remain bounded. To import older history after first install, run the explicit maintenance command once:
+
+```text
+--maintenance-command rebuild-discovery-index
+```
+
+The command recursively inventories configured session roots but does not parse every JSONL file and never changes session history. Stop the worker loop while rebuilding so the maintenance process is the only writer to the cache. The cache itself may be deleted and rebuilt; the original Codex, Claude, and Kimi files remain authoritative. If the cache is temporarily locked, read-only, full, or otherwise unavailable, discovery continues without cache acceleration instead of dropping the worker polling cycle. On Windows, AgentHub also replaces inherited NTFS permissions on the cache directory and files with a private ACL for the worker account; if that ACL cannot be applied and verified, transcript snapshots are not cached.
+
 ## Voice ASR Provider Selection
 
 AgentHub voice transcription is configurable. Set:

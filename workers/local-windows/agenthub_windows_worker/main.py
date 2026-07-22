@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+os.environ.setdefault("AGENTHUB_DISCOVERY_RUNTIME_DIR", str(REPO_ROOT / ".runtime"))
 for extra_path in (
     REPO_ROOT / "workers" / "shared",
     REPO_ROOT / "workers" / "local-windows",
@@ -20,6 +21,7 @@ for extra_path in (
 
 from agenthub_worker.client import AgentHubClient
 from agenthub_worker.codex_maintenance import promote_exec_sessions_for_desktop
+from agenthub_worker.discovery import rebuild_recent_session_index
 from agenthub_worker.paths import default_agent_session_roots
 from agenthub_worker.runtime import WorkerRuntime, run_forever
 from agenthub_windows_worker.discovery import discover_capabilities, discover_sessions
@@ -92,6 +94,9 @@ def _generate_worker_token() -> str:
 
 
 def _run_maintenance(args: argparse.Namespace) -> int:
+    if args.maintenance_command == "rebuild-discovery-index":
+        print(json.dumps(rebuild_recent_session_index(_session_roots()), ensure_ascii=False, indent=2))
+        return 0
     if args.maintenance_command != "promote-codex-exec":
         raise SystemExit(f"Unsupported maintenance command: {args.maintenance_command}")
     result = promote_exec_sessions_for_desktop(
