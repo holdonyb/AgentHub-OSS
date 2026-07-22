@@ -70,6 +70,7 @@ class WorkerRuntime:
     workspace_roots: list[Path]
     discover_capabilities: Callable[[], dict[str, bool]]
     discover_sessions: Callable[[list[Path]], list[dict[str, Any]]]
+    mark_sessions_published: Callable[[list[dict[str, Any]]], None] | None = None
     session_roots: list[Path] | None = None
     background_jobs: bool = False
     max_concurrent_jobs: int = 2
@@ -300,6 +301,7 @@ class WorkerRuntime:
         sessions = self.discover_sessions(discovery_roots)
         for batch in session_batches(sessions, self.worker_id):
             self.client.publish_sessions(batch)
+        timeline_failed_sessions: set[str] = set()
         if hasattr(self.client, "publish_timeline"):
             batches_by_session: dict[str, list[TimelineBatch]] = {}
             for batch in timeline_batches(sessions, self.worker_id):
@@ -315,9 +317,22 @@ class WorkerRuntime:
                     except Exception as exc:  # noqa: BLE001 - keep core session discovery alive
                         print(f"AgentHub worker timeline publish failed for {batch.session_id}: {exc}", file=sys.stderr)
                         published_all = False
+                        timeline_failed_sessions.add(session_id)
                         break
                 if published_all:
                     self._published_timeline_digests[session_id] = digest
+
+        if self.mark_sessions_published is not None:
+            published_sessions = [
+                session
+                for session in sessions
+                if str(session.get("session_id") or "") not in timeline_failed_sessions
+            ]
+            if published_sessions:
+                try:
+                    self.mark_sessions_published(published_sessions)
+                except Exception as exc:  # noqa: BLE001 - a missed checkpoint only causes a safe retry
+                    print(f"AgentHub worker publication checkpoint failed: {exc}", file=sys.stderr)
 
         self._drain_jobs()
 
@@ -429,6 +444,8 @@ def _trim_runtime_metadata(value: Any) -> Any:
 
 def trim_session_for_publish(session: dict[str, Any], worker_id: str) -> dict[str, Any]:
     trimmed = {**session, "worker_id": worker_id}
+    for key in [key for key in trimmed if key.startswith("_agenthub_")]:
+        trimmed.pop(key, None)
     trimmed.pop("timeline", None)
     trimmed["activity_summary"] = _truncate_text(trimmed.get("activity_summary"), MAX_ACTIVITY_CHARS)
     trimmed["last_message"] = _truncate_text(trimmed.get("last_message"), MAX_MESSAGE_CHARS)

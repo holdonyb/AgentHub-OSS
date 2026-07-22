@@ -166,11 +166,14 @@ AGENTHUB_DISCOVERY_RUNTIME_DIR=.runtime
 AGENTHUB_DISCOVERY_MAX_FILES=80
 AGENTHUB_DISCOVERY_HEAD_BYTES=131072
 AGENTHUB_DISCOVERY_TAIL_BYTES=786432
+AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS=3600
 ```
 
 `AGENTHUB_DISCOVERY_SNAPSHOT_DB` can override the database path. Installed workers normally use `<worker-root>/.runtime/discovery-cache.sqlite3`.
 
 Large JSONL histories are read through bounded head and tail windows. An unchanged file is then served from its cached snapshot. File size or modification-time changes invalidate that snapshot without requiring a full-history scan. A cached `running` state is also re-evaluated after `AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS`, so an unchanged transcript cannot remain running forever.
+
+Workers also keep a publication checkpoint scoped to the connection mode, server URL, and worker ID. Routine polling parses and publishes only files whose source signature changed. A successful summary and timeline publish advances the checkpoint; any publish or cache failure leaves it unchanged so the next poll retries safely. `AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS` forces a jittered periodic reconciliation to recover from server-side drift. The first poll after upgrading an older cache performs a one-time reconciliation to establish these checkpoints.
 
 The current index record already establishes the identity needed for append-only parsing: session path, backend, size, modification time, and parser version. A later cursor upgrade can add `parsed_offset` and a rolling digest to the same record. If the file grows without changing identity, the parser consumes only `[parsed_offset, new_size)`; truncation, replacement, or parser-version changes fall back to the bounded head/tail snapshot. This migration does not require changing the server protocol or rescanning history.
 
