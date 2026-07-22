@@ -102,6 +102,82 @@ def test_worker_runtime_heartbeats_and_publishes_discovered_sessions() -> None:
     assert client.published_providers[0][0]["status"] == "ready"
 
 
+def test_worker_runtime_marks_discovery_publication_after_summary_and_timeline_succeed() -> None:
+    client = FakeClient()
+    marked: list[list[dict[str, Any]]] = []
+    session = {
+        "session_id": "codex-delta",
+        "backend": "codex",
+        "workspace_root": "E:/Work",
+        "project_name": "Work",
+        "runtime_session_ref": "delta.jsonl",
+        "_agenthub_publication": {"path": "delta.jsonl"},
+        "timeline": [{"item_type": "assistant_message", "text": "done"}],
+    }
+    runtime = WorkerRuntime(
+        client=client,
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/Work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda _roots: [session],
+        mark_sessions_published=lambda sessions: marked.append(sessions),
+    )
+
+    runtime.run_once()
+
+    assert marked == [[session]]
+    assert "_agenthub_publication" not in client.published_sessions[0][0]
+
+
+def test_worker_runtime_does_not_mark_discovery_when_summary_publish_fails() -> None:
+    class FailingSummaryClient(FakeClient):
+        def publish_sessions(self, sessions: list[dict[str, Any]]) -> None:
+            raise RuntimeError("summary unavailable")
+
+    marked: list[list[dict[str, Any]]] = []
+    runtime = WorkerRuntime(
+        client=FailingSummaryClient(),
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/Work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda _roots: [{"session_id": "codex-delta", "backend": "codex"}],
+        mark_sessions_published=lambda sessions: marked.append(sessions),
+    )
+
+    with pytest.raises(RuntimeError, match="summary unavailable"):
+        runtime.run_once()
+
+    assert marked == []
+
+
+def test_worker_runtime_does_not_mark_discovery_when_timeline_publish_fails() -> None:
+    class FailingTimelineClient(FakeClient):
+        def publish_timeline(
+            self, session_id: str, items: list[dict[str, Any]], *, replace: bool = False
+        ) -> None:
+            raise RuntimeError("timeline unavailable")
+
+    marked: list[list[dict[str, Any]]] = []
+    runtime = WorkerRuntime(
+        client=FailingTimelineClient(),
+        worker_id="test-worker",
+        workspace_roots=[Path("E:/Work")],
+        discover_capabilities=lambda: {"codex": True},
+        discover_sessions=lambda _roots: [
+            {
+                "session_id": "codex-delta",
+                "backend": "codex",
+                "timeline": [{"item_type": "assistant_message", "text": "done"}],
+            }
+        ],
+        mark_sessions_published=lambda sessions: marked.append(sessions),
+    )
+
+    runtime.run_once()
+
+    assert marked == []
+
+
 def test_worker_runtime_applies_runtime_settings_from_nested_heartbeat_worker_payload() -> None:
     client = FakeClient(
         heartbeat_worker={

@@ -24,6 +24,7 @@ DEFAULT_RUNNING_STALE_SECONDS = 1800
 DEFAULT_DISCOVERY_HEAD_BYTES = 131_072
 DEFAULT_DISCOVERY_TAIL_BYTES = 786_432
 DEFAULT_DISCOVERY_CURSOR_TTL_SECONDS = 300
+DEFAULT_DISCOVERY_PUBLICATION_RECONCILE_SECONDS = 3600
 DISCOVERY_CACHE_VERSION = 2
 WINDOWS_ACL_REQUIRED = os.name == "nt"
 DISCOVERY_PRUNED_DIRS = {
@@ -375,6 +376,35 @@ foreach ($requiredSid in $allowedSids) {
             connection.execute(
                 "ALTER TABLE session_snapshot_cache ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 1"
             )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_snapshot_metadata (
+                path TEXT PRIMARY KEY,
+                backend TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                cache_version INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_activity_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_publication_state (
+                scope TEXT NOT NULL,
+                path TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                cache_version INTEGER NOT NULL,
+                published_at TEXT NOT NULL,
+                PRIMARY KEY(scope, path)
+            )
+            """
+        )
         connection.commit()
         self._initialized = True
 
@@ -441,6 +471,175 @@ foreach ($requiredSid in $allowedSids) {
                             payload,
                             datetime.now(timezone.utc).isoformat(),
                         ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO session_snapshot_metadata(
+                            path, backend, size, mtime_ns, cache_version, session_id, status,
+                            last_activity_at, updated_at
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(path) DO UPDATE SET
+                            backend = excluded.backend,
+                            size = excluded.size,
+                            mtime_ns = excluded.mtime_ns,
+                            cache_version = excluded.cache_version,
+                            session_id = excluded.session_id,
+                            status = excluded.status,
+                            last_activity_at = excluded.last_activity_at,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            str(path),
+                            backend,
+                            int(stat.st_size),
+                            mtime_ns,
+                            DISCOVERY_CACHE_VERSION,
+                            snapshot.session_id,
+                            str(snapshot.status),
+                            snapshot.last_activity_at.isoformat() if snapshot.last_activity_at else None,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return
+
+    def needs_publication(
+        self,
+        path: Path,
+        backend: str,
+        stat: Any,
+        scope: str,
+        reconcile_seconds: int,
+    ) -> bool:
+        marker = {
+            "scope": scope,
+            "path": str(path),
+            "backend": backend,
+            "size": int(stat.st_size),
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+            "cache_version": DISCOVERY_CACHE_VERSION,
+        }
+        return bool(self.publication_candidates([marker], reconcile_seconds))
+
+    def publication_candidates(
+        self,
+        markers: list[dict[str, Any]],
+        reconcile_seconds: int,
+    ) -> list[dict[str, Any]]:
+        if not markers:
+            return []
+        candidates: list[dict[str, Any]] = []
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    for marker in markers:
+                        row = connection.execute(
+                            """
+                            SELECT snapshot.status, snapshot.last_activity_at,
+                                   publication.size AS published_size,
+                                   publication.mtime_ns AS published_mtime_ns,
+                                   publication.cache_version AS published_cache_version,
+                                   publication.published_at
+                            FROM session_snapshot_metadata AS snapshot
+                            LEFT JOIN session_publication_state AS publication
+                              ON publication.scope = ? AND publication.path = snapshot.path
+                            WHERE snapshot.path = ? AND snapshot.backend = ?
+                              AND snapshot.size = ? AND snapshot.mtime_ns = ?
+                              AND snapshot.cache_version = ?
+                            """,
+                            (
+                                str(marker["scope"]),
+                                str(marker["path"]),
+                                str(marker["backend"]),
+                                int(marker["size"]),
+                                int(marker["mtime_ns"]),
+                                int(marker["cache_version"]),
+                            ),
+                        ).fetchone()
+                        if _publication_row_needs_reconcile(marker, row, reconcile_seconds):
+                            candidates.append(marker)
+                finally:
+                    connection.close()
+                    self._secure_cache_files()
+        except (OSError, sqlite3.Error, subprocess.SubprocessError):
+            return markers
+        return candidates
+
+    def mark_publications(self, markers: list[dict[str, Any]]) -> None:
+        if not markers:
+            return
+        published_at = datetime.now(timezone.utc).isoformat()
+        values = [
+            (
+                str(marker["scope"]),
+                str(marker["path"]),
+                str(marker["backend"]),
+                int(marker["size"]),
+                int(marker["mtime_ns"]),
+                int(marker["cache_version"]),
+                published_at,
+            )
+            for marker in markers
+        ]
+        try:
+            with self._lock:
+                connection = self._connect()
+                try:
+                    metadata_values = [
+                        (
+                            str(marker["path"]),
+                            str(marker["backend"]),
+                            int(marker["size"]),
+                            int(marker["mtime_ns"]),
+                            int(marker["cache_version"]),
+                            str(marker["session_id"]),
+                            str(marker["status"]),
+                            marker.get("last_activity_at"),
+                            published_at,
+                        )
+                        for marker in markers
+                        if marker.get("session_id") and marker.get("status")
+                    ]
+                    if metadata_values:
+                        connection.executemany(
+                            """
+                            INSERT INTO session_snapshot_metadata(
+                                path, backend, size, mtime_ns, cache_version, session_id, status,
+                                last_activity_at, updated_at
+                            )
+                            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(path) DO UPDATE SET
+                                backend = excluded.backend,
+                                size = excluded.size,
+                                mtime_ns = excluded.mtime_ns,
+                                cache_version = excluded.cache_version,
+                                session_id = excluded.session_id,
+                                status = excluded.status,
+                                last_activity_at = excluded.last_activity_at,
+                                updated_at = excluded.updated_at
+                            """,
+                            metadata_values,
+                        )
+                    connection.executemany(
+                        """
+                        INSERT INTO session_publication_state(
+                            scope, path, backend, size, mtime_ns, cache_version, published_at
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(scope, path) DO UPDATE SET
+                            backend = excluded.backend,
+                            size = excluded.size,
+                            mtime_ns = excluded.mtime_ns,
+                            cache_version = excluded.cache_version,
+                            published_at = excluded.published_at
+                        """,
+                        values,
                     )
                     connection.commit()
                 finally:
@@ -546,6 +745,24 @@ foreach ($requiredSid in $allowedSids) {
             WHERE NOT EXISTS (
                 SELECT 1 FROM session_file_index
                 WHERE session_file_index.path = session_snapshot_cache.path
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM session_publication_state
+            WHERE NOT EXISTS (
+                SELECT 1 FROM session_snapshot_cache
+                WHERE session_snapshot_cache.path = session_publication_state.path
+            )
+            """
+        )
+        connection.execute(
+            """
+            DELETE FROM session_snapshot_metadata
+            WHERE NOT EXISTS (
+                SELECT 1 FROM session_snapshot_cache
+                WHERE session_snapshot_cache.path = session_snapshot_metadata.path
             )
             """
         )
@@ -1257,6 +1474,52 @@ def _cached_running_status_is_stale(snapshot: SessionSnapshot) -> bool:
     return last_activity_at < now - timedelta(seconds=stale_seconds)
 
 
+def _stored_running_status_is_stale(last_activity_at: Any) -> bool:
+    if not last_activity_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(str(last_activity_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    if parsed.tzinfo is not None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.now().replace(tzinfo=None)
+    stale_seconds = _env_int(
+        "AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS",
+        DEFAULT_RUNNING_STALE_SECONDS,
+    )
+    return parsed < now - timedelta(seconds=stale_seconds)
+
+
+def _publication_row_needs_reconcile(
+    marker: dict[str, Any],
+    row: sqlite3.Row | None,
+    reconcile_seconds: int,
+) -> bool:
+    if row is None or row["published_at"] is None:
+        return True
+    if (
+        int(row["published_size"]) != int(marker["size"])
+        or int(row["published_mtime_ns"]) != int(marker["mtime_ns"])
+        or int(row["published_cache_version"]) != int(marker["cache_version"])
+    ):
+        return True
+    if str(row["status"] or "") == "running" and _stored_running_status_is_stale(row["last_activity_at"]):
+        return True
+    try:
+        published_at = datetime.fromisoformat(str(row["published_at"]).replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        jitter_window = max(1, reconcile_seconds // 5)
+        seed = f"{marker['scope']}|{marker['path']}".encode("utf-8")
+        jitter_seconds = int.from_bytes(hashlib.sha256(seed).digest()[:4], "big") % jitter_window
+        return published_at < now - timedelta(seconds=reconcile_seconds + jitter_seconds)
+    except (TypeError, ValueError):
+        return True
+
+
 def _combined_cache_stat(paths: list[Path]) -> _CacheStat:
     digest = hashlib.sha256()
     total_size = 0
@@ -1270,6 +1533,129 @@ def _combined_cache_stat(paths: list[Path]) -> _CacheStat:
         digest.update(str(int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))).encode())
     signature = int.from_bytes(digest.digest()[:8], "big") & ((1 << 63) - 1)
     return _CacheStat(st_size=total_size, st_mtime=latest_mtime, st_mtime_ns=signature)
+
+
+def _publication_source(backend: str, path: Path) -> tuple[Path, Any]:
+    if backend != "kimi":
+        return path, path.stat()
+    session_dir = path if path.is_dir() else path.parent
+    kimi_root = _kimi_root_for_session(session_dir)
+    related_paths = [
+        session_dir / "wire.jsonl",
+        session_dir / "context.jsonl",
+        session_dir / "state.json",
+    ]
+    if kimi_root is not None:
+        related_paths.append(kimi_root / "kimi.json")
+    cache_path = next((candidate for candidate in related_paths[:2] if candidate.exists()), session_dir)
+    return cache_path, _combined_cache_stat(related_paths)
+
+
+def session_file_needs_publication(backend: str, path: Path) -> bool:
+    try:
+        marker = session_publication_marker(backend, path)
+    except OSError:
+        return True
+    return publication_marker_needs_publication(marker)
+
+
+def session_publication_marker(backend: str, path: Path) -> dict[str, Any]:
+    scope = os.getenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "").strip()
+    cache_path, stat = _publication_source(backend, path)
+    return {
+        "scope": scope,
+        "path": str(cache_path),
+        "backend": backend,
+        "size": int(stat.st_size),
+        "mtime_ns": int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+        "cache_version": DISCOVERY_CACHE_VERSION,
+    }
+
+
+def publication_marker_needs_publication(marker: dict[str, Any]) -> bool:
+    scope = str(marker.get("scope") or "")
+    if not scope:
+        return True
+    reconcile_seconds = _env_int(
+        "AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS",
+        DEFAULT_DISCOVERY_PUBLICATION_RECONCILE_SECONDS,
+    )
+    stat = _CacheStat(
+        st_size=int(marker["size"]),
+        st_mtime=0.0,
+        st_mtime_ns=int(marker["mtime_ns"]),
+    )
+    return _get_snapshot_cache().needs_publication(
+        Path(str(marker["path"])),
+        str(marker["backend"]),
+        stat,
+        scope,
+        reconcile_seconds,
+    )
+
+
+def session_publication_candidates(
+    session_files: list[tuple[str, Path]],
+) -> list[tuple[str, Path, dict[str, Any]]]:
+    prepared: list[tuple[str, Path, dict[str, Any]]] = []
+    for backend, path in session_files:
+        if backend == "opencode":
+            continue
+        try:
+            marker = session_publication_marker(backend, path)
+        except OSError:
+            continue
+        prepared.append((backend, path, marker))
+    scoped_markers = [marker for _backend, _path, marker in prepared if marker.get("scope")]
+    if not scoped_markers:
+        return prepared
+    reconcile_seconds = _env_int(
+        "AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS",
+        DEFAULT_DISCOVERY_PUBLICATION_RECONCILE_SECONDS,
+    )
+    candidates = _get_snapshot_cache().publication_candidates(scoped_markers, reconcile_seconds)
+    candidate_ids = {id(marker) for marker in candidates}
+    return [
+        (backend, path, marker)
+        for backend, path, marker in prepared
+        if not marker.get("scope") or id(marker) in candidate_ids
+    ]
+
+
+def attach_session_publication_marker(
+    session: dict[str, Any],
+    backend: str,
+    path: Path,
+    *,
+    marker: dict[str, Any] | None = None,
+) -> None:
+    marker = marker or session_publication_marker(backend, path)
+    if not marker.get("scope"):
+        return
+    session["_agenthub_publication"] = marker
+
+
+def mark_session_publications(sessions: list[dict[str, Any]]) -> None:
+    markers: list[dict[str, Any]] = []
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        source_marker = session.get("_agenthub_publication")
+        if not isinstance(source_marker, dict):
+            continue
+        marker = dict(source_marker)
+        last_activity_at = session.get("last_activity_at")
+        if hasattr(last_activity_at, "isoformat"):
+            last_activity_at = last_activity_at.isoformat()
+        marker.update(
+            {
+                "session_id": session.get("session_id"),
+                "status": session.get("status") or "ready",
+                "last_activity_at": last_activity_at,
+            }
+        )
+        markers.append(marker)
+    _get_snapshot_cache().mark_publications(markers)
 
 
 def _text_from_content(content: Any) -> str:

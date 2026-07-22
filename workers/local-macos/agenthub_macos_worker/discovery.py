@@ -4,11 +4,13 @@ import shutil
 from pathlib import Path
 
 from agenthub_worker.discovery import (
+    attach_session_publication_marker,
     discover_opencode_sessions,
     parse_claude_jsonl,
     parse_codex_jsonl,
     parse_kimi_session,
     recent_session_files,
+    session_publication_candidates,
 )
 
 
@@ -25,14 +27,19 @@ def discover_capabilities() -> dict[str, bool]:
 
 def discover_sessions(search_roots: list[Path], *, opencode_roots: list[Path] | None = None) -> list[dict]:
     sessions = []
-    for backend, path in recent_session_files(search_roots):
+    session_files = recent_session_files(search_roots)
+    for backend, path, marker in session_publication_candidates(session_files):
         try:
             if backend == "codex":
-                sessions.append(parse_codex_jsonl(path).model_dump(mode="json"))
+                session = parse_codex_jsonl(path).model_dump(mode="json")
             elif backend == "claude":
-                sessions.append(parse_claude_jsonl(path).model_dump(mode="json"))
+                session = parse_claude_jsonl(path).model_dump(mode="json")
             elif backend == "kimi":
-                sessions.append(parse_kimi_session(path.parent).model_dump(mode="json"))
+                session = parse_kimi_session(path.parent).model_dump(mode="json")
+            else:
+                continue
+            attach_session_publication_marker(session, backend, path, marker=marker)
+            sessions.append(session)
         except OSError:
             continue
     sessions.extend(snapshot.model_dump(mode="json") for snapshot in discover_opencode_sessions(opencode_roots or search_roots))

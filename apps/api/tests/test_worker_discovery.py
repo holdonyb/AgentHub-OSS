@@ -1,21 +1,37 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from agenthub_worker import discovery
+import agenthub_linux_worker.discovery as linux_discovery_module
+import agenthub_windows_worker.discovery as windows_discovery_module
 from agenthub_worker.discovery import parse_claude_jsonl, parse_codex_jsonl, parse_kimi_session, recent_session_files
 from agenthub_worker.paths import normalize_workspace_root
 from agenthub_linux_worker.discovery import discover_capabilities as discover_linux_capabilities
 from agenthub_windows_worker.discovery import discover_capabilities, discover_sessions as discover_windows_sessions
 from agenthub_windows_worker.main import _session_roots, _workspace_roots
+
+
+def _load_macos_discovery_module() -> Any:
+    module_path = Path(__file__).parents[3] / "workers" / "local-macos" / "agenthub_macos_worker" / "discovery.py"
+    spec = importlib.util.spec_from_file_location("agenthub_macos_worker_discovery_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+macos_discovery_module = _load_macos_discovery_module()
 
 
 def test_windows_path_normalization_handles_backslashes_chinese_and_spaces() -> None:
@@ -1137,6 +1153,193 @@ def test_codex_cached_running_status_expires_without_file_changes(
     second = parse_codex_jsonl(fixture)
 
     assert second.status == "ready"
+
+
+def test_discovery_publication_checkpoint_skips_unchanged_snapshot_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-delta-session.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"delta-session","cwd":"E:\\\\Work"}}\n'
+        '{"timestamp":"2026-07-22T08:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"first"}}\n',
+        encoding="utf-8",
+    )
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS", "3600")
+    discovery.reset_discovery_snapshot_cache()
+
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+
+    monkeypatch.setattr(discovery, "_snapshot_cache", None)
+    monkeypatch.setattr(
+        discovery._SnapshotCache,
+        "load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("snapshot JSON must not be loaded")),
+    )
+    assert discovery.session_file_needs_publication("codex", fixture) is False
+
+    fixture.write_text(fixture.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+def test_discovery_publication_checkpoint_republishes_stale_running_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = datetime(2026, 7, 22, 8, 0, tzinfo=timezone.utc)
+
+    class ControlledDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = current
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-running-publication.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T07:59:00Z","type":"session_meta","payload":{"id":"running-publication","cwd":"E:\\\\Work"}}\n'
+        '{"timestamp":"2026-07-22T07:59:45Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{}"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "datetime", ControlledDatetime)
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS", "60")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    assert payload["status"] == "running"
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+    assert discovery.session_file_needs_publication("codex", fixture) is False
+
+    current = current + timedelta(minutes=2)
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+def test_discovery_publication_checkpoint_periodically_reconciles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-reconcile.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"reconcile","cwd":"E:\\\\Work"}}\n',
+        encoding="utf-8",
+    )
+    cache_path = tmp_path / "cache.sqlite3"
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS", "60")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            "UPDATE session_publication_state SET published_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),),
+        )
+        connection.commit()
+
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+@pytest.mark.parametrize(
+    "platform_discovery",
+    [windows_discovery_module, linux_discovery_module, macos_discovery_module],
+)
+def test_platform_discovery_does_not_load_unchanged_snapshot(
+    platform_discovery: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-platform-delta.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"platform-delta","cwd":"E:\\\\Work"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+    monkeypatch.setattr(platform_discovery, "recent_session_files", lambda _roots: [("codex", fixture)])
+    monkeypatch.setattr(platform_discovery, "discover_opencode_sessions", lambda _roots: [])
+
+    first = platform_discovery.discover_sessions([tmp_path])
+    assert [session["session_id"] for session in first] == ["platform-delta"]
+    discovery.mark_session_publications(first)
+    monkeypatch.setattr(
+        platform_discovery,
+        "parse_codex_jsonl",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unchanged snapshot must not be loaded")),
+    )
+
+    assert platform_discovery.discover_sessions([tmp_path]) == []
+
+
+def test_kimi_publication_signature_includes_state_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_dir = tmp_path / ".kimi" / "sessions" / "workdir" / "kimi-delta"
+    session_dir.mkdir(parents=True)
+    wire_path = session_dir / "wire.jsonl"
+    state_path = session_dir / "state.json"
+    wire_path.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"done"}}}\n',
+        encoding="utf-8",
+    )
+    state_path.write_text('{"plan_mode":false}', encoding="utf-8")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_kimi_session(session_dir).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "kimi", wire_path)
+    discovery.mark_session_publications([payload])
+    assert discovery.session_file_needs_publication("kimi", wire_path) is False
+
+    state_path.write_text('{"plan_mode":true}', encoding="utf-8")
+    assert discovery.session_file_needs_publication("kimi", wire_path) is True
+
+
+def test_publication_candidates_share_one_cache_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixtures = []
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+    for index in range(2):
+        fixture = tmp_path / f"rollout-2026-07-22T08-00-0{index}-batch-{index}.jsonl"
+        fixture.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-07-22T08:00:00Z",
+                    "type": "session_meta",
+                    "payload": {"id": f"batch-{index}", "cwd": "E:\\Work"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+        discovery.attach_session_publication_marker(payload, "codex", fixture)
+        discovery.mark_session_publications([payload])
+        fixtures.append(("codex", fixture))
+
+    cache = discovery._get_snapshot_cache()
+    original_connect = cache._connect
+    connection_count = 0
+
+    def counted_connect():
+        nonlocal connection_count
+        connection_count += 1
+        return original_connect()
+
+    monkeypatch.setattr(cache, "_connect", counted_connect)
+
+    assert discovery.session_publication_candidates(fixtures) == []
+    assert connection_count == 1
 
 
 def test_claude_jsonl_fixture_parses_session_metadata(tmp_path: Path) -> None:
