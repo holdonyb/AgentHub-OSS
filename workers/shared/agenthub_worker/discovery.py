@@ -827,8 +827,9 @@ def _probe_entry_budget(limit: int) -> int:
 
 @dataclass
 class _DirectProbeCursor:
-    iterator: Any
+    iterator: Any | None
     last_used: float
+    pending: list[tuple[float, str, Path]] = field(default_factory=list)
 
 
 @dataclass
@@ -881,7 +882,8 @@ def _reset_direct_probe_cursors() -> None:
 
 
 def _bounded_direct_jsonl_paths(root: Path, limit: int) -> list[Path]:
-    candidates: list[tuple[float, str, Path]] = []
+    if limit <= 0:
+        return []
     key = str(root)
     now = time.time()
     with _direct_probe_lock:
@@ -894,32 +896,35 @@ def _bounded_direct_jsonl_paths(root: Path, limit: int) -> list[Path]:
                 return []
             cursor = _DirectProbeCursor(iterator=entries, last_used=now)
             _direct_probe_iterators[key] = cursor
-        else:
-            entries = cursor.iterator
-            cursor.last_used = now
-        for _ in range(_probe_entry_budget(limit)):
-            try:
-                entry = next(entries)
-            except StopIteration:
-                _close_probe_iterator(entries)
-                _direct_probe_iterators.pop(key, None)
-                break
-            except OSError:
-                _close_probe_iterator(entries)
-                _direct_probe_iterators.pop(key, None)
-                break
-            try:
-                if not entry.is_file() or not entry.name.lower().endswith(".jsonl"):
+        cursor.last_used = now
+        candidates = list(cursor.pending)
+        cursor.pending.clear()
+        if len(candidates) < limit and cursor.iterator is not None:
+            for _ in range(_probe_entry_budget(limit)):
+                try:
+                    entry = next(cursor.iterator)
+                except StopIteration:
+                    _close_probe_iterator(cursor.iterator)
+                    cursor.iterator = None
+                    break
+                except OSError:
+                    _close_probe_iterator(cursor.iterator)
+                    cursor.iterator = None
+                    break
+                try:
+                    if not entry.is_file() or not entry.name.lower().endswith(".jsonl"):
+                        continue
+                    stat = entry.stat()
+                except OSError:
                     continue
-                stat = entry.stat()
-            except OSError:
-                continue
-            path = Path(entry.path)
-            candidates.append((stat.st_mtime, str(path).lower(), path))
-            if len(candidates) >= limit:
-                break
-    candidates.sort(reverse=True)
-    return [path for _, _, path in candidates[:limit]]
+                path = Path(entry.path)
+                candidates.append((stat.st_mtime, str(path).lower(), path))
+        candidates.sort(reverse=True)
+        selected = candidates[:limit]
+        cursor.pending.extend(candidates[limit:])
+        if cursor.iterator is None and not cursor.pending:
+            _direct_probe_iterators.pop(key, None)
+    return [path for _, _, path in selected]
 
 
 def _provider_home(root: Path, marker: str) -> Path | None:

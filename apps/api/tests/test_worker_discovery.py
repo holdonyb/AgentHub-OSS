@@ -574,6 +574,23 @@ def test_bounded_fallback_probe_does_not_discard_matches_beyond_return_limit(
     assert discovered == set(fixtures)
 
 
+def test_bounded_fallback_probe_returns_newest_from_batch_and_keeps_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    fixtures = [root / f"session-{index}.jsonl" for index in range(3)]
+    for index, fixture in enumerate(fixtures):
+        fixture.write_text("{}\n", encoding="utf-8")
+        os.utime(fixture, (100 + index, 100 + index))
+
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 3)
+    discovery.reset_recent_session_index()
+
+    assert discovery._bounded_direct_jsonl_paths(root, 2) == [fixtures[2], fixtures[1]]
+    assert discovery._bounded_direct_jsonl_paths(root, 2) == [fixtures[0]]
+
+
 def test_kimi_fallback_eventually_advances_across_registry_and_nested_sessions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
