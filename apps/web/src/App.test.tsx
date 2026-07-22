@@ -2947,6 +2947,28 @@ describe('AgentHub console', () => {
     expect(jobSummary).not.toContain('executed: codex');
   });
 
+  it('opens voice and quick reply options explicitly without tying them to textarea focus', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+
+    const replyInput = screen.getByLabelText('回复当前会话');
+    const options = document.querySelector('.composer-options');
+    const toggle = screen.getByRole('button', { name: '输入选项' });
+    expect(options).toBeInTheDocument();
+    expect(options).not.toHaveClass('is-open');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.focus(replyInput);
+    expect(options).not.toHaveClass('is-open');
+
+    fireEvent.click(toggle);
+    expect(options).toHaveClass('is-open');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(within(options as HTMLElement).getByRole('button', { name: '听写' })).toBeInTheDocument();
+    expect(within(options as HTMLElement).getByRole('button', { name: '不对，重新来' })).toBeInTheDocument();
+  });
+
   it('keeps desktop session filters and advanced controls behind progressive disclosure', async () => {
     render(<App />);
 

@@ -2722,17 +2722,36 @@ function TimelineText({
       {hasText && (
         <div className="message-actions" aria-label="消息操作">
           {shouldCollapse && (
-            <button className="message-action-button" type="button" onClick={() => setExpanded((current) => !current)}>
-              {expanded ? '收起' : '展开全文'}
+            <button
+              className="message-action-button"
+              type="button"
+              aria-label={expanded ? '收起全文' : '展开全文'}
+              title={expanded ? '收起全文' : '展开全文'}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              <span className="message-action-label">{expanded ? '收起' : '展开全文'}</span>
             </button>
           )}
-          <button className="message-action-button" type="button" onClick={copyText}>
+          <button
+            className="message-action-button"
+            type="button"
+            aria-label={copied ? '已复制全文' : '复制全文'}
+            title={copied ? '已复制全文' : '复制全文'}
+            onClick={copyText}
+          >
             <Copy size={13} />
-            {copied ? '已复制' : '复制全文'}
+            <span className="message-action-label">{copied ? '已复制' : '复制全文'}</span>
           </button>
-          <button className="message-action-button" type="button" onClick={() => setViewerOpen(true)}>
+          <button
+            className="message-action-button"
+            type="button"
+            aria-label="全文阅读"
+            title="全文阅读"
+            onClick={() => setViewerOpen(true)}
+          >
             <Maximize2 size={13} />
-            全文阅读
+            <span className="message-action-label">全文阅读</span>
           </button>
         </div>
       )}
@@ -3310,6 +3329,7 @@ function App() {
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [fileWorkerId, setFileWorkerId] = useState('');
   const [fileWorkspaceRoot, setFileWorkspaceRoot] = useState('');
   const [fileWorkspaceView, setFileWorkspaceView] = useState<WorkspaceView>('explorer');
@@ -4541,6 +4561,7 @@ function App() {
     setMobileSessionActionsOpen(false);
     setStatusDetailsOpen(false);
     setComposerExpanded(false);
+    setComposerOptionsOpen(false);
     setFileEditor(null);
   }, [selectedId]);
 
@@ -6332,6 +6353,7 @@ function App() {
     setReply('');
     setReplyAttachmentsSafely([]);
     setComposerFocused(false);
+    setComposerOptionsOpen(false);
     replyTextareaRef.current?.blur();
     let response: { job: Job };
     try {
@@ -7708,6 +7730,12 @@ function App() {
                 onSubmit={handleReply}
                 onFocus={() => setComposerFocused(true)}
                 onBlur={handleComposerBlur}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && composerOptionsOpen) {
+                    event.stopPropagation();
+                    setComposerOptionsOpen(false);
+                  }
+                }}
               >
                 <label className="reply-title" htmlFor="reply">{pickLocale(locale, '回复当前会话', 'Reply to this session')}</label>
                 <div className="reply-mode-tabs" role="group" aria-label={pickLocale(locale, '回复模式', 'Reply mode')}>
@@ -7790,49 +7818,52 @@ function App() {
                   </div>
                 )}
             {visibleReplyStatus && <div className="reply-status">{visibleReplyStatus}</div>}
-                <div className="voice-mode-bar">
-                  <div className="voice-mode-toggle voice-interaction-toggle" role="group" aria-label="语音交互模式">
-                    <button
-                      type="button"
-                      className={voiceInteractionMode === 'dictation' ? 'selected' : ''}
-                      aria-pressed={voiceInteractionMode === 'dictation'}
-                      onClick={() => setVoiceInteractionMode('dictation')}
-                      disabled={isRecording}
-                    >
-                      听写
-                    </button>
-                    <button
-                      type="button"
-                      className={voiceInteractionMode === 'assistant' ? 'selected' : ''}
-                      aria-pressed={voiceInteractionMode === 'assistant'}
-                      onClick={() => setVoiceInteractionMode('assistant')}
-                      disabled={isRecording}
-                    >
-                      助手
-                    </button>
+                <div
+                  id="composer-options"
+                  className={`composer-options ${composerOptionsOpen ? 'is-open' : ''}`}
+                >
+                  <div className="voice-mode-bar">
+                    <div className="voice-mode-toggle voice-interaction-toggle" role="group" aria-label="语音交互模式">
+                      <button
+                        type="button"
+                        className={voiceInteractionMode === 'dictation' ? 'selected' : ''}
+                        aria-pressed={voiceInteractionMode === 'dictation'}
+                        onClick={() => setVoiceInteractionMode('dictation')}
+                        disabled={isRecording}
+                      >
+                        听写
+                      </button>
+                      <button
+                        type="button"
+                        className={voiceInteractionMode === 'assistant' ? 'selected' : ''}
+                        aria-pressed={voiceInteractionMode === 'assistant'}
+                        onClick={() => setVoiceInteractionMode('assistant')}
+                        disabled={isRecording}
+                      >
+                        助手
+                      </button>
+                    </div>
+                    <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
+                      <button
+                        type="button"
+                        className={voiceInputMode === 'streaming' ? 'selected' : ''}
+                        aria-pressed={voiceInputMode === 'streaming'}
+                        onClick={() => setVoiceInputMode('streaming')}
+                        disabled={isRecording || voiceInteractionMode === 'assistant'}
+                      >
+                        流式
+                      </button>
+                      <button
+                        type="button"
+                        className={voiceInputMode === 'standard' ? 'selected' : ''}
+                        aria-pressed={voiceInputMode === 'standard'}
+                        onClick={() => setVoiceInputMode('standard')}
+                        disabled={isRecording || voiceInteractionMode === 'assistant'}
+                      >
+                        标准
+                      </button>
+                    </div>
                   </div>
-                  <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
-                    <button
-                      type="button"
-                      className={voiceInputMode === 'streaming' ? 'selected' : ''}
-                      aria-pressed={voiceInputMode === 'streaming'}
-                      onClick={() => setVoiceInputMode('streaming')}
-                      disabled={isRecording || voiceInteractionMode === 'assistant'}
-                    >
-                      流式
-                    </button>
-                    <button
-                      type="button"
-                      className={voiceInputMode === 'standard' ? 'selected' : ''}
-                      aria-pressed={voiceInputMode === 'standard'}
-                      onClick={() => setVoiceInputMode('standard')}
-                      disabled={isRecording || voiceInteractionMode === 'assistant'}
-                    >
-                      标准
-                    </button>
-                  </div>
-                </div>
-                <div className="reply-footer">
                   {quickReplies.length > 0 && (
                     <div className="quick-reply-strip" aria-label="快捷回复">
                       {quickReplies.map((quickReply) => (
@@ -7848,6 +7879,8 @@ function App() {
                       ))}
                     </div>
                   )}
+                </div>
+                <div className="reply-footer">
                   <div className="reply-actions">
                   <input
                     id="reply-attachment"
@@ -7893,6 +7926,17 @@ function App() {
                       <Mic size={16} />
                     )}
                     {isRecording && <span className="recording-pulse" aria-hidden="true" />}
+                  </button>
+                  <button
+                    type="button"
+                    className={`reply-icon-button composer-options-button ${composerOptionsOpen ? 'selected' : ''}`}
+                    aria-label="输入选项"
+                    title="语音模式与快捷回复"
+                    aria-controls="composer-options"
+                    aria-expanded={composerOptionsOpen}
+                    onClick={() => setComposerOptionsOpen((open) => !open)}
+                  >
+                    <SlidersHorizontal size={16} />
                   </button>
                   <button
                     type="button"
