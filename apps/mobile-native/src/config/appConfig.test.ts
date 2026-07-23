@@ -27,7 +27,7 @@ describe('Expo native identifiers', () => {
 
   it('keeps release metadata inside the Expo configuration object', () => {
     expect(appConfig).not.toHaveProperty('version');
-    expect(appConfig.expo.version).toBe('1.0.3');
+    expect(appConfig.expo.version).toBe('1.0.5');
   });
 
   it('limits the iOS insecure transport exception to Tailscale DNS', () => {

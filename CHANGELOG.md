@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.5 - 2026-07-24
+
+- Restored the complete React Native mobile console after an invalid local `1.0.4` candidate was built from a stale branch.
+- Preserved session search, filters, create actions, Markdown/full-text reading, attachments, workspace files, tasks, workers, notifications, settings, and UTC-safe relative times from the current mainline.
+- Measured the native reply composer at runtime and reserved matching timeline space so the newest message remains fully scrollable above expanded controls.
+- Raised Android build numbers so affected native and compatibility installations can upgrade normally.
+
 ## v1.0.3 - 2026-07-20
 
 - Reworked the native Android session inbox into a denser phone-first layout with compact actions, on-demand search, and backend/status/worker filters in a bottom sheet.
