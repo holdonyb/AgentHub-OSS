@@ -7,6 +7,7 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  LayoutChangeEvent,
   Linking,
   Modal,
   Platform,
@@ -96,6 +97,9 @@ function recordingDuration(durationMillis: number): string {
   const seconds = String(totalSeconds % 60).padStart(2, '0');
   return `${minutes}:${seconds}`;
 }
+
+const MIN_COMPOSER_CLEARANCE = 116;
+const TIMELINE_BOTTOM_GUTTER = 18;
 
 function timelineLabel(item: NativeTimelineItem): string {
   if (item.role === 'user') return '你';
@@ -526,6 +530,7 @@ export function SessionDetailScreen({
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
+  const [composerHeight, setComposerHeight] = useState(MIN_COMPOSER_CLEARANCE);
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
   const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [attachmentPickerVisible, setAttachmentPickerVisible] = useState(false);
@@ -1003,6 +1008,14 @@ export function SessionDetailScreen({
     }
   }
 
+  function handleComposerLayout(event: LayoutChangeEvent) {
+    const nextHeight = Math.max(
+      MIN_COMPOSER_CLEARANCE,
+      Math.ceil(event.nativeEvent.layout.height),
+    );
+    setComposerHeight((current) => (current === nextHeight ? current : nextHeight));
+  }
+
   function renderTimelineItem(item: NativeTimelineItem) {
     const isTool = item.item_type === 'tool_call';
     const text = item.text || '';
@@ -1406,7 +1419,11 @@ export function SessionDetailScreen({
           />
         ) : (
           <FlatList
-            contentContainerStyle={styles.timelineList}
+            accessibilityLabel="会话消息列表"
+            contentContainerStyle={[
+              styles.timelineList,
+              { paddingBottom: composerHeight + TIMELINE_BOTTOM_GUTTER },
+            ]}
             data={visibleTimelineItems}
             keyExtractor={(item) => `${item.session_id}:${item.seq}`}
             ListEmptyComponent={(
@@ -1429,7 +1446,7 @@ export function SessionDetailScreen({
           />
         )}
 
-        <View style={styles.composer}>
+        <View onLayout={handleComposerLayout} style={styles.composer}>
           {replyDisabledReason ? (
             <View accessibilityLabel="回复不可用原因" style={styles.replyDisabledNotice}>
               <Ionicons color={colors.muted} name="information-circle-outline" size={16} />
@@ -2082,7 +2099,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  timelineList: { paddingBottom: 18, paddingHorizontal: 14 },
+  timelineList: { paddingHorizontal: 14 },
   detailHeaderContent: { paddingTop: 14 },
   sessionMeta: {
     backgroundColor: colors.surface,

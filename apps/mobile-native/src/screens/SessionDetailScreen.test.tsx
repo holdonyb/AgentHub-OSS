@@ -899,6 +899,31 @@ describe('native session detail', () => {
     expect(renderer.root.findByProps({ accessibilityLabel: '回复内容' }).props.value).toBe('识别后的文字');
   });
 
+  it('keeps the latest message scrollable above the measured composer', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+    const style = timeline.props.contentContainerStyle;
+    const styles = Array.isArray(style) ? style : [style];
+    const paddingBottom = styles
+      .filter(Boolean)
+      .reduce((result, entry) => {
+        if (typeof entry?.paddingBottom === 'number') return Math.max(result, entry.paddingBottom);
+        return result;
+      }, 0);
+
+    expect(paddingBottom).toBeGreaterThan(18);
+  });
+
   it('renders account quick replies instead of a hardcoded list', async () => {
     const renderer = await render(
       <SessionDetailScreen
