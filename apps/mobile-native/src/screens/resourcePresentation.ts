@@ -80,11 +80,8 @@ export function formatLastActivity(value: string | null, now = new Date()): stri
 export function sessionActivityAt(session: NativeSessionSummary): string | null {
   const lastActivity = parseApiDate(session.last_activity_at);
   const updatedAt = parseApiDate(session.updated_at);
-  if (!lastActivity) return updatedAt ? session.updated_at ?? null : null;
-  if (!updatedAt) return session.last_activity_at;
-  return updatedAt.getTime() > lastActivity.getTime()
-    ? session.updated_at ?? session.last_activity_at
-    : session.last_activity_at;
+  if (lastActivity) return session.last_activity_at;
+  return updatedAt ? session.updated_at ?? null : null;
 }
 
 export function sortSessionsByRecentActivity(

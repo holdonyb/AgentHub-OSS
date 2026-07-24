@@ -75,7 +75,7 @@ describe('native resource presentation', () => {
     expect(sessionActivityAt(justCreated)).toBe('2026-07-19T09:00:00');
   });
 
-  it('shows the newer session update when transcript activity is stale', () => {
+  it('prefers the actual transcript activity when a sync updates the session later', () => {
     const session = {
       session_id: 'recently-synced',
       title: '最近同步',
@@ -86,7 +86,7 @@ describe('native resource presentation', () => {
       updated_at: '2026-07-19T08:00:00',
     } as NativeSessionSummary;
 
-    expect(sessionActivityAt(session)).toBe('2026-07-19T08:00:00');
+    expect(sessionActivityAt(session)).toBe('2026-07-19T00:00:00');
   });
 
   it('shows only enabled worker capabilities without duplicating backends', () => {

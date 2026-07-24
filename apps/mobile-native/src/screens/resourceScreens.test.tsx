@@ -18,6 +18,14 @@ import { pickSessionFile } from './nativeSessionFilePicker';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => undefined) }));
+jest.mock('react-native-safe-area-context', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    SafeAreaView: ({ children, ...props }: Record<string, unknown>) => React.createElement(View, props, children),
+    useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }),
+  };
+});
 jest.mock('expo-audio', () => ({
   useAudioPlayer: () => ({ pause: jest.fn(), play: jest.fn(), seekTo: jest.fn() }),
   useAudioPlayerStatus: () => ({ currentTime: 0, duration: 0, playing: false }),
