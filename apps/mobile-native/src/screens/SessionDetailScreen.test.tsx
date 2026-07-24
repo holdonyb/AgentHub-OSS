@@ -13,14 +13,26 @@ import { useNativeVoiceRecorder } from './useNativeVoiceRecorder';
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => undefined) }));
+jest.mock('react-native-safe-area-context', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    SafeAreaView: ({ children, ...props }: Record<string, unknown>) => React.createElement(View, props, children),
+    useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }),
+  };
+});
 jest.mock('./nativeImagePicker', () => ({ pickSessionImage: jest.fn() }));
 jest.mock('./nativeSessionFilePicker', () => ({ pickSessionFile: jest.fn() }));
 jest.mock('./useNativeVoiceRecorder', () => ({ useNativeVoiceRecorder: jest.fn() }));
 
 interface TestInstance {
-  props: Record<string, unknown>;
+  props: any;
   findByProps(props: Record<string, unknown>): TestInstance;
   findAllByProps(props: Record<string, unknown>): TestInstance[];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
 interface TestRenderer {
@@ -912,6 +924,7 @@ describe('native session detail', () => {
     await settle();
 
     const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+    const footer = renderer.root.findByProps({ accessibilityLabel: '会话消息底部留白' });
     const style = timeline.props.contentContainerStyle;
     const styles = Array.isArray(style) ? style : [style];
     const paddingBottom = styles
@@ -921,7 +934,45 @@ describe('native session detail', () => {
         return result;
       }, 0);
 
-    expect(paddingBottom).toBeGreaterThan(18);
+    expect(paddingBottom).toBe(168);
+    expect(asRecord(footer.props.style).height).toBe(168);
+  });
+
+  it('does not show a jump button before the reader scrolls away from the bottom', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+    await act(async () => timeline.props.onContentSizeChange?.(320, 960));
+    await settle();
+
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '回到底部' })).toHaveLength(0);
+  });
+
+  it('wires a timeline scroll handler for jump-to-latest behavior', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+
+    const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+    const onScroll = timeline.props.onScroll;
+    expect(typeof onScroll).toBe('function');
+    expect(onScroll as ((event: unknown) => void) | undefined).toBeDefined();
   });
 
   it('renders account quick replies instead of a hardcoded list', async () => {
