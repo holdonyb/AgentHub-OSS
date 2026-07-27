@@ -64,3 +64,19 @@ When Android native launch regresses:
 4. `adb logcat -d | findstr /i "AndroidRuntime FATAL dev.myagenthub.mobile Hermes SoLoader"`
 5. inspect APK libs for `libjsc.so`, `libhermes.so`, `libhermestooling.so`
 6. compare shipped APK contents against `apps/mobile-native/app.json`
+
+## Release Regression Lessons
+
+The July 2026 native regression exposed a specific process failure:
+
+- Expo config resolved to `newArchEnabled=false` / `jsEngine=jsc`
+- `expo prebuild` still regenerated `android/gradle.properties` with `newArchEnabled=true` and `hermesEnabled=true`
+- the final shipped APK therefore did not match the repo-level intent
+
+Rules added from this incident:
+
+1. Do not treat `app.json` or `app.config.ts` as sufficient release evidence.
+2. After every native `expo prebuild`, verify generated `android/gradle.properties` before Gradle build starts.
+3. Release scripts must enforce the generated Android runtime flags, not only declare them.
+4. Release scripts must validate the final APK contents (`libjsc.so` / `libhermes.so` / `libhermestooling.so`) before publishing.
+5. If website download, GitHub release, and installed-device version disagree, trust the built artifact inspection first, then reconcile distribution.
