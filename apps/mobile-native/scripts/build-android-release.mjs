@@ -31,3 +31,4 @@ run(
   ['app:assembleRelease', 'app:bundleRelease', '--no-daemon'],
   path.join(appRoot, 'android'),
 );
+run('python', ['scripts/verify_android_runtime.py', 'android/app/build/outputs/apk/release/app-release.apk']);
