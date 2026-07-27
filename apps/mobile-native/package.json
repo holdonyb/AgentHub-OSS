@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/mobile-native",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "private": true,
   "main": "index.ts",
   "scripts": {
@@ -18,7 +18,7 @@
     "node": ">=20.19.4"
   },
   "dependencies": {
-    "@agenthub/client-core": "1.0.4",
+    "@agenthub/client-core": "1.0.6",
     "@expo/vector-icons": "^15.0.2",
     "@react-navigation/bottom-tabs": "^7.18.8",
     "@react-navigation/native": "^7.3.8",

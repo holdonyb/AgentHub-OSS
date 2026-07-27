@@ -242,7 +242,8 @@ install_dependencies_and_build() {
 
   if [[ "$skip_npm_ci" != "1" ]]; then
     log "installing Node dependencies"
-    ELECTRON_SKIP_BINARY_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+      npm ci --workspace @agenthub/web --workspace @agenthub/client-core --workspace @agenthub/protocol --include-workspace-root=false
   fi
 
   log "building Web assets"

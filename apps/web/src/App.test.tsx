@@ -2947,6 +2947,59 @@ describe('AgentHub console', () => {
     expect(jobSummary).not.toContain('executed: codex');
   });
 
+  it('opens voice and quick reply options explicitly without tying them to textarea focus', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+
+    const replyInput = screen.getByLabelText('回复当前会话');
+    const options = document.querySelector('.composer-options');
+    const toggle = screen.getByRole('button', { name: '输入选项' });
+    expect(options).toBeInTheDocument();
+    expect(options).not.toHaveClass('is-open');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.focus(replyInput);
+    expect(options).not.toHaveClass('is-open');
+
+    fireEvent.click(toggle);
+    expect(options).toHaveClass('is-open');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(within(options as HTMLElement).getByRole('button', { name: '听写' })).toBeInTheDocument();
+    expect(within(options as HTMLElement).getByRole('button', { name: '不对，重新来' })).toBeInTheDocument();
+  });
+
+  it('keeps desktop session filters and advanced controls behind progressive disclosure', async () => {
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: '修复移动控制台' })).toBeInTheDocument();
+
+    const filterToggle = screen.getByRole('button', { name: '筛选会话' });
+    const filterDrawer = document.querySelector('.session-filter-drawer');
+    expect(filterToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(filterDrawer).toHaveAttribute('data-open', 'false');
+    expect(filterDrawer).not.toHaveClass('is-open');
+
+    fireEvent.click(filterToggle);
+
+    expect(filterToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(filterDrawer).toHaveAttribute('data-open', 'true');
+    expect(filterDrawer).toHaveClass('is-open');
+
+    const inspector = screen.getByLabelText('Controls');
+    const overviewTab = screen.getByRole('tab', { name: '概览' });
+    const controlsTab = screen.getByRole('tab', { name: '控制' });
+    expect(inspector).toHaveAttribute('data-inspector-mode', 'overview');
+    expect(overviewTab).toHaveAttribute('aria-selected', 'true');
+    expect(controlsTab).toHaveAttribute('aria-selected', 'false');
+
+    fireEvent.click(controlsTab);
+
+    expect(inspector).toHaveAttribute('data-inspector-mode', 'controls');
+    expect(overviewTab).toHaveAttribute('aria-selected', 'false');
+    expect(controlsTab).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('lets collapsed control panels expand and stay open across refresh renders', async () => {
     render(<App />);
 

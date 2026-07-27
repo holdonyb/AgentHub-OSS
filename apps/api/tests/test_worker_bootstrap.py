@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -54,6 +55,26 @@ def _reset_fakes() -> None:
     _FakeClient.instances.clear()
     _FakeClient.enroll_payloads.clear()
     _FakeRuntime.instances.clear()
+
+
+@pytest.mark.parametrize("worker_module", [windows_main, linux_main])
+def test_worker_maintenance_can_rebuild_discovery_index(
+    worker_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    roots = [tmp_path / "sessions"]
+    roots[0].mkdir()
+    monkeypatch.setattr(worker_module, "_session_roots", lambda: roots)
+    monkeypatch.setattr(
+        worker_module,
+        "rebuild_recent_session_index",
+        lambda values: {"roots": len(values), "files": 7, "backends": {"codex": 7}},
+        raising=False,
+    )
+
+    result = worker_module._run_maintenance(SimpleNamespace(maintenance_command="rebuild-discovery-index"))
+
+    assert result == 0
+    assert '"files": 7' in capsys.readouterr().out
 
 
 def test_windows_worker_private_mode_bootstraps_with_enrollment_and_persists_token(

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+os.environ.setdefault("AGENTHUB_DISCOVERY_RUNTIME_DIR", str(REPO_ROOT / ".runtime"))
 for extra_path in (
     REPO_ROOT / "workers" / "shared",
     REPO_ROOT / "workers" / "local-linux",
@@ -21,6 +22,7 @@ for extra_path in (
 from agenthub_linux_worker.discovery import discover_capabilities, discover_sessions
 from agenthub_worker.client import AgentHubClient
 from agenthub_worker.codex_maintenance import promote_exec_sessions_for_desktop
+from agenthub_worker.discovery import mark_session_publications, rebuild_recent_session_index
 from agenthub_worker.paths import default_agent_session_roots
 from agenthub_worker.runtime import WorkerRuntime, run_forever
 
@@ -92,6 +94,9 @@ def _generate_worker_token() -> str:
 
 
 def _run_maintenance(args: argparse.Namespace) -> int:
+    if args.maintenance_command == "rebuild-discovery-index":
+        print(json.dumps(rebuild_recent_session_index(_session_roots()), ensure_ascii=False, indent=2))
+        return 0
     if args.maintenance_command != "promote-codex-exec":
         raise SystemExit(f"Unsupported maintenance command: {args.maintenance_command}")
     result = promote_exec_sessions_for_desktop(
@@ -182,6 +187,9 @@ def main() -> None:
         _persist_worker_token(token_path, worker_token)
     if not worker_token:
         raise SystemExit("AGENTHUB_WORKER_TOKEN is required after registration or enrollment")
+    os.environ["AGENTHUB_DISCOVERY_PUBLICATION_SCOPE"] = (
+        f"{args.connection_mode}|{args.api_url.rstrip('/')}|{args.worker_id}"
+    )
     client = AgentHubClient(args.api_url, args.worker_id, worker_token, mode=args.connection_mode)
     def discover_worker_sessions(search_roots: list[Path]) -> list[dict]:
         return discover_sessions(search_roots, opencode_roots=workspace_roots)
@@ -193,6 +201,7 @@ def main() -> None:
         session_roots=_session_roots(),
         discover_capabilities=discover_capabilities,
         discover_sessions=discover_worker_sessions,
+        mark_sessions_published=mark_session_publications,
         background_jobs=not args.once,
         max_concurrent_jobs=args.max_concurrent_jobs,
         job_poll_interval_seconds=args.job_poll_interval_seconds,

@@ -7,8 +7,11 @@ import {
   FlatList,
   Image,
   KeyboardAvoidingView,
+  LayoutChangeEvent,
   Linking,
   Modal,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   RefreshControl,
@@ -18,7 +21,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   MobileApi,
   NativeJob,
@@ -96,6 +99,11 @@ function recordingDuration(durationMillis: number): string {
   const seconds = String(totalSeconds % 60).padStart(2, '0');
   return `${minutes}:${seconds}`;
 }
+
+const MIN_COMPOSER_CLEARANCE = 116;
+const TIMELINE_BOTTOM_GUTTER = 18;
+const TIMELINE_BOTTOM_SAFEAREA_FALLBACK = 24;
+const SCROLL_TO_BOTTOM_THRESHOLD = 96;
 
 function timelineLabel(item: NativeTimelineItem): string {
   if (item.role === 'user') return '你';
@@ -526,6 +534,7 @@ export function SessionDetailScreen({
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
+  const [composerHeight, setComposerHeight] = useState(MIN_COMPOSER_CLEARANCE);
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
   const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [attachmentPickerVisible, setAttachmentPickerVisible] = useState(false);
@@ -547,10 +556,20 @@ export function SessionDetailScreen({
   const [providerLoading, setProviderLoading] = useState(false);
   const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState('');
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const permissionSubmitting = useRef(new Set<string>());
   const listRef = useRef<FlatList<NativeTimelineItem>>(null);
   const lastTimelineKey = useRef<string | null>(null);
+  const isNearBottomRef = useRef(true);
+  const shouldAutoScrollRef = useRef(true);
+  const autoScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollMetricsRef = useRef({
+    contentHeight: 0,
+    offsetY: 0,
+    viewportHeight: 0,
+  });
   const voiceRecorder = useNativeVoiceRecorder();
+  const safeAreaInsets = useSafeAreaInsets();
 
   const loadThread = useCallback(async (): Promise<SessionThreadData> => {
     const [sessionPayload, timelinePayload, permissionPayload, jobsPayload] = await Promise.all([
@@ -598,6 +617,10 @@ export function SessionDetailScreen({
     if (!normalizedMessageQuery) return timelineItems;
     return timelineItems.filter((item) => timelineSearchContent(item).includes(normalizedMessageQuery));
   }, [normalizedMessageQuery, timelineItems]);
+  const timelineBottomClearance = Math.max(
+    MIN_COMPOSER_CLEARANCE,
+    composerHeight,
+  ) + Math.max(safeAreaInsets.bottom, TIMELINE_BOTTOM_SAFEAREA_FALLBACK) + TIMELINE_BOTTOM_GUTTER;
   const hasOlderTimeline = olderHasMore ?? data?.timelineHasMore ?? false;
   const visiblePermissions = useMemo(() => {
     const pending = (data?.permissions ?? []).filter(
@@ -628,7 +651,22 @@ export function SessionDetailScreen({
     setControlsError(null);
     setMessageSearchOpen(false);
     setMessageQuery('');
+    setShowScrollToBottom(false);
+    isNearBottomRef.current = true;
+    shouldAutoScrollRef.current = true;
+    scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
+    if (autoScrollSettleTimerRef.current) {
+      clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = null;
+    }
   }, [session.session_id]);
+
+  useEffect(() => () => {
+    if (autoScrollSettleTimerRef.current) {
+      clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (!sentJob || !data) return;
@@ -658,12 +696,16 @@ export function SessionDetailScreen({
   useEffect(() => {
     if (timelineItems.length === 0) return;
     if (focusedPermissionId || messageSearchOpen || normalizedMessageQuery) return;
+    if (!isNearBottomRef.current && !shouldAutoScrollRef.current) return;
     const latest = timelineItems[timelineItems.length - 1];
     if (!latest) return;
     const latestKey = `${latest.session_id}:${latest.seq}:${latest.created_at}`;
     if (lastTimelineKey.current === latestKey) return;
     lastTimelineKey.current = latestKey;
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+    requestAnimationFrame(() => {
+      scrollToBottom(false, false);
+      scheduleAutoScrollSettle();
+    });
   }, [focusedPermissionId, messageSearchOpen, normalizedMessageQuery, timelineItems]);
 
   useEffect(() => {
@@ -673,6 +715,67 @@ export function SessionDetailScreen({
     requestAnimationFrame(() => listRef.current?.scrollToOffset({ animated: false, offset: 0 }));
     onFocusedPermissionHandled?.(focusedPermissionId);
   }, [focusedPermissionId, onFocusedPermissionHandled, visiblePermissions]);
+
+  function applyScrollVisibility() {
+    const { contentHeight, offsetY, viewportHeight } = scrollMetricsRef.current;
+    if (contentHeight <= 0 || viewportHeight <= 0) return;
+    const distanceFromBottom = contentHeight - (offsetY + viewportHeight);
+    const isNearBottom = distanceFromBottom <= SCROLL_TO_BOTTOM_THRESHOLD;
+    isNearBottomRef.current = isNearBottom;
+    setShowScrollToBottom(!isNearBottom && !messageSearchOpen && !normalizedMessageQuery);
+  }
+
+  function scheduleAutoScrollSettle() {
+    if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
+    autoScrollSettleTimerRef.current = setTimeout(() => {
+      autoScrollSettleTimerRef.current = null;
+      scrollToBottom(false, true);
+    }, 180);
+  }
+
+  function scrollToBottom(animated = true, finalize = true) {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+      if (!finalize) return;
+      shouldAutoScrollRef.current = false;
+      scrollMetricsRef.current.offsetY = Math.max(
+        0,
+        scrollMetricsRef.current.contentHeight - scrollMetricsRef.current.viewportHeight,
+      );
+      isNearBottomRef.current = true;
+      setShowScrollToBottom(false);
+    });
+  }
+
+  function handleTimelineScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollMetricsRef.current = {
+      contentHeight: contentSize.height,
+      offsetY: contentOffset.y,
+      viewportHeight: layoutMeasurement.height,
+    };
+    applyScrollVisibility();
+  }
+
+  function handleTimelineLayout(event: LayoutChangeEvent) {
+    scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+    if (shouldAutoScrollRef.current) {
+      scrollToBottom(false, false);
+      scheduleAutoScrollSettle();
+      return;
+    }
+    applyScrollVisibility();
+  }
+
+  function handleTimelineContentSizeChange(_width: number, height: number) {
+    scrollMetricsRef.current.contentHeight = height;
+    if (shouldAutoScrollRef.current) {
+      scrollToBottom(false, false);
+      scheduleAutoScrollSettle();
+      return;
+    }
+    applyScrollVisibility();
+  }
 
   async function sendReply() {
     const prompt = reply.trim();
@@ -1001,6 +1104,14 @@ export function SessionDetailScreen({
       onRequestError?.(error);
       setSendError(errorMessage(error));
     }
+  }
+
+  function handleComposerLayout(event: LayoutChangeEvent) {
+    const nextHeight = Math.max(
+      MIN_COMPOSER_CLEARANCE,
+      Math.ceil(event.nativeEvent.layout.height),
+    );
+    setComposerHeight((current) => (current === nextHeight ? current : nextHeight));
   }
 
   function renderTimelineItem(item: NativeTimelineItem) {
@@ -1406,7 +1517,11 @@ export function SessionDetailScreen({
           />
         ) : (
           <FlatList
-            contentContainerStyle={styles.timelineList}
+            accessibilityLabel="会话消息列表"
+            contentContainerStyle={[
+              styles.timelineList,
+              { paddingBottom: timelineBottomClearance },
+            ]}
             data={visibleTimelineItems}
             keyExtractor={(item) => `${item.session_id}:${item.seq}`}
             ListEmptyComponent={(
@@ -1416,6 +1531,10 @@ export function SessionDetailScreen({
               </View>
             )}
             ListHeaderComponent={detailHeader}
+            ListFooterComponent={<View accessibilityLabel="会话消息底部留白" style={{ height: timelineBottomClearance }} />}
+            onLayout={handleTimelineLayout}
+            onContentSizeChange={handleTimelineContentSizeChange}
+            onScroll={handleTimelineScroll}
             ref={listRef}
             refreshControl={(
               <RefreshControl
@@ -1425,11 +1544,23 @@ export function SessionDetailScreen({
                 tintColor={colors.accent}
               />
             )}
+            scrollEventThrottle={16}
             renderItem={({ item }) => renderTimelineItem(item)}
           />
         )}
 
-        <View style={styles.composer}>
+        {showScrollToBottom ? (
+          <Pressable
+            accessibilityLabel="回到底部"
+            accessibilityRole="button"
+            onPress={() => scrollToBottom(true)}
+            style={({ pressed }) => [styles.scrollToBottomButton, pressed && styles.pressed]}
+          >
+            <Ionicons color={colors.surface} name="arrow-down" size={18} />
+          </Pressable>
+        ) : null}
+
+        <View onLayout={handleComposerLayout} style={styles.composer}>
           {replyDisabledReason ? (
             <View accessibilityLabel="回复不可用原因" style={styles.replyDisabledNotice}>
               <Ionicons color={colors.muted} name="information-circle-outline" size={16} />
@@ -2082,7 +2213,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  timelineList: { paddingBottom: 18, paddingHorizontal: 14 },
+  timelineList: { paddingHorizontal: 14 },
   detailHeaderContent: { paddingTop: 14 },
   sessionMeta: {
     backgroundColor: colors.surface,
@@ -2293,6 +2424,22 @@ const styles = StyleSheet.create({
   timelineStatus: { color: colors.muted, fontSize: 11 },
   timelineActions: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   timelineFooter: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', minHeight: 20 },
+  scrollToBottomButton: {
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    borderRadius: 999,
+    bottom: 138,
+    elevation: 4,
+    height: 44,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 16,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    width: 44,
+  },
   toolCard: { gap: 6 },
   toolName: { color: colors.accent, fontSize: 12, fontWeight: '800' },
   toolOutput: {

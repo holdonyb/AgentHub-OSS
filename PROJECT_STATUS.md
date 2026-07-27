@@ -18,6 +18,7 @@ The 1.0 line keeps Session Mode and adds Workbench Mode. A Workbench task moves 
 
 The user-level notification ledger, React Native foreground integration, and per-device Expo delivery lifecycle are merged to `main` and deployed to production. Runtime Cockpit extends the release line as a projection over the existing session, worker, permission, and task authorities.
 
+- Worker session discovery now resolves active files from each runtime's own local activity index, then maintains a bounded persistent file index and snapshot cache. Routine polling avoids recursive history scans and never reads multi-gigabyte Codex, Claude, or Kimi JSONL files in full; older history can be imported through an explicit maintenance rebuild.
 - Sessions expose revisioned execution state separately from user-attention state, so stale discovery or sync responses cannot overwrite newer worker transitions.
 - The API owns a per-user notification ledger with pending, delivered, read, acknowledged, and dismissed lifecycle states.
 - Permission resolution and terminal job outcomes acknowledge their matching notifications instead of leaving historical alerts active.

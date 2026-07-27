@@ -98,6 +98,7 @@ type LoadState = 'loading' | 'ready' | 'login' | 'error';
 type MobilePane = 'sessions' | 'thread' | 'controls' | 'files' | 'workers' | 'me';
 type WorkspaceView = 'explorer' | 'preview';
 type ProviderFilter = 'all' | 'codex' | 'claude' | 'kimi' | 'opencode';
+type InspectorMode = 'overview' | 'controls';
 type SessionArchiveView = 'active' | 'archived';
 type TimelineFilter = 'focus' | 'all' | 'messages' | 'tools' | 'events';
 type ReplyMode = 'direct' | 'plan';
@@ -2721,17 +2722,36 @@ function TimelineText({
       {hasText && (
         <div className="message-actions" aria-label="消息操作">
           {shouldCollapse && (
-            <button className="message-action-button" type="button" onClick={() => setExpanded((current) => !current)}>
-              {expanded ? '收起' : '展开全文'}
+            <button
+              className="message-action-button"
+              type="button"
+              aria-label={expanded ? '收起全文' : '展开全文'}
+              title={expanded ? '收起全文' : '展开全文'}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              <span className="message-action-label">{expanded ? '收起' : '展开全文'}</span>
             </button>
           )}
-          <button className="message-action-button" type="button" onClick={copyText}>
+          <button
+            className="message-action-button"
+            type="button"
+            aria-label={copied ? '已复制全文' : '复制全文'}
+            title={copied ? '已复制全文' : '复制全文'}
+            onClick={copyText}
+          >
             <Copy size={13} />
-            {copied ? '已复制' : '复制全文'}
+            <span className="message-action-label">{copied ? '已复制' : '复制全文'}</span>
           </button>
-          <button className="message-action-button" type="button" onClick={() => setViewerOpen(true)}>
+          <button
+            className="message-action-button"
+            type="button"
+            aria-label="全文阅读"
+            title="全文阅读"
+            onClick={() => setViewerOpen(true)}
+          >
             <Maximize2 size={13} />
-            全文阅读
+            <span className="message-action-label">全文阅读</span>
           </button>
         </div>
       )}
@@ -3295,6 +3315,8 @@ function App() {
   const [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  const [sessionFiltersOpen, setSessionFiltersOpen] = useState(false);
+  const [inspectorMode, setInspectorMode] = useState<InspectorMode>('overview');
   const [sessionArchiveView, setSessionArchiveView] = useState<SessionArchiveView>('active');
   const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
@@ -3307,6 +3329,7 @@ function App() {
   const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [fileWorkerId, setFileWorkerId] = useState('');
   const [fileWorkspaceRoot, setFileWorkspaceRoot] = useState('');
   const [fileWorkspaceView, setFileWorkspaceView] = useState<WorkspaceView>('explorer');
@@ -4538,6 +4561,7 @@ function App() {
     setMobileSessionActionsOpen(false);
     setStatusDetailsOpen(false);
     setComposerExpanded(false);
+    setComposerOptionsOpen(false);
     setFileEditor(null);
   }, [selectedId]);
 
@@ -6329,6 +6353,7 @@ function App() {
     setReply('');
     setReplyAttachmentsSafely([]);
     setComposerFocused(false);
+    setComposerOptionsOpen(false);
     replyTextareaRef.current?.blur();
     let response: { job: Job };
     try {
@@ -7325,60 +7350,76 @@ function App() {
               </button>
             )}
           </label>
-          <div className="provider-filter" aria-label={pickLocale(locale, 'Provider 筛选', 'Provider filters')}>
-            {providerFilters(locale).map((filter) => (
-              <button
-                key={filter.id}
-                type="button"
-                className={providerFilter === filter.id ? 'selected' : ''}
-                onClick={() => setProviderFilter(filter.id)}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-          <div className="sort-row">
-            <span>{text.sortRecent}</span>
+          <button
+            type="button"
+            className="session-filter-toggle"
+            aria-label={pickLocale(locale, '筛选会话', 'Filter sessions')}
+            aria-expanded={sessionFiltersOpen}
+            onClick={() => setSessionFiltersOpen((open) => !open)}
+          >
             <SlidersHorizontal size={15} />
-          </div>
-          {canOperate(user) && (
-            <div className="session-bulk-toolbar" role="group" aria-label={t(locale, 'sessionBulkActions')}>
-              {sessionSelectionMode ? (
-                <>
-                  <button type="button" onClick={() => setAllVisibleSessionsSelected(true)}>
-                    {t(locale, 'selectAllVisible')}
-                  </button>
-                  <button type="button" onClick={() => setAllVisibleSessionsSelected(false)}>
-                    {t(locale, 'clearSelection')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleBatchArchiveSessions(sessionArchiveView !== 'archived')}
-                    disabled={selectedVisibleSessionIds.length === 0}
-                  >
-                    {sessionArchiveView === 'archived' ? t(locale, 'restoreSelected') : t(locale, 'archiveSelected')}
-                  </button>
-                  <span className="session-bulk-count">
-                    {t(locale, 'selectedCount', { count: String(selectedVisibleSessionIds.length) })}
-                  </span>
-                  <button
-                    type="button"
-                    className="session-bulk-cancel"
-                    onClick={() => {
-                      setSessionSelectionMode(false);
-                      setSelectedSessionIds(new Set());
-                    }}
-                  >
-                    {t(locale, 'cancelSelection')}
-                  </button>
-                </>
-              ) : (
-                <button type="button" onClick={() => setSessionSelectionMode(true)}>
-                  {t(locale, 'selectSessions')}
+            <span>{pickLocale(locale, '筛选会话', 'Filter sessions')}</span>
+            <ChevronDown size={14} />
+          </button>
+          <div
+            className={`session-filter-drawer ${sessionFiltersOpen ? 'is-open' : ''}`}
+            data-open={sessionFiltersOpen}
+          >
+            <div className="provider-filter" aria-label={pickLocale(locale, 'Provider 筛选', 'Provider filters')}>
+              {providerFilters(locale).map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  className={providerFilter === filter.id ? 'selected' : ''}
+                  onClick={() => setProviderFilter(filter.id)}
+                >
+                  {filter.label}
                 </button>
-              )}
+              ))}
             </div>
-          )}
+            <div className="sort-row">
+              <span>{text.sortRecent}</span>
+              <SlidersHorizontal size={15} />
+            </div>
+            {canOperate(user) && (
+              <div className="session-bulk-toolbar" role="group" aria-label={t(locale, 'sessionBulkActions')}>
+                {sessionSelectionMode ? (
+                  <>
+                    <button type="button" onClick={() => setAllVisibleSessionsSelected(true)}>
+                      {t(locale, 'selectAllVisible')}
+                    </button>
+                    <button type="button" onClick={() => setAllVisibleSessionsSelected(false)}>
+                      {t(locale, 'clearSelection')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleBatchArchiveSessions(sessionArchiveView !== 'archived')}
+                      disabled={selectedVisibleSessionIds.length === 0}
+                    >
+                      {sessionArchiveView === 'archived' ? t(locale, 'restoreSelected') : t(locale, 'archiveSelected')}
+                    </button>
+                    <span className="session-bulk-count">
+                      {t(locale, 'selectedCount', { count: String(selectedVisibleSessionIds.length) })}
+                    </span>
+                    <button
+                      type="button"
+                      className="session-bulk-cancel"
+                      onClick={() => {
+                        setSessionSelectionMode(false);
+                        setSelectedSessionIds(new Set());
+                      }}
+                    >
+                      {t(locale, 'cancelSelection')}
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setSessionSelectionMode(true)}>
+                    {t(locale, 'selectSessions')}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           {filteredSessions.length === 0 && (
             <p className="empty">{sessionArchiveView === 'archived' ? t(locale, 'noArchivedSessions') : t(locale, 'noSessions')}</p>
           )}
@@ -7689,6 +7730,12 @@ function App() {
                 onSubmit={handleReply}
                 onFocus={() => setComposerFocused(true)}
                 onBlur={handleComposerBlur}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && composerOptionsOpen) {
+                    event.stopPropagation();
+                    setComposerOptionsOpen(false);
+                  }
+                }}
               >
                 <label className="reply-title" htmlFor="reply">{pickLocale(locale, '回复当前会话', 'Reply to this session')}</label>
                 <div className="reply-mode-tabs" role="group" aria-label={pickLocale(locale, '回复模式', 'Reply mode')}>
@@ -7771,49 +7818,52 @@ function App() {
                   </div>
                 )}
             {visibleReplyStatus && <div className="reply-status">{visibleReplyStatus}</div>}
-                <div className="voice-mode-bar">
-                  <div className="voice-mode-toggle voice-interaction-toggle" role="group" aria-label="语音交互模式">
-                    <button
-                      type="button"
-                      className={voiceInteractionMode === 'dictation' ? 'selected' : ''}
-                      aria-pressed={voiceInteractionMode === 'dictation'}
-                      onClick={() => setVoiceInteractionMode('dictation')}
-                      disabled={isRecording}
-                    >
-                      听写
-                    </button>
-                    <button
-                      type="button"
-                      className={voiceInteractionMode === 'assistant' ? 'selected' : ''}
-                      aria-pressed={voiceInteractionMode === 'assistant'}
-                      onClick={() => setVoiceInteractionMode('assistant')}
-                      disabled={isRecording}
-                    >
-                      助手
-                    </button>
+                <div
+                  id="composer-options"
+                  className={`composer-options ${composerOptionsOpen ? 'is-open' : ''}`}
+                >
+                  <div className="voice-mode-bar">
+                    <div className="voice-mode-toggle voice-interaction-toggle" role="group" aria-label="语音交互模式">
+                      <button
+                        type="button"
+                        className={voiceInteractionMode === 'dictation' ? 'selected' : ''}
+                        aria-pressed={voiceInteractionMode === 'dictation'}
+                        onClick={() => setVoiceInteractionMode('dictation')}
+                        disabled={isRecording}
+                      >
+                        听写
+                      </button>
+                      <button
+                        type="button"
+                        className={voiceInteractionMode === 'assistant' ? 'selected' : ''}
+                        aria-pressed={voiceInteractionMode === 'assistant'}
+                        onClick={() => setVoiceInteractionMode('assistant')}
+                        disabled={isRecording}
+                      >
+                        助手
+                      </button>
+                    </div>
+                    <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
+                      <button
+                        type="button"
+                        className={voiceInputMode === 'streaming' ? 'selected' : ''}
+                        aria-pressed={voiceInputMode === 'streaming'}
+                        onClick={() => setVoiceInputMode('streaming')}
+                        disabled={isRecording || voiceInteractionMode === 'assistant'}
+                      >
+                        流式
+                      </button>
+                      <button
+                        type="button"
+                        className={voiceInputMode === 'standard' ? 'selected' : ''}
+                        aria-pressed={voiceInputMode === 'standard'}
+                        onClick={() => setVoiceInputMode('standard')}
+                        disabled={isRecording || voiceInteractionMode === 'assistant'}
+                      >
+                        标准
+                      </button>
+                    </div>
                   </div>
-                  <div className="voice-mode-toggle" role="group" aria-label="语音输入模式">
-                    <button
-                      type="button"
-                      className={voiceInputMode === 'streaming' ? 'selected' : ''}
-                      aria-pressed={voiceInputMode === 'streaming'}
-                      onClick={() => setVoiceInputMode('streaming')}
-                      disabled={isRecording || voiceInteractionMode === 'assistant'}
-                    >
-                      流式
-                    </button>
-                    <button
-                      type="button"
-                      className={voiceInputMode === 'standard' ? 'selected' : ''}
-                      aria-pressed={voiceInputMode === 'standard'}
-                      onClick={() => setVoiceInputMode('standard')}
-                      disabled={isRecording || voiceInteractionMode === 'assistant'}
-                    >
-                      标准
-                    </button>
-                  </div>
-                </div>
-                <div className="reply-footer">
                   {quickReplies.length > 0 && (
                     <div className="quick-reply-strip" aria-label="快捷回复">
                       {quickReplies.map((quickReply) => (
@@ -7829,6 +7879,8 @@ function App() {
                       ))}
                     </div>
                   )}
+                </div>
+                <div className="reply-footer">
                   <div className="reply-actions">
                   <input
                     id="reply-attachment"
@@ -7877,6 +7929,17 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    className={`reply-icon-button composer-options-button ${composerOptionsOpen ? 'selected' : ''}`}
+                    aria-label="输入选项"
+                    title="语音模式与快捷回复"
+                    aria-controls="composer-options"
+                    aria-expanded={composerOptionsOpen}
+                    onClick={() => setComposerOptionsOpen((open) => !open)}
+                  >
+                    <SlidersHorizontal size={16} />
+                  </button>
+                  <button
+                    type="button"
                     className="reply-icon-button composer-expand-button"
                     aria-label={composerExpanded ? '收起输入框' : '展开输入框'}
                     title={composerExpanded ? '收起输入框' : '展开输入框'}
@@ -7896,8 +7959,39 @@ function App() {
           )}
         </section>
 
-        <aside className="ops-rail" aria-label="Controls">
+        <aside className="ops-rail" aria-label="Controls" data-inspector-mode={inspectorMode}>
           <h2 className="rail-title">{text.controls}</h2>
+          <div className="inspector-switch">
+            <div className="inspector-tabs" role="tablist" aria-label={pickLocale(locale, '检查器视图', 'Inspector view')}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'overview'}
+                className={inspectorMode === 'overview' ? 'selected' : ''}
+                onClick={() => setInspectorMode('overview')}
+              >
+                {pickLocale(locale, '概览', 'Overview')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'controls'}
+                className={inspectorMode === 'controls' ? 'selected' : ''}
+                onClick={() => setInspectorMode('controls')}
+              >
+                {pickLocale(locale, '控制', 'Controls')}
+              </button>
+            </div>
+            <button
+              type="button"
+              className="inspector-files-button"
+              onClick={navigateRemoteWorkspace}
+              aria-label={pickLocale(locale, '打开工作区', 'Open workspace')}
+              title={pickLocale(locale, '打开工作区', 'Open workspace')}
+            >
+              <Folder size={16} />
+            </button>
+          </div>
           <Panel title={text.preferences} icon={<Smartphone size={16} />} defaultOpen={false}>
             <PreferencesEditor
               locale={locale}

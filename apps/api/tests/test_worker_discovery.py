@@ -1,16 +1,37 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import json
 import os
+import sqlite3
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from agenthub_worker import discovery
+import agenthub_linux_worker.discovery as linux_discovery_module
+import agenthub_windows_worker.discovery as windows_discovery_module
 from agenthub_worker.discovery import parse_claude_jsonl, parse_codex_jsonl, parse_kimi_session, recent_session_files
 from agenthub_worker.paths import normalize_workspace_root
 from agenthub_linux_worker.discovery import discover_capabilities as discover_linux_capabilities
 from agenthub_windows_worker.discovery import discover_capabilities, discover_sessions as discover_windows_sessions
 from agenthub_windows_worker.main import _session_roots, _workspace_roots
+
+
+def _load_macos_discovery_module() -> Any:
+    module_path = Path(__file__).parents[3] / "workers" / "local-macos" / "agenthub_macos_worker" / "discovery.py"
+    spec = importlib.util.spec_from_file_location("agenthub_macos_worker_discovery_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+macos_discovery_module = _load_macos_discovery_module()
 
 
 def test_windows_path_normalization_handles_backslashes_chinese_and_spaces() -> None:
@@ -142,6 +163,830 @@ def test_recent_session_files_skips_noisy_project_dependency_dirs(tmp_path: Path
     paths = [path.name for _, path in recent_session_files([root])]
 
     assert paths == ["keep.jsonl"]
+
+
+def test_recent_session_files_reuses_index_between_polls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    root.mkdir(parents=True)
+    fixture = root / "keep.jsonl"
+    fixture.write_text('{"type":"session","id":"keep","cwd":"E:/work"}\n', encoding="utf-8")
+
+    walk_calls: list[str] = []
+    original_walk = discovery.os.walk
+
+    def tracked_walk(path: Path):
+        walk_calls.append(str(path))
+        yield from original_walk(path)
+
+    monkeypatch.setattr(discovery.os, "walk", tracked_walk)
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RECONCILE_SECONDS", "3600")
+    discovery.reset_recent_session_index()
+
+    assert [path.name for _, path in recent_session_files([root])] == ["keep.jsonl"]
+    assert [path.name for _, path in recent_session_files([root])] == ["keep.jsonl"]
+
+    assert walk_calls == []
+
+
+def test_recent_session_files_cold_start_uses_probe_instead_of_full_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    today = datetime.now()
+    fixture = root / today.strftime("%Y") / today.strftime("%m") / today.strftime("%d") / "keep.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"keep","cwd":"E:/work"}\n', encoding="utf-8")
+
+    def fail_if_walked(*args, **kwargs):
+        raise AssertionError("cold start should not do a full recursive walk")
+
+    monkeypatch.setattr(discovery.os, "walk", fail_if_walked)
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RECONCILE_SECONDS", "3600")
+    discovery.reset_recent_session_index()
+
+    paths = [path.name for _, path in recent_session_files([root])]
+
+    assert paths == ["keep.jsonl"]
+
+
+def test_codex_cold_start_uses_runtime_index_for_old_active_session(tmp_path: Path) -> None:
+    codex_root = tmp_path / ".codex"
+    root = codex_root / "sessions"
+    fixture = root / "2020" / "01" / "01" / "old-active.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"old-active","cwd":"E:/work"}\n', encoding="utf-8")
+    database = sqlite3.connect(codex_root / "state_5.sqlite")
+    database.execute("CREATE TABLE threads (rollout_path TEXT NOT NULL, updated_at INTEGER NOT NULL)")
+    database.execute("INSERT INTO threads(rollout_path, updated_at) VALUES(?, ?)", (str(fixture), 999))
+    database.commit()
+    database.close()
+
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_claude_cold_start_uses_history_index_without_scanning_project_files(tmp_path: Path) -> None:
+    claude_root = tmp_path / ".claude"
+    root = claude_root / "projects"
+    fixture = root / "E--work" / "claude-active.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"sessionId":"claude-active","cwd":"E:/work","type":"summary","summary":"Active"}\n',
+        encoding="utf-8",
+    )
+    (claude_root / "history.jsonl").write_text(
+        '{"timestamp":999,"project":"E:\\\\work","sessionId":"claude-active","display":"continue"}\n',
+        encoding="utf-8",
+    )
+
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_kimi_cold_start_uses_registry_without_scanning_session_history(tmp_path: Path) -> None:
+    kimi_root = tmp_path / ".kimi"
+    root = kimi_root / "sessions"
+    workspace = "E:\\Work\\Kimi Project"
+    workdir_hash = hashlib.md5(workspace.encode()).hexdigest()
+    fixture = root / workdir_hash / "kimi-active" / "wire.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"Active"}}}\n',
+        encoding="utf-8",
+    )
+    (kimi_root / "kimi.json").write_text(
+        json.dumps({"work_dirs": [{"path": workspace, "last_session_id": "kimi-active"}]}),
+        encoding="utf-8",
+    )
+
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_recent_session_files_restores_known_paths_after_worker_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "2020" / "01" / "01" / "historical-active.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"historical-active","cwd":"E:/work"}\n', encoding="utf-8")
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    probe_enabled = True
+
+    def controlled_probe(probe_root: Path, _limit: int):
+        assert probe_root == root
+        if probe_enabled:
+            yield fixture
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setattr(discovery, "_probe_recent_jsonl_paths", controlled_probe)
+    discovery.reset_discovery_snapshot_cache()
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+    probe_enabled = False
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_discovery_cache_recovers_when_disposable_database_is_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "keep.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"keep","cwd":"E:/work"}\n', encoding="utf-8")
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b"not a sqlite database")
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setattr(discovery, "_snapshot_cache", None)
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+    with sqlite3.connect(cache_path) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_discovery_continues_when_disposable_cache_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "keep.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"type":"session","id":"keep","cwd":"E:/work"}\n',
+        encoding="utf-8",
+    )
+    cache = discovery._SnapshotCache(tmp_path / "runtime" / "discovery-cache.sqlite3")
+
+    def unavailable_connection() -> sqlite3.Connection:
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(cache, "_connect", unavailable_connection)
+    monkeypatch.setattr(discovery, "_snapshot_cache", cache)
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+    assert parse_codex_jsonl(fixture).session_id == "keep"
+
+
+def test_discovery_cache_requests_private_filesystem_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "keep.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"keep","cwd":"E:/work"}\n', encoding="utf-8")
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    chmod_calls: list[tuple[Path, int]] = []
+    original_chmod = os.chmod
+
+    def tracked_chmod(path: str | os.PathLike[str], mode: int) -> None:
+        chmod_calls.append((Path(path), mode))
+        original_chmod(path, mode)
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setattr(discovery.os, "chmod", tracked_chmod)
+    discovery.reset_discovery_snapshot_cache()
+    discovery.reset_recent_session_index()
+
+    recent_session_files([root])
+
+    assert (cache_path.parent, 0o700) in chmod_calls
+    assert (cache_path, 0o600) in chmod_calls
+
+
+def test_discovery_cache_applies_windows_acl_instead_of_relying_on_chmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_bytes(b"")
+    commands: list[list[str]] = []
+    environments: list[dict[str, str]] = []
+
+    def completed(command: list[str], **kwargs):
+        commands.append(command)
+        if command[0] == "whoami":
+            return subprocess.CompletedProcess(command, 0, stdout="DESKTOP\\agenthub-user\n", stderr="")
+        environments.append(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, stdout="processed", stderr="")
+
+    monkeypatch.setattr(discovery, "WINDOWS_ACL_REQUIRED", True)
+    monkeypatch.setattr(discovery.subprocess, "run", completed)
+
+    cache = discovery._SnapshotCache(cache_path)
+    cache._secure_cache_files()
+
+    acl_commands = [command for command in commands if command[0].lower().startswith("powershell")]
+    assert any(environment["AGENTHUB_DISCOVERY_ACL_PATH"] == str(cache_path.parent) for environment in environments)
+    assert any(environment["AGENTHUB_DISCOVERY_ACL_PATH"] == str(cache_path) for environment in environments)
+    assert all("SetAccessRuleProtection" in " ".join(command) for command in acl_commands)
+    assert all("SetAccessControl" in " ".join(command) for command in acl_commands)
+    assert all("unexpected ACL entry" in " ".join(command) for command in acl_commands)
+
+
+def test_discovery_cache_treats_acl_timeout_as_cache_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    fixture = tmp_path / "session.jsonl"
+    fixture.write_text('{"type":"session","id":"keep"}\n', encoding="utf-8")
+    stat = fixture.stat()
+    cache = discovery._SnapshotCache(cache_path)
+
+    def timed_out() -> None:
+        raise subprocess.TimeoutExpired("powershell", 10)
+
+    monkeypatch.setattr(cache, "_secure_cache_files", timed_out)
+
+    assert cache.load(fixture, "codex", stat) is None
+
+
+def test_discovery_cache_closes_connection_when_post_open_acl_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = discovery._SnapshotCache(tmp_path / "runtime" / "discovery-cache.sqlite3")
+    closed = False
+    secure_calls = 0
+
+    class FakeConnection:
+        def execute(self, *_args, **_kwargs):
+            return self
+
+        def fetchone(self):
+            return None
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    def secure() -> None:
+        nonlocal secure_calls
+        secure_calls += 1
+        if secure_calls == 2:
+            raise subprocess.TimeoutExpired("powershell", 10)
+
+    monkeypatch.setattr(cache, "_open_connection", lambda _path: FakeConnection())
+    monkeypatch.setattr(cache, "_ensure_schema", lambda _connection: None)
+    monkeypatch.setattr(cache, "_secure_cache_files", secure)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        cache._connect()
+
+    assert closed is True
+
+
+def test_discovery_cache_closes_recovery_connection_when_schema_rebuild_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = discovery._SnapshotCache(tmp_path / "runtime" / "discovery-cache.sqlite3")
+
+    class FakeConnection:
+        def __init__(self, *, corrupt: bool) -> None:
+            self.corrupt = corrupt
+            self.closed = False
+
+        def execute(self, *_args, **_kwargs):
+            if self.corrupt:
+                raise sqlite3.DatabaseError("file is not a database")
+            return self
+
+        def fetchone(self):
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    corrupt_connection = FakeConnection(corrupt=True)
+    recovery_connection = FakeConnection(corrupt=False)
+    connections = iter((corrupt_connection, recovery_connection))
+
+    def fail_recovery_schema(connection: FakeConnection) -> None:
+        if connection is recovery_connection:
+            raise RuntimeError("schema rebuild failed")
+
+    monkeypatch.setattr(cache, "_open_connection", lambda _path: next(connections))
+    monkeypatch.setattr(cache, "_ensure_schema", fail_recovery_schema)
+    monkeypatch.setattr(cache, "_secure_cache_files", lambda: None)
+
+    with pytest.raises(RuntimeError, match="schema rebuild failed"):
+        cache._connect()
+
+    assert corrupt_connection.closed is True
+    assert recovery_connection.closed is True
+
+
+def test_recent_session_files_never_runs_periodic_full_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "2026" / "07" / "21" / "keep.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"keep","cwd":"E:/work"}\n', encoding="utf-8")
+    times = iter((100.0, 200.0))
+
+    def controlled_probe(probe_root: Path, _limit: int):
+        assert probe_root == root
+        yield fixture
+
+    def fail_if_walked(*args, **kwargs):
+        raise AssertionError("normal discovery polling must not recurse through the complete history tree")
+
+    monkeypatch.setattr(discovery, "_probe_recent_jsonl_paths", controlled_probe)
+    monkeypatch.setattr(discovery.os, "walk", fail_if_walked)
+    monkeypatch.setattr(discovery.time, "time", lambda: next(times))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RECONCILE_SECONDS", "1")
+    discovery.reset_recent_session_index()
+
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_bounded_fallback_probe_eventually_advances_through_large_flat_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    fixtures = [root / f"session-{index}.jsonl" for index in range(3)]
+    for index, fixture in enumerate(fixtures):
+        fixture.write_text(f'{{"id":"session-{index}"}}\n', encoding="utf-8")
+        os.utime(fixture, (100 + index, 100 + index))
+
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 2)
+    discovery.reset_recent_session_index()
+
+    discovered: set[Path] = set()
+    for _ in range(3):
+        discovered.update(discovery._bounded_direct_jsonl_paths(root, 2))
+
+    assert discovered == set(fixtures)
+
+
+def test_bounded_fallback_probe_evicts_idle_directory_handles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    for index in range(3):
+        (first_root / f"first-{index}.jsonl").write_text("{}\n", encoding="utf-8")
+        (second_root / f"second-{index}.jsonl").write_text("{}\n", encoding="utf-8")
+
+    now = 100.0
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 1)
+    monkeypatch.setattr(discovery.time, "time", lambda: now)
+    discovery.reset_recent_session_index()
+
+    discovery._bounded_direct_jsonl_paths(first_root, 1)
+    assert str(first_root) in discovery._direct_probe_iterators
+
+    now += discovery.DEFAULT_DISCOVERY_CURSOR_TTL_SECONDS + 1
+    discovery._bounded_direct_jsonl_paths(second_root, 1)
+
+    assert str(first_root) not in discovery._direct_probe_iterators
+
+
+def test_bounded_fallback_probe_reopens_expired_handle_for_same_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    for index in range(3):
+        (root / f"session-{index}.jsonl").write_text("{}\n", encoding="utf-8")
+
+    now = 100.0
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 1)
+    monkeypatch.setattr(discovery.time, "time", lambda: now)
+    discovery.reset_recent_session_index()
+
+    discovery._bounded_direct_jsonl_paths(root, 1)
+    first_iterator = discovery._direct_probe_iterators[str(root)].iterator
+
+    now += discovery.DEFAULT_DISCOVERY_CURSOR_TTL_SECONDS + 1
+    discovery._bounded_direct_jsonl_paths(root, 1)
+
+    assert discovery._direct_probe_iterators[str(root)].iterator is not first_iterator
+
+
+def test_bounded_fallback_probe_does_not_discard_matches_beyond_return_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    fixtures = [root / f"session-{index}.jsonl" for index in range(4)]
+    for fixture in fixtures:
+        fixture.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 4)
+    discovery.reset_recent_session_index()
+
+    discovered: set[Path] = set()
+    for _ in range(5):
+        discovered.update(discovery._bounded_direct_jsonl_paths(root, 1))
+
+    assert discovered == set(fixtures)
+
+
+def test_bounded_fallback_probe_returns_newest_from_batch_and_keeps_overflow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    fixtures = [root / f"session-{index}.jsonl" for index in range(3)]
+    for index, fixture in enumerate(fixtures):
+        fixture.write_text("{}\n", encoding="utf-8")
+        os.utime(fixture, (100 + index, 100 + index))
+
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 3)
+    discovery.reset_recent_session_index()
+
+    assert discovery._bounded_direct_jsonl_paths(root, 2) == [fixtures[2], fixtures[1]]
+    assert discovery._bounded_direct_jsonl_paths(root, 2) == [fixtures[0]]
+
+
+def test_kimi_fallback_eventually_advances_across_registry_and_nested_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kimi_home = tmp_path / ".kimi"
+    sessions_root = kimi_home / "sessions"
+    registry_items: list[dict[str, str]] = []
+    expected: set[Path] = set()
+    for index in range(4):
+        workspace = f"E:/Work/Kimi-{index}"
+        session_id = f"session-{index}"
+        registry_items.append({"path": workspace, "last_session_id": session_id})
+        session_file = sessions_root / hashlib.md5(workspace.encode()).hexdigest() / session_id / "wire.jsonl"
+        session_file.parent.mkdir(parents=True)
+        session_file.write_text("{}\n", encoding="utf-8")
+        expected.add(session_file)
+    (kimi_home / "kimi.json").write_text(json.dumps({"work_dirs": registry_items}), encoding="utf-8")
+
+    monkeypatch.setattr(discovery, "_probe_entry_budget", lambda _limit: 2)
+    discovery.reset_recent_session_index()
+
+    discovered: set[Path] = set()
+    for _ in range(6):
+        discovered.update(discovery._probe_kimi_recent_paths(sessions_root, 1))
+
+    assert discovered == expected
+
+
+def test_rebuild_recent_session_index_imports_historical_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixture = root / "2020" / "01" / "01" / "historical.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"historical","cwd":"E:/work"}\n', encoding="utf-8")
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    discovery.reset_discovery_snapshot_cache()
+    discovery.reset_recent_session_index()
+
+    result = discovery.rebuild_recent_session_index([root])
+
+    assert result["files"] == 1
+    assert result["backends"] == {"codex": 1}
+    discovery.reset_recent_session_index()
+    assert [path for _, path in recent_session_files([root])] == [fixture]
+
+
+def test_rebuild_recent_session_index_caps_persisted_paths_per_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixtures: list[Path] = []
+    for index in range(3):
+        fixture = root / "2020" / "01" / f"0{index + 1}" / f"session-{index}.jsonl"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(f'{{"type":"session","id":"session-{index}","cwd":"E:/work"}}\n', encoding="utf-8")
+        os.utime(fixture, (100 + index, 100 + index))
+        fixtures.append(fixture)
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_MAX_FILES", "2")
+    discovery.reset_discovery_snapshot_cache()
+    discovery.reset_recent_session_index()
+
+    result = discovery.rebuild_recent_session_index([root])
+
+    assert result["files"] == 2
+    discovery.reset_recent_session_index()
+    assert [path for _, path in recent_session_files([root])] == [fixtures[2], fixtures[1]]
+
+
+def test_rebuild_migrates_legacy_index_and_allows_overlapping_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    aggregate_root = tmp_path / "home"
+    root = aggregate_root / ".codex" / "sessions"
+    fixture = root / "2020" / "01" / "01" / "historical.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"type":"session","id":"historical","cwd":"E:/work"}\n', encoding="utf-8")
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    cache_path.parent.mkdir(parents=True)
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE session_file_index (
+                root TEXT NOT NULL,
+                path TEXT PRIMARY KEY,
+                backend TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setattr(discovery, "_snapshot_cache", None)
+    discovery.reset_recent_session_index()
+
+    discovery.rebuild_recent_session_index([aggregate_root, root])
+
+    with sqlite3.connect(cache_path) as connection:
+        primary_key = [
+            row[1]
+            for row in connection.execute("PRAGMA table_info(session_file_index)")
+            if row[5]
+        ]
+        rows = connection.execute("SELECT root, path FROM session_file_index").fetchall()
+    assert primary_key == ["root", "path"]
+    assert len(rows) == 2
+
+
+def test_snapshot_cache_prunes_sessions_evicted_from_file_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".codex" / "sessions"
+    fixtures: list[Path] = []
+    for index in range(3):
+        fixture = root / "2020" / "01" / f"0{index + 1}" / f"session-{index}.jsonl"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            f'{{"type":"session","id":"session-{index}","cwd":"E:/work"}}\n',
+            encoding="utf-8",
+        )
+        os.utime(fixture, (100 + index, 100 + index))
+        fixtures.append(fixture)
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_MAX_FILES", "2")
+    discovery.reset_discovery_snapshot_cache()
+    for fixture in fixtures:
+        parse_codex_jsonl(fixture)
+    discovery.reset_recent_session_index()
+
+    discovery.rebuild_recent_session_index([root])
+
+    with sqlite3.connect(cache_path) as connection:
+        cached_paths = {
+            row[0]
+            for row in connection.execute("SELECT path FROM session_snapshot_cache").fetchall()
+        }
+    assert cached_paths == {str(fixtures[1]), str(fixtures[2])}
+
+
+def test_aggregate_root_preserves_recent_quota_for_each_provider(tmp_path: Path) -> None:
+    root = tmp_path / "home"
+    codex = root / ".codex" / "sessions" / "codex.jsonl"
+    claude = root / ".claude" / "projects" / "claude.jsonl"
+    kimi_home = root / ".kimi"
+    kimi_root = kimi_home / "sessions"
+    workspace = "E:/Work/Kimi"
+    workdir_hash = hashlib.md5(workspace.encode()).hexdigest()
+    kimi = kimi_root / workdir_hash / "kimi-active" / "wire.jsonl"
+    for fixture in (codex, claude, kimi):
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+    codex.write_text('{"type":"session","id":"codex","cwd":"E:/work"}\n', encoding="utf-8")
+    claude.write_text(
+        '{"sessionId":"claude","cwd":"E:/work","type":"summary","summary":"Claude"}\n',
+        encoding="utf-8",
+    )
+    kimi.write_text(
+        '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"Kimi"}}}\n',
+        encoding="utf-8",
+    )
+    (kimi_home / "kimi.json").write_text(
+        json.dumps({"work_dirs": [{"path": workspace, "last_session_id": "kimi-active"}]}),
+        encoding="utf-8",
+    )
+
+    discovery.reset_recent_session_index()
+
+    assert {backend for backend, _ in recent_session_files([root], max_files=1)} == {
+        "codex",
+        "claude",
+        "kimi",
+    }
+
+
+def test_kimi_probe_replaces_context_with_wire_for_same_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".kimi" / "sessions"
+    session_dir = root / "workdir" / "kimi-session"
+    session_dir.mkdir(parents=True)
+    context_path = session_dir / "context.jsonl"
+    wire_path = session_dir / "wire.jsonl"
+    context_path.write_text('{"role":"user","content":"context"}\n', encoding="utf-8")
+    probed = [context_path]
+
+    monkeypatch.setattr(discovery, "_probe_recent_jsonl_paths", lambda _root, _limit: iter(probed))
+    discovery.reset_recent_session_index()
+    assert [path for _, path in recent_session_files([root])] == [context_path]
+
+    wire_path.write_text(
+        '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"wire"}}}\n',
+        encoding="utf-8",
+    )
+    probed[:] = [wire_path]
+
+    assert [path for _, path in recent_session_files([root])] == [wire_path]
+
+
+def test_codex_parser_uses_cached_snapshot_when_file_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture = tmp_path / ".codex" / "sessions" / "2026" / "07" / "21" / "rollout-2026-07-21T10-00-00-cache-test.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T10:00:00.000Z","type":"session_meta","payload":{"id":"cache-test","cwd":"E:\\\\work"}}\n'
+        '{"timestamp":"2026-07-21T10:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"第一次"}}\n'
+        '{"timestamp":"2026-07-21T10:02:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"第一次回复"}]}}\n',
+        encoding="utf-8",
+    )
+
+    discovery.reset_discovery_snapshot_cache()
+    first = parse_codex_jsonl(fixture)
+    assert first.last_message == "第一次回复"
+
+    def fail_if_reparsed(*args, **kwargs):
+        raise AssertionError("unchanged file should have been served from cache")
+
+    monkeypatch.setattr(discovery, "_bounded_jsonl_rows", fail_if_reparsed)
+
+    second = parse_codex_jsonl(fixture)
+    assert second.last_message == "第一次回复"
+    assert second.session_id == "cache-test"
+
+
+def test_snapshot_cache_is_invalidated_when_parser_version_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / ".codex" / "sessions" / "rollout-2026-07-21T10-00-00-version-test.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T10:00:00.000Z","type":"session_meta","payload":{"id":"version-test","cwd":"E:\\\\work"}}\n',
+        encoding="utf-8",
+    )
+    discovery.reset_discovery_snapshot_cache()
+    parse_codex_jsonl(fixture)
+    monkeypatch.setattr(discovery, "DISCOVERY_CACHE_VERSION", discovery.DISCOVERY_CACHE_VERSION + 1)
+
+    reparsed = False
+    original = discovery._bounded_jsonl_rows
+
+    def track_reparse(path: Path):
+        nonlocal reparsed
+        reparsed = True
+        return original(path)
+
+    monkeypatch.setattr(discovery, "_bounded_jsonl_rows", track_reparse)
+
+    parse_codex_jsonl(fixture)
+
+    assert reparsed is True
+
+
+def test_codex_parser_refreshes_cached_snapshot_after_append(tmp_path: Path) -> None:
+    fixture = tmp_path / ".codex" / "sessions" / "2026" / "07" / "21" / "rollout-2026-07-21T11-00-00-append-test.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T11:00:00.000Z","type":"session_meta","payload":{"id":"append-test","cwd":"E:\\\\work"}}\n'
+        '{"timestamp":"2026-07-21T11:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"先看这里"}}\n',
+        encoding="utf-8",
+    )
+
+    discovery.reset_discovery_snapshot_cache()
+    initial = parse_codex_jsonl(fixture)
+    assert initial.last_message == "先看这里"
+
+    with fixture.open("a", encoding="utf-8") as handle:
+        handle.write(
+            '{"timestamp":"2026-07-21T11:02:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"后续已经追加"}]}}\n'
+        )
+    os.utime(fixture, None)
+
+    updated = parse_codex_jsonl(fixture)
+    assert updated.last_message == "后续已经追加"
+    assert updated.runtime_metadata["timeline"][-1]["text"] == "后续已经追加"
+
+
+def test_codex_parser_rebuilds_snapshot_after_truncate(tmp_path: Path) -> None:
+    fixture = tmp_path / ".codex" / "sessions" / "2026" / "07" / "21" / "rollout-2026-07-21T12-00-00-truncate-test.jsonl"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T12:00:00.000Z","type":"session_meta","payload":{"id":"truncate-test","cwd":"E:\\\\work"}}\n'
+        '{"timestamp":"2026-07-21T12:01:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"旧回复"}]}}\n',
+        encoding="utf-8",
+    )
+
+    discovery.reset_discovery_snapshot_cache()
+    initial = parse_codex_jsonl(fixture)
+    assert initial.last_message == "旧回复"
+
+    fixture.write_text(
+        '{"timestamp":"2026-07-21T12:05:00.000Z","type":"session_meta","payload":{"id":"truncate-test","cwd":"E:\\\\work"}}\n'
+        '{"timestamp":"2026-07-21T12:06:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"新会话"}}\n'
+        '{"timestamp":"2026-07-21T12:07:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"新回复"}]}}\n',
+        encoding="utf-8",
+    )
+    os.utime(fixture, None)
+
+    rebuilt = parse_codex_jsonl(fixture)
+    assert rebuilt.last_message == "新回复"
+    timeline_texts = [item["text"] for item in rebuilt.runtime_metadata["timeline"]]
+    assert "旧回复" not in timeline_texts
+    assert timeline_texts[-1] == "新回复"
+
+
+def test_kimi_parser_uses_bounded_reads_for_large_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_dir = tmp_path / ".kimi" / "sessions" / "workdir" / "kimi-large"
+    session_dir.mkdir(parents=True)
+    wire_path = session_dir / "wire.jsonl"
+    wire_path.write_text(
+        '{"timestamp":"2026-07-21T12:00:00Z","message":{"type":"TurnBegin","payload":{"user_input":"开始"}}}\n'
+        + ('{"padding":"' + ("x" * 1_000_000) + '"}\n')
+        + '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"完成"}}}\n',
+        encoding="utf-8",
+    )
+
+    def fail_if_read_whole(*args, **kwargs):
+        raise AssertionError("large Kimi history must not be read in full")
+
+    monkeypatch.setattr(discovery, "_read_jsonl", fail_if_read_whole)
+
+    session = parse_kimi_session(session_dir)
+
+    assert session.last_message == "完成"
+
+
+def test_kimi_parser_uses_cached_snapshot_when_files_are_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_dir = tmp_path / ".kimi" / "sessions" / "workdir" / "kimi-cache"
+    session_dir.mkdir(parents=True)
+    wire_path = session_dir / "wire.jsonl"
+    wire_path.write_text(
+        '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"cached"}}}\n',
+        encoding="utf-8",
+    )
+    discovery.reset_discovery_snapshot_cache()
+    first = parse_kimi_session(session_dir)
+
+    def fail_if_reparsed(*args, **kwargs):
+        raise AssertionError("unchanged Kimi session should have been served from cache")
+
+    monkeypatch.setattr(discovery, "_bounded_jsonl_rows", fail_if_reparsed)
+
+    second = parse_kimi_session(session_dir)
+
+    assert first.last_message == second.last_message == "cached"
+
+
+def test_kimi_snapshot_survives_file_index_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".kimi" / "sessions"
+    session_dir = root / "workdir" / "kimi-cache"
+    session_dir.mkdir(parents=True)
+    wire_path = session_dir / "wire.jsonl"
+    wire_path.write_text(
+        '{"timestamp":"2026-07-21T12:01:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"cached"}}}\n',
+        encoding="utf-8",
+    )
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    discovery.reset_discovery_snapshot_cache()
+    discovery.reset_recent_session_index()
+
+    first = parse_kimi_session(session_dir)
+    discovery.rebuild_recent_session_index([root])
+
+    def fail_if_reparsed(*args, **kwargs):
+        raise AssertionError("indexed Kimi session should retain its cached snapshot")
+
+    monkeypatch.setattr(discovery, "_bounded_jsonl_rows", fail_if_reparsed)
+
+    second = parse_kimi_session(session_dir)
+
+    assert first.last_message == second.last_message == "cached"
 
 
 def test_codex_jsonl_fixture_parses_session_metadata(tmp_path: Path) -> None:
@@ -277,6 +1122,224 @@ def test_codex_parser_keeps_recent_tool_action_running(tmp_path: Path) -> None:
 
     assert session.status == "running"
     assert session.activity_summary.startswith("正在执行")
+
+
+def test_codex_cached_running_status_expires_without_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = datetime(2026, 7, 22, 8, 0, tzinfo=timezone.utc)
+
+    class ControlledDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = current
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-running-cache.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T07:59:00.000Z","type":"session_meta","payload":{"id":"running-cache","cwd":"E:\\\\work\\\\AgentHub"}}\n'
+        '{"timestamp":"2026-07-22T07:59:30.000Z","type":"event_msg","payload":{"type":"user_message","message":"跑测试"}}\n'
+        '{"timestamp":"2026-07-22T07:59:45.000Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"pytest\\"}"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "datetime", ControlledDatetime)
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS", "60")
+    discovery.reset_discovery_snapshot_cache()
+
+    first = parse_codex_jsonl(fixture)
+    assert first.status == "running"
+
+    current = current + timedelta(minutes=2)
+    second = parse_codex_jsonl(fixture)
+
+    assert second.status == "ready"
+
+
+def test_discovery_publication_checkpoint_skips_unchanged_snapshot_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-delta-session.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"delta-session","cwd":"E:\\\\Work"}}\n'
+        '{"timestamp":"2026-07-22T08:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"first"}}\n',
+        encoding="utf-8",
+    )
+    cache_path = tmp_path / "runtime" / "discovery-cache.sqlite3"
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS", "3600")
+    discovery.reset_discovery_snapshot_cache()
+
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+
+    monkeypatch.setattr(discovery, "_snapshot_cache", None)
+    monkeypatch.setattr(
+        discovery._SnapshotCache,
+        "load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("snapshot JSON must not be loaded")),
+    )
+    assert discovery.session_file_needs_publication("codex", fixture) is False
+
+    fixture.write_text(fixture.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+def test_discovery_publication_checkpoint_republishes_stale_running_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = datetime(2026, 7, 22, 8, 0, tzinfo=timezone.utc)
+
+    class ControlledDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = current
+            return value.astimezone(tz) if tz is not None else value.replace(tzinfo=None)
+
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-running-publication.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T07:59:00Z","type":"session_meta","payload":{"id":"running-publication","cwd":"E:\\\\Work"}}\n'
+        '{"timestamp":"2026-07-22T07:59:45Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{}"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(discovery, "datetime", ControlledDatetime)
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_RUNNING_STALE_SECONDS", "60")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    assert payload["status"] == "running"
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+    assert discovery.session_file_needs_publication("codex", fixture) is False
+
+    current = current + timedelta(minutes=2)
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+def test_discovery_publication_checkpoint_periodically_reconciles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-reconcile.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"reconcile","cwd":"E:\\\\Work"}}\n',
+        encoding="utf-8",
+    )
+    cache_path = tmp_path / "cache.sqlite3"
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(cache_path))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_RECONCILE_SECONDS", "60")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "codex", fixture)
+    discovery.mark_session_publications([payload])
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            "UPDATE session_publication_state SET published_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),),
+        )
+        connection.commit()
+
+    assert discovery.session_file_needs_publication("codex", fixture) is True
+
+
+@pytest.mark.parametrize(
+    "platform_discovery",
+    [windows_discovery_module, linux_discovery_module, macos_discovery_module],
+)
+def test_platform_discovery_does_not_load_unchanged_snapshot(
+    platform_discovery: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = tmp_path / "rollout-2026-07-22T08-00-00-platform-delta.jsonl"
+    fixture.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","type":"session_meta","payload":{"id":"platform-delta","cwd":"E:\\\\Work"}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+    monkeypatch.setattr(platform_discovery, "recent_session_files", lambda _roots: [("codex", fixture)])
+    monkeypatch.setattr(platform_discovery, "discover_opencode_sessions", lambda _roots: [])
+
+    first = platform_discovery.discover_sessions([tmp_path])
+    assert [session["session_id"] for session in first] == ["platform-delta"]
+    discovery.mark_session_publications(first)
+    monkeypatch.setattr(
+        platform_discovery,
+        "parse_codex_jsonl",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unchanged snapshot must not be loaded")),
+    )
+
+    assert platform_discovery.discover_sessions([tmp_path]) == []
+
+
+def test_kimi_publication_signature_includes_state_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_dir = tmp_path / ".kimi" / "sessions" / "workdir" / "kimi-delta"
+    session_dir.mkdir(parents=True)
+    wire_path = session_dir / "wire.jsonl"
+    state_path = session_dir / "state.json"
+    wire_path.write_text(
+        '{"timestamp":"2026-07-22T08:00:00Z","message":{"type":"ContentPart","payload":{"type":"text","text":"done"}}}\n',
+        encoding="utf-8",
+    )
+    state_path.write_text('{"plan_mode":false}', encoding="utf-8")
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+
+    payload = parse_kimi_session(session_dir).model_dump(mode="json")
+    discovery.attach_session_publication_marker(payload, "kimi", wire_path)
+    discovery.mark_session_publications([payload])
+    assert discovery.session_file_needs_publication("kimi", wire_path) is False
+
+    state_path.write_text('{"plan_mode":true}', encoding="utf-8")
+    assert discovery.session_file_needs_publication("kimi", wire_path) is True
+
+
+def test_publication_candidates_share_one_cache_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixtures = []
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_SNAPSHOT_DB", str(tmp_path / "cache.sqlite3"))
+    monkeypatch.setenv("AGENTHUB_DISCOVERY_PUBLICATION_SCOPE", "private|https://example.test|worker-1")
+    discovery.reset_discovery_snapshot_cache()
+    for index in range(2):
+        fixture = tmp_path / f"rollout-2026-07-22T08-00-0{index}-batch-{index}.jsonl"
+        fixture.write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-07-22T08:00:00Z",
+                    "type": "session_meta",
+                    "payload": {"id": f"batch-{index}", "cwd": "E:\\Work"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        payload = parse_codex_jsonl(fixture).model_dump(mode="json")
+        discovery.attach_session_publication_marker(payload, "codex", fixture)
+        discovery.mark_session_publications([payload])
+        fixtures.append(("codex", fixture))
+
+    cache = discovery._get_snapshot_cache()
+    original_connect = cache._connect
+    connection_count = 0
+
+    def counted_connect():
+        nonlocal connection_count
+        connection_count += 1
+        return original_connect()
+
+    monkeypatch.setattr(cache, "_connect", counted_connect)
+
+    assert discovery.session_publication_candidates(fixtures) == []
+    assert connection_count == 1
 
 
 def test_claude_jsonl_fixture_parses_session_metadata(tmp_path: Path) -> None:

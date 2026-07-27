@@ -283,6 +283,20 @@ $env:AGENTHUB_SESSION_ROOTS="C:\Users\you\.codex\sessions;C:\Users\you\.claude\p
 
 Installed Windows workers auto-update on worker loop startup. The loop runs `scripts/update-windows-worker.ps1`, which reads `/downloads/workers/worker-bundles-manifest.json`, validates the published bundle sha256, copies only the manifest-listed worker files into the install root, installs `workers/requirements.txt`, and then starts the worker process. The updater writes `.runtime/worker-bundle-version.txt` and logs to `.runtime/agenthub-windows-worker-update.log`.
 
+Session discovery uses a persistent index at `.runtime/discovery-cache.sqlite3`. Normal polling resolves active files from Codex `state_5.sqlite`, Claude `history.jsonl`, and Kimi `kimi.json`, then checks only the bounded local index. It does not recursively enumerate all historical JSONL files. The SQLite file is a disposable acceleration cache: cache I/O failures fall back to uncached bounded discovery and do not stop the worker loop. Windows workers apply a private NTFS ACL before storing transcript snapshots and disable cache acceleration if that ACL cannot be established. Recent sessions appear automatically; use a one-time rebuild when an existing machine has older history that should also be imported:
+
+```powershell
+$workerRoot = 'C:\ProgramData\AgentHub\workers\win-office-01'
+Stop-Service -Name 'AgentHubWindowsWorker'
+. (Join-Path $workerRoot '.runtime\windows-worker.env.ps1')
+& (Join-Path $workerRoot '.venv\Scripts\python.exe') `
+  (Join-Path $workerRoot 'workers\local-windows\agenthub_windows_worker\main.py') `
+  --maintenance-command rebuild-discovery-index
+Start-Service -Name 'AgentHubWindowsWorker'
+```
+
+If the worker is installed as a scheduled task instead of a service, stop that task's running instance before the command and start it again afterward. The rebuild only inventories file metadata; it does not edit or delete agent histories.
+
 To disable auto-update for a specific worker, pass `-DisableAutoUpdate` during install or set this in `.runtime/windows-worker.env.ps1`:
 
 ```powershell

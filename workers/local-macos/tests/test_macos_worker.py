@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,25 @@ def test_macos_worker_requires_explicit_workspace_roots(monkeypatch: pytest.Monk
 
     with pytest.raises(SystemExit, match="workspace root"):
         module._workspace_roots(None)
+
+
+def test_macos_worker_maintenance_can_rebuild_discovery_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _load_main_module()
+    roots = [tmp_path / "sessions"]
+    roots[0].mkdir()
+    monkeypatch.setattr(module, "_session_roots", lambda: roots)
+    monkeypatch.setattr(
+        module,
+        "rebuild_recent_session_index",
+        lambda values: {"roots": len(values), "files": 3, "backends": {"claude": 3}},
+    )
+
+    result = module._run_maintenance(SimpleNamespace(maintenance_command="rebuild-discovery-index"))
+
+    assert result == 0
+    assert '"files": 3' in capsys.readouterr().out
 
 
 def test_macos_worker_accepts_cli_and_environment_workspace_roots(

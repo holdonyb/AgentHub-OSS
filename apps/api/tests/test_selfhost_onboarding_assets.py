@@ -368,6 +368,7 @@ def test_selfhost_scripts_expose_safe_help_and_required_checks() -> None:
     assert "--install-root" in install_script
     assert "AGENTHUB_SECRET_ENCRYPTION_KEY" in install_script
     assert "agenthub-api.service" in install_script
+    assert "npm ci --workspace @agenthub/web --workspace @agenthub/client-core --workspace @agenthub/protocol --include-workspace-root=false" in install_script
     assert "npm run web:build" in install_script
     assert "--render-only" in install_script
     assert "AGENTHUB_SELFHOST_SYSTEMD_DIR" in install_script
