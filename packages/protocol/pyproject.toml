@@ -1,6 +1,6 @@
 [project]
 name = "agenthub-protocol"
-version = "1.0.3"
+version = "1.0.4"
 description = "Shared AgentHub protocol models"
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.7,<3.0"]

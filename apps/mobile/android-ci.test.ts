@@ -54,7 +54,7 @@ describe('Android APK GitHub Actions workflow', () => {
     expect(buildGradle).toContain('signingConfigs');
     expect(buildGradle).toContain('AGENTHUB_ANDROID_KEYSTORE_FILE');
     expect(buildGradle).toContain('versionCode 20');
-    expect(buildGradle).toContain('versionName "1.0.3"');
+    expect(buildGradle).toContain('versionName "1.0.4"');
     expect(buildGradle).toContain('debug {');
     expect(buildGradle).toContain('release {');
     expect(buildGradle.match(/signingConfig signingConfigs\.agenthub/g)?.length).toBe(2);
