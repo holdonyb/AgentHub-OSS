@@ -6,8 +6,9 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "agenthub-native",
+    "jsEngine": "jsc",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "platforms": [
       "android",
       "ios"

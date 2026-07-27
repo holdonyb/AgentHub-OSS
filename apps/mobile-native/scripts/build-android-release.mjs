@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   androidGradleExecutable,
+  enforceAndroidRuntimeConfig,
   executable,
   missingAndroidSigningEnvironment,
   nativeSpawnOptions,
@@ -26,8 +27,10 @@ function run(command, args, cwd = appRoot) {
 }
 
 run(executable('npx'), ['expo', 'prebuild', '--clean', '--platform', 'android', '--no-install']);
+enforceAndroidRuntimeConfig(appRoot);
 run(
   androidGradleExecutable(),
   ['app:assembleRelease', 'app:bundleRelease', '--no-daemon'],
   path.join(appRoot, 'android'),
 );
+run('python', ['scripts/verify_android_runtime.py', 'android/app/build/outputs/apk/release/app-release.apk']);
