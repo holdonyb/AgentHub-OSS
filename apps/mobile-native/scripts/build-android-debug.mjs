@@ -30,3 +30,4 @@ run(
   ['app:assembleDebug', '-PreactNativeArchitectures=arm64-v8a', '--no-daemon'],
   path.join(appRoot, 'android'),
 );
+run('python', ['scripts/verify_android_runtime.py', 'android/app/build/outputs/apk/debug/app-debug.apk']);

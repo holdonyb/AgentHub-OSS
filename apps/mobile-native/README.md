@@ -27,6 +27,15 @@ The existing Capacitor app under `apps/mobile` remains available as the compatib
 
 The notification ledger is authoritative across Web and mobile clients. When the app is built with an EAS project id and the server enables Expo Push, each signed-in installation registers a separate device delivery channel. Web read/delivery state does not consume phone delivery. The in-app notification inbox and foreground local-notification fallback remain available when push is not configured.
 
+## Android Runtime Stability
+
+AgentHub 1.0.x keeps the Android native client on the conservative runtime path:
+
+- explicit `jsEngine: "jsc"`
+- `newArchEnabled: false`
+
+This is intentional. A July 2026 regression shipped an APK that contained `libjsc.so` while Android startup still entered the Hermes runtime path, which caused an immediate native crash (`SoLoaderDSONotFoundError`, missing `libhermestooling.so`). Do not re-enable the new architecture for Android 1.0.x without rebuilding and verifying the actual release APK on a physical device.
+
 ## Background Push
 
 Create or link an Expo project, then build the native app with its project id:
