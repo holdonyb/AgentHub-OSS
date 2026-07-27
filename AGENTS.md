@@ -28,6 +28,10 @@ Rules:
 2. For AgentHub 1.0.x, keep Android native runtime conservative:
    - explicit single JS engine
    - no unvalidated new-architecture rollout
+3. Expo `prebuild` can regenerate `android/gradle.properties` with runtime flags that disagree with `app.json`.
+   - Never assume `app.json` alone is enough.
+   - After every `expo prebuild --clean`, verify the generated `android/gradle.properties`.
+   - If generated `newArchEnabled` / `hermesEnabled` do not match the intended release runtime, fix that in the build script, not by hand-editing generated files and hoping it sticks.
 3. Release validation must include:
    - native unit tests
    - native typecheck
@@ -35,6 +39,11 @@ Rules:
    - at least one real-device cold-start smoke before calling the APK good
 4. If a user reports "open -> immediately stops running", pull logcat before touching UI code.
 5. If the installed APK behavior and repo code disagree, verify the actual shipped asset first. Do not assume the website APK matches the current branch.
+6. If CI produces a green APK but the app still crashes on device, compare three layers explicitly:
+   - Expo config (`app.json` / `app.config.ts`)
+   - generated Android project (`android/gradle.properties`, `app/build.gradle`)
+   - shipped APK contents (`libjsc.so`, `libhermes.so`, `libhermestooling.so`)
+   Root cause lives in the first layer where they diverge.
 
 ## Build Reality
 
