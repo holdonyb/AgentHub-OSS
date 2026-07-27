@@ -456,7 +456,7 @@ class CodexAppServerClient:
         return self.request(
             "initialize",
             {
-                "clientInfo": {"name": "AgentHub Worker", "title": "AgentHub Worker", "version": "1.0.6"},
+                "clientInfo": {"name": "AgentHub Worker", "title": "AgentHub Worker", "version": "1.0.7"},
                 "capabilities": {"experimentalApi": True},
             },
             timeout_seconds=30,
