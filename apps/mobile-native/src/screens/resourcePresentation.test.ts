@@ -19,9 +19,10 @@ describe('native resource presentation', () => {
 
   it('formats last activity without depending on the device locale', () => {
     const now = new Date('2026-07-11T12:00:00.000Z');
+    const naiveUtcDate = new Date('2026-07-11T11:58:00.000Z');
 
     expect(formatLastActivity('2026-07-11T11:58:00.000Z', now)).toBe('2 分钟前');
-    expect(parseApiDate('2026-07-11T11:58:00.000')?.toISOString()).toBe('2026-07-11T11:58:00.000Z');
+    expect(parseApiDate('2026-07-11T11:58:00.000')?.getTime()).toBe(naiveUtcDate.getTime());
     expect(formatLastActivity('2026-07-11T11:58:00.000', now)).toBe('2 分钟前');
     expect(formatLastActivity('2026-07-09T12:00:00.000Z', now)).toBe('2 天前');
     expect(formatLastActivity(null, now)).toBe('暂无活动');

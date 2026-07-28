@@ -80,3 +80,48 @@ Rules added from this incident:
 3. Release scripts must enforce the generated Android runtime flags, not only declare them.
 4. Release scripts must validate the final APK contents (`libjsc.so` / `libhermes.so` / `libhermestooling.so`) before publishing.
 5. If website download, GitHub release, and installed-device version disagree, trust the built artifact inspection first, then reconcile distribution.
+
+## Public Download Drift Guardrails
+
+July 2026 exposed another failure mode:
+
+- GitHub latest release already moved to `v1.0.7`
+- Web/App code already pointed to `/downloads/agenthub-native-android-release.apk`
+- live `<public-host>/downloads/*` still served the stale APKs
+
+That is not a UI bug. It is a distribution split between:
+
+1. GitHub Release assets
+2. live server `data/downloads`
+3. the user-installed package
+
+Rules:
+
+1. Treat GitHub Release publication and live `/downloads/*` publication as separate steps unless automation explicitly links them.
+2. If a public node should mirror GitHub latest release assets, make deploy run `scripts/sync-android-release-assets.sh` before web build sync.
+3. Do not assume tagging `vX.Y.Z` changes the files currently served by `https://<host>/downloads/*`.
+4. When a user reports "I downloaded the latest APK but it is still old", verify:
+   - GitHub latest release tag
+   - live `https://<public-host>/downloads/*` `Last-Modified` and size
+   - installed package version on device
+5. If those three do not match, fix distribution first, then debug app behavior.
+
+## Native Timestamp Parsing Guardrails
+
+The July 2026 native inbox drift exposed a separate failure mode:
+
+- the API returned naive ISO timestamps such as `2026-07-28T09:01:00.000`
+- React Native treated those strings as local time in some paths
+- the backend semantics were effectively UTC-naive
+- the result on China devices was a stable `8 小时前` skew for messages that were actually recent
+
+Rules:
+
+1. Do not rely on JavaScript engine defaults for parsing naive ISO timestamps.
+2. In native presentation code, parse naive API timestamps explicitly and consistently.
+3. For AgentHub current APIs, naive datetime strings from session/task activity should be interpreted as UTC unless the API contract changes.
+4. When debugging "time looks stale" reports, compare:
+   - raw API timestamp
+   - native parsed `Date.getTime()`
+   - rendered relative label
+   before touching sorting or sync logic.

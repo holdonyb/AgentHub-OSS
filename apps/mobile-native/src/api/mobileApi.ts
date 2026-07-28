@@ -437,13 +437,11 @@ export interface NativeReleaseMetadata {
   publishedAt: string | null;
   releaseUrl: string;
   downloadUrl: string;
-  source: 'github' | 'fallback';
+  source: 'github' | 'server';
 }
 
-export const NATIVE_ANDROID_APK_URL =
-  'https://github.com/holdonyb/AgentHub-OSS/releases/latest/download/agenthub-native-android-release.apk';
-export const AGENTHUB_LATEST_RELEASE_URL =
-  'https://github.com/holdonyb/AgentHub-OSS/releases/latest';
+export const NATIVE_ANDROID_APK_PATH = '/downloads/agenthub-native-android-release.apk';
+export const AGENTHUB_LATEST_RELEASE_URL = 'https://github.com/holdonyb/AgentHub-OSS/releases/latest';
 const AGENTHUB_GITHUB_LATEST_RELEASE_API =
   'https://api.github.com/repos/holdonyb/AgentHub-OSS/releases/latest';
 
@@ -459,13 +457,13 @@ interface GitHubReleasePayload {
   assets?: unknown;
 }
 
-function releaseFallback(): NativeReleaseMetadata {
+function releaseFallback(downloadUrl: string): NativeReleaseMetadata {
   return {
     version: null,
     publishedAt: null,
     releaseUrl: AGENTHUB_LATEST_RELEASE_URL,
-    downloadUrl: NATIVE_ANDROID_APK_URL,
-    source: 'fallback',
+    downloadUrl,
+    source: 'server',
   };
 }
 
@@ -473,27 +471,28 @@ function asNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-export async function getLatestReleaseMetadata(fetcher?: FetchLike): Promise<NativeReleaseMetadata> {
+export async function getLatestReleaseMetadata(
+  fetcher?: FetchLike,
+  serverDownloadUrl?: string,
+): Promise<NativeReleaseMetadata> {
   const request: FetchLike = fetcher ?? ((input, init) => globalThis.fetch(input, init));
+  const fallbackDownloadUrl = serverDownloadUrl ?? NATIVE_ANDROID_APK_PATH;
   try {
     const response = await request(AGENTHUB_GITHUB_LATEST_RELEASE_API, {
       headers: { Accept: 'application/vnd.github+json' },
     });
-    if (!response.ok) return releaseFallback();
+    if (!response.ok) return releaseFallback(fallbackDownloadUrl);
     const payload = await response.json() as GitHubReleasePayload;
     const assets = Array.isArray(payload.assets) ? payload.assets as GitHubReleaseAsset[] : [];
-    const nativeApk = assets.find((asset) => asset.name === 'agenthub-native-android-release.apk');
-    const downloadUrl = asNonEmptyString(nativeApk?.browser_download_url);
-    if (!downloadUrl) return releaseFallback();
     return {
       version: asNonEmptyString(payload.tag_name),
       publishedAt: asNonEmptyString(payload.published_at),
       releaseUrl: asNonEmptyString(payload.html_url) ?? AGENTHUB_LATEST_RELEASE_URL,
-      downloadUrl,
+      downloadUrl: fallbackDownloadUrl,
       source: 'github',
     };
   } catch {
-    return releaseFallback();
+    return releaseFallback(fallbackDownloadUrl);
   }
 }
 
@@ -716,6 +715,7 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
   const client = createAgentHubClient({ baseUrl, fetcher });
   const sessionPath = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}`;
   const absoluteServerUrl = (path: string) => new URL(path, `${new URL(baseUrl).origin}/`).toString();
+  const nativeAndroidApkUrl = absoluteServerUrl(NATIVE_ANDROID_APK_PATH);
   return {
     login: (email, password) =>
       client.post<NativeAuthPayload>('/api/auth/login', { email, password }),
@@ -905,6 +905,6 @@ export function createMobileApi(baseUrl: string, fetcher?: FetchLike): MobileApi
     getSettings: () => client.get<NativeSettings>('/api/settings'),
     patchPreferences: (payload, csrfToken) =>
       client.patch<{ preferences: NativeUserPreferences }>('/api/settings/preferences', payload, { csrfToken }),
-    getLatestRelease: () => getLatestReleaseMetadata(fetcher),
+    getLatestRelease: () => getLatestReleaseMetadata(fetcher, nativeAndroidApkUrl),
   };
 }

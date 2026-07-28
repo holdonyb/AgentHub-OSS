@@ -12,6 +12,9 @@ downloads_dir="${AGENTHUB_DOWNLOADS_DIR:-$project_root/data/downloads}"
 worker_downloads_dir="${AGENTHUB_WORKER_DOWNLOADS_DIR:-$downloads_dir/workers}"
 npm_cache_dir="${AGENTHUB_NPM_CACHE_DIR:-$project_root/.runtime/npm-cache}"
 deploy_lock="${AGENTHUB_DEPLOY_LOCK:-$project_root/.runtime/deploy.lock}"
+sync_public_release_assets="${AGENTHUB_SYNC_PUBLIC_RELEASE_ASSETS:-0}"
+public_release_repository="${AGENTHUB_PUBLIC_RELEASE_REPOSITORY:-holdonyb/AgentHub-OSS}"
+public_release_tag="${AGENTHUB_PUBLIC_RELEASE_TAG:-latest}"
 
 log() {
   printf '[agenthub-deploy] %s\n' "$*"
@@ -203,6 +206,17 @@ log "building worker bundles"
 test -f "$worker_downloads_dir/agenthub-worker-windows.zip"
 test -f "$worker_downloads_dir/agenthub-worker-linux.tar.gz"
 test -f "$worker_downloads_dir/agenthub-worker-macos.tar.gz"
+
+if [[ "$sync_public_release_assets" == "1" ]]; then
+  log "syncing public Android release assets from $public_release_repository@$public_release_tag"
+  bash scripts/sync-android-release-assets.sh \
+    --repository "$public_release_repository" \
+    --tag "$public_release_tag" \
+    --destination "$downloads_dir"
+  test -f "$downloads_dir/agenthub-android-release.apk"
+  test -f "$downloads_dir/agenthub-native-android-release.apk"
+  test -f "$downloads_dir/SHA256SUMS"
+fi
 
 log "building Web console"
 rm -rf apps/web/dist

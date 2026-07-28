@@ -82,9 +82,9 @@ def test_native_android_is_the_recommended_download_and_release_asset() -> None:
     assert webview_heading in page
     assert download_section.index(native_heading) < download_section.index(webview_heading)
     assert "Android · Native · Recommended" in page
-    assert 'releases/latest/download/agenthub-native-android-release.apk' in page
-    assert 'releases/latest/download/agenthub-android-release.apk' in page
-    assert "GitHub latest" in page
+    assert 'href="/downloads/agenthub-native-android-release.apk"' in page
+    assert 'href="/downloads/agenthub-android-release.apk"' in page
+    assert "查看 GitHub Release" in page
 
     assert "npm run mobile:build:release" in workflow
     assert "npm run mobile:native:build:android" in workflow

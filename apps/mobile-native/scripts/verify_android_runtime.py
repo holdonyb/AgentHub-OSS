@@ -4,11 +4,30 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+import re
 
 
 def fail(message: str) -> int:
     print(message, file=sys.stderr)
     return 1
+
+
+def parse_semver_prefix(version_text: str) -> tuple[int, int] | None:
+    match = re.search(r"(\d+)\.(\d+)", version_text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def parse_properties(source: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in source.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
 
 
 def main() -> int:
@@ -18,22 +37,54 @@ def main() -> int:
     apk_path = Path(sys.argv[1]).resolve()
     script_dir = Path(__file__).resolve().parent
     app_json_path = script_dir.parent / "app.json"
+    package_json_path = script_dir.parent / "package.json"
+    gradle_properties_path = script_dir.parent / "android" / "gradle.properties"
 
     if not apk_path.is_file():
       return fail(f"APK not found: {apk_path}")
     if not app_json_path.is_file():
       return fail(f"app.json not found: {app_json_path}")
+    if not package_json_path.is_file():
+      return fail(f"package.json not found: {package_json_path}")
 
     config = json.loads(app_json_path.read_text(encoding="utf-8"))
+    package_json = json.loads(package_json_path.read_text(encoding="utf-8"))
     expo = config.get("expo", {})
     engine = str(expo.get("jsEngine") or "hermes").strip().lower()
     new_arch = bool(expo.get("newArchEnabled"))
+    react_native_version = str((package_json.get("dependencies") or {}).get("react-native") or "").strip()
+    react_native_semver = parse_semver_prefix(react_native_version)
+
+    if react_native_semver and react_native_semver >= (0, 82) and engine != "hermes":
+      return fail(
+        f"Unsupported Android runtime config for react-native {react_native_version}: "
+        f"jsEngine={engine}. React Native 0.82+ runs Android with the new architecture by default; "
+        "AgentHub release builds must use Hermes."
+      )
+
+    if gradle_properties_path.is_file():
+      gradle_properties = parse_properties(gradle_properties_path.read_text(encoding="utf-8"))
+      gradle_new_arch = gradle_properties.get("newArchEnabled")
+      gradle_hermes = gradle_properties.get("hermesEnabled")
+      expected_new_arch = "true" if new_arch else "false"
+      expected_hermes = "true" if engine == "hermes" else "false"
+      if gradle_new_arch != expected_new_arch or gradle_hermes != expected_hermes:
+        return fail(
+          "Generated android/gradle.properties does not match app.json: "
+          f"newArchEnabled={gradle_new_arch} hermesEnabled={gradle_hermes} "
+          f"(expected {expected_new_arch}/{expected_hermes})"
+        )
 
     with zipfile.ZipFile(apk_path) as archive:
       entries = {item.filename for item in archive.infolist()}
 
     has_jsc = any(name.endswith("/libjsc.so") for name in entries)
-    has_hermes = any(name.endswith("/libhermes.so") for name in entries)
+    has_hermes = any(
+        name.endswith("/libhermes.so")
+        or name.endswith("/libhermesvm.so")
+        or name.endswith("/libhermes_executor.so")
+        for name in entries
+    )
     has_hermes_tooling = any(name.endswith("/libhermestooling.so") for name in entries)
 
     print(
@@ -41,12 +92,6 @@ def main() -> int:
       f"jsc={str(has_jsc).lower()} hermes={str(has_hermes).lower()} "
       f"hermesTooling={str(has_hermes_tooling).lower()}"
     )
-
-    if new_arch and engine == "jsc":
-      return fail(
-        "Unsafe native runtime config: Android new architecture is enabled while jsEngine=jsc. "
-        "This combination already shipped a crashing APK and is blocked until revalidated."
-      )
 
     if engine == "jsc":
       if not has_jsc:

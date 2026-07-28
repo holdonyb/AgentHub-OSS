@@ -38,7 +38,7 @@
         <section class="band">
           <div class="section-copy">
             <h2>当前公开版本</h2>
-            <p>官网下载入口始终跟随 <strong>GitHub latest release</strong>。Android 保留两条渠道：原生 Workbench 客户端作为默认推荐入口，WebView 兼容版用于覆盖更新旧安装。</p>
+            <p>官网下载入口以当前 AgentHub server 的 <code>/downloads/*</code> 为准；这些文件应与 GitHub latest release 保持一致。Android 保留两条渠道：原生 Workbench 客户端作为默认推荐入口，WebView 兼容版用于覆盖更新旧安装。</p>
           </div>
           <div class="hero-grid">
             <div class="stat">
@@ -59,16 +59,16 @@
         <section class="band">
           <div class="section-copy">
             <h2>下载 release 资产</h2>
-            <p>Android 和 worker bundle 都使用稳定文件名，官网直接跳 latest release；桌面端文件名会带版本号，所以统一跳 GitHub Release 页面拿当前安装包。</p>
+            <p>Android 使用官网同源稳定地址，部署时从 latest release 校验并同步；worker bundle 和带版本号的桌面安装包继续从 GitHub Release 获取。</p>
           </div>
           <div class="download-grid">
             <article class="download-card">
               <div class="download-kicker">Android · Native · Recommended</div>
               <h3>AgentHub 原生客户端</h3>
               <p>推荐新用户使用。包名 <code>dev.myagenthub.mobile</code>，针对任务、文件和移动 Workbench 优化；可与当前版共存，首次启动配置自己的 server URL 并登录。</p>
-              <div class="download-meta">文件：<code>agenthub-native-android-release.apk</code> · 校验：<a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></div>
+              <div class="download-meta">文件：<code>agenthub-native-android-release.apk</code> · 校验：<a href="/downloads/SHA256SUMS"><code>SHA256SUMS</code></a></div>
               <div class="hero-actions">
-                <a class="button button-primary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-native-android-release.apk">安装原生版（推荐）</a>
+                <a class="button button-primary" href="/downloads/agenthub-native-android-release.apk">安装原生版（推荐）</a>
                 <a class="button button-secondary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest">查看 GitHub Release</a>
               </div>
             </article>
@@ -76,9 +76,9 @@
               <div class="download-kicker">Android · WebView · Compatible</div>
               <h3>WebView 兼容版</h3>
               <p>包名 <code>xin.ifix.agenthub</code>。用于覆盖更新已安装的 WebView 客户端，保留现有签名和使用路径。</p>
-              <div class="download-meta">文件：<code>agenthub-android-release.apk</code> · 校验：<a href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/SHA256SUMS"><code>SHA256SUMS</code></a></div>
+              <div class="download-meta">文件：<code>agenthub-android-release.apk</code> · 校验：<a href="/downloads/SHA256SUMS"><code>SHA256SUMS</code></a></div>
               <div class="hero-actions">
-                <a class="button button-secondary" href="https://github.com/__AGENTHUB_GITHUB_REPO__/releases/latest/download/agenthub-android-release.apk">更新当前版（WebView）</a>
+                <a class="button button-secondary" href="/downloads/agenthub-android-release.apk">更新当前版（WebView）</a>
               </div>
             </article>
             <article class="download-card">

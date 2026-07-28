@@ -450,7 +450,7 @@ describe('mobile API', () => {
       version: 'v1.2.0',
       publishedAt: '2026-07-19T00:00:00Z',
       releaseUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/tag/v1.2.0',
-      downloadUrl: 'https://downloads.example.com/agenthub.apk',
+      downloadUrl: 'https://agenthub.example.com/downloads/agenthub-native-android-release.apk',
       source: 'github',
     });
 
@@ -524,8 +524,8 @@ describe('mobile API', () => {
       version: null,
       publishedAt: null,
       releaseUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/latest',
-      downloadUrl: 'https://github.com/holdonyb/AgentHub-OSS/releases/latest/download/agenthub-native-android-release.apk',
-      source: 'fallback',
+      downloadUrl: 'https://agenthub.example.com/downloads/agenthub-native-android-release.apk',
+      source: 'server',
     });
   });
 
