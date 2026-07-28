@@ -80,3 +80,28 @@ Rules added from this incident:
 3. Release scripts must enforce the generated Android runtime flags, not only declare them.
 4. Release scripts must validate the final APK contents (`libjsc.so` / `libhermes.so` / `libhermestooling.so`) before publishing.
 5. If website download, GitHub release, and installed-device version disagree, trust the built artifact inspection first, then reconcile distribution.
+
+## Public Download Drift Guardrails
+
+July 2026 exposed another failure mode:
+
+- GitHub latest release already moved to `v1.0.7`
+- Web/App code already pointed to `/downloads/agenthub-native-android-release.apk`
+- live `agenthub.ifix.xin/downloads/*` still served the July 24 APKs
+
+That is not a UI bug. It is a distribution split between:
+
+1. GitHub Release assets
+2. live server `data/downloads`
+3. the user-installed package
+
+Rules:
+
+1. Treat GitHub Release publication and live `/downloads/*` publication as separate steps unless automation explicitly links them.
+2. If a public node should mirror GitHub latest release assets, make deploy run `scripts/sync-android-release-assets.sh` before web build sync.
+3. Do not assume tagging `vX.Y.Z` changes the files currently served by `https://<host>/downloads/*`.
+4. When a user reports "I downloaded the latest APK but it is still old", verify:
+   - GitHub latest release tag
+   - live `/downloads/*` `Last-Modified` and size
+   - installed package version on device
+5. If those three do not match, fix distribution first, then debug app behavior.
