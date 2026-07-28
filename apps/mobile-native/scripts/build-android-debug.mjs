@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   androidGradleExecutable,
   enforceAndroidRuntimeConfig,
+  expectedAndroidRuntimeConfig,
   executable,
   nativeSpawnOptions,
 } from './native-build-config.mjs';
@@ -26,7 +27,7 @@ function run(command, args, cwd = appRoot) {
 }
 
 run(executable('npx'), ['expo', 'prebuild', '--clean', '--platform', 'android', '--no-install']);
-enforceAndroidRuntimeConfig(appRoot);
+enforceAndroidRuntimeConfig(appRoot, expectedAndroidRuntimeConfig(appRoot));
 run(
   androidGradleExecutable(),
   ['app:assembleDebug', '-PreactNativeArchitectures=arm64-v8a', '--no-daemon'],

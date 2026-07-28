@@ -735,15 +735,19 @@ export function SessionDetailScreen({
 
   function scrollToBottom(animated = true, finalize = true) {
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated });
-      if (!finalize) return;
-      shouldAutoScrollRef.current = false;
-      scrollMetricsRef.current.offsetY = Math.max(
+      const targetOffset = Math.max(
         0,
         scrollMetricsRef.current.contentHeight - scrollMetricsRef.current.viewportHeight,
       );
-      isNearBottomRef.current = true;
-      setShowScrollToBottom(false);
+      listRef.current?.scrollToOffset({ animated, offset: targetOffset });
+      if (!finalize) return;
+      shouldAutoScrollRef.current = false;
+      scrollMetricsRef.current.offsetY = targetOffset;
+      if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = setTimeout(() => {
+        autoScrollSettleTimerRef.current = null;
+        applyScrollVisibility();
+      }, 80);
     });
   }
 

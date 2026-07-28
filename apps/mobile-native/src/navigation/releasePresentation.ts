@@ -30,10 +30,10 @@ export function presentReleaseStatus(
   latestVersion: string | null,
   source: NativeReleaseMetadata['source'],
 ): ReleaseStatusPresentation {
-  if (source === 'fallback' || !latestVersion) {
+  if (!latestVersion) {
     return {
       action: 'download',
-      detail: '版本信息暂不可用，可使用稳定下载入口',
+      detail: source === 'server' ? '版本信息暂不可用，可使用稳定下载入口' : '暂未拿到版本号，可稍后重试',
       latestLabel: '最新版本未知',
     };
   }

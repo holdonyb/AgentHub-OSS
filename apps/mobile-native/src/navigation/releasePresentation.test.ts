@@ -18,7 +18,7 @@ describe('native release presentation', () => {
   });
 
   it('keeps a stable download path when release metadata is unavailable', () => {
-    expect(presentReleaseStatus('1.0.2', null, 'fallback')).toEqual({
+    expect(presentReleaseStatus('1.0.2', null, 'server')).toEqual({
       action: 'download',
       detail: '版本信息暂不可用，可使用稳定下载入口',
       latestLabel: '最新版本未知',

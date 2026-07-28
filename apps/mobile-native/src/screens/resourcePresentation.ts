@@ -58,9 +58,35 @@ export function parseApiDate(value?: string | number | null): Date | null {
   if (!raw) return null;
   const normalized = raw.replace(' ', 'T').replace(/\.(\d{3})\d+/, '.$1');
   const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
-  const hasTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(normalized);
-  const parsed = new Date(hasTime && !hasExplicitTimezone ? `${normalized}Z` : normalized);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (!hasExplicitTimezone) {
+    const utcMatch =
+      normalized.match(
+        /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/,
+      ) ?? null;
+    if (utcMatch) {
+      const [, year, month, day, hour = '0', minute = '0', second = '0', millisecond = '0'] =
+        utcMatch;
+      const parsedUtc = new Date(
+        Date.UTC(
+          Number(year),
+          Number(month) - 1,
+          Number(day),
+          Number(hour),
+          Number(minute),
+          Number(second),
+          Number(millisecond.padEnd(3, '0')),
+        ),
+      );
+      if (!Number.isNaN(parsedUtc.getTime())) return parsedUtc;
+    }
+  }
+
+  const parsed = new Date(normalized);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  if (hasExplicitTimezone) return null;
+  const reparsed = new Date(`${normalized}Z`);
+  if (!Number.isNaN(reparsed.getTime())) return reparsed;
+  return null;
 }
 
 export function formatLastActivity(value: string | null, now = new Date()): string {

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   androidGradleExecutable,
   enforceAndroidRuntimeConfig,
+  expectedAndroidRuntimeConfig,
   executable,
   missingAndroidSigningEnvironment,
   nativeSpawnOptions,
@@ -27,7 +28,7 @@ function run(command, args, cwd = appRoot) {
 }
 
 run(executable('npx'), ['expo', 'prebuild', '--clean', '--platform', 'android', '--no-install']);
-enforceAndroidRuntimeConfig(appRoot);
+enforceAndroidRuntimeConfig(appRoot, expectedAndroidRuntimeConfig(appRoot));
 run(
   androidGradleExecutable(),
   ['app:assembleRelease', 'app:bundleRelease', '--no-daemon'],

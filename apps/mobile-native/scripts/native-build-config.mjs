@@ -24,6 +24,17 @@ export function nativeSpawnOptions(platform = process.platform) {
   return platform === 'win32' ? { shell: true } : {};
 }
 
+export function expectedAndroidRuntimeConfig(appRoot) {
+  const appJsonPath = path.join(appRoot, 'app.json');
+  const appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  const expo = appJson.expo ?? {};
+  const engine = String(expo.jsEngine || 'hermes').trim().toLowerCase();
+  return {
+    newArchEnabled: Boolean(expo.newArchEnabled),
+    hermesEnabled: engine === 'hermes',
+  };
+}
+
 function replaceProperty(source, key, value) {
   const pattern = new RegExp(`^${key}=.*$`, 'm');
   const nextLine = `${key}=${value}`;
