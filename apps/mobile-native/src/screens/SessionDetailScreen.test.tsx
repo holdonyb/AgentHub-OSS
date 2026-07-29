@@ -911,7 +911,7 @@ describe('native session detail', () => {
     expect(renderer.root.findByProps({ accessibilityLabel: '回复内容' }).props.value).toBe('识别后的文字');
   });
 
-  it('keeps the latest message scrollable above the measured composer', async () => {
+  it('does not reserve composer height twice below the timeline', async () => {
     const renderer = await render(
       <SessionDetailScreen
         api={createDetailApi()}
@@ -924,7 +924,6 @@ describe('native session detail', () => {
     await settle();
 
     const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
-    const footer = renderer.root.findByProps({ accessibilityLabel: '会话消息底部留白' });
     const style = timeline.props.contentContainerStyle;
     const styles = Array.isArray(style) ? style : [style];
     const paddingBottom = styles
@@ -934,8 +933,8 @@ describe('native session detail', () => {
         return result;
       }, 0);
 
-    expect(paddingBottom).toBe(168);
-    expect(asRecord(footer.props.style).height).toBe(168);
+    expect(paddingBottom).toBeLessThanOrEqual(24);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '会话消息底部留白' })).toHaveLength(0);
   });
 
   it('does not show a jump button before the reader scrolls away from the bottom', async () => {
@@ -973,6 +972,43 @@ describe('native session detail', () => {
     const onScroll = timeline.props.onScroll;
     expect(typeof onScroll).toBe('function');
     expect(onScroll as ((event: unknown) => void) | undefined).toBeDefined();
+  });
+
+  it('uses scroll hysteresis so the jump button does not flash near the bottom', async () => {
+    const renderer = await render(
+      <SessionDetailScreen
+        api={createDetailApi()}
+        canTerminate
+        csrfToken="csrf-token"
+        onBack={jest.fn()}
+        session={session}
+      />,
+    );
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+
+    const timeline = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+    const scroll = async (offsetY: number) => {
+      await act(async () => timeline.props.onScroll?.({
+        nativeEvent: {
+          contentOffset: { x: 0, y: offsetY },
+          contentSize: { height: 1_000, width: 320 },
+          layoutMeasurement: { height: 400, width: 320 },
+        },
+      }));
+      await settle();
+    };
+
+    await scroll(440);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '回到底部' }).length).toBeGreaterThan(0);
+
+    await scroll(510);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '回到底部' }).length).toBeGreaterThan(0);
+
+    await scroll(560);
+    expect(renderer.root.findAllByProps({ accessibilityLabel: '回到底部' })).toHaveLength(0);
   });
 
   it('renders account quick replies instead of a hardcoded list', async () => {

@@ -100,12 +100,17 @@ describe('AgentHub responsive layout styles', () => {
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.session-filter-drawer:not\(\.is-open\)\s*{[^}]*display:\s*none/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.ops-rail\[data-inspector-mode='overview'\] > \.rail-panel\s*{[^}]*display:\s*none/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-actions\s*{[^}]*position:\s*absolute[^}]*pointer-events:\s*none/s);
+    expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-actions \.message-action-button\s*{[^}]*flex:\s*0 0 28px[^}]*overflow:\s*hidden[^}]*font-size:\s*0/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-line:hover \.message-actions,[\s\S]*?pointer-events:\s*auto/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.composer-options\s*{[^}]*position:\s*absolute/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.composer-options:not\(\.is-open\)\s*{[^}]*display:\s*none/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.timeline-tabs\s*{[^}]*background:\s*var\(--ah-bg-elevated\)/s);
     expect(styles).not.toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.reply-box:not\(\.is-focused\)[^}]*\.voice-mode-bar/s);
     expect(styles).toMatch(/@media \(min-width:\s*1101px\)\s*{[\s\S]*?\.message-block > \*\s*{[^}]*max-width:\s*920px/s);
+  });
+
+  it('keeps message action labels on one line outside the desktop icon treatment', () => {
+    expect(styles).toMatch(/\.message-action-button\s*{[^}]*white-space:\s*nowrap[^}]*flex-shrink:\s*0/s);
   });
 
   it('keeps mobile composer options visible as an overlay in compact mode', () => {

@@ -2412,6 +2412,8 @@ textarea:disabled {
   align-items: center;
   justify-content: center;
   gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
   border: 1px solid #cbd5e1;
   border-radius: 7px;
   background: #ffffff;
@@ -6865,7 +6867,10 @@ textarea:disabled {
     width: 28px;
     min-width: 28px;
     min-height: 28px;
+    flex: 0 0 28px;
+    overflow: hidden;
     padding: 0;
+    font-size: 0;
   }
 
   .message-action-label {

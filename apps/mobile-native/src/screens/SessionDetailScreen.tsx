@@ -21,7 +21,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type {
   MobileApi,
   NativeJob,
@@ -100,10 +100,8 @@ function recordingDuration(durationMillis: number): string {
   return `${minutes}:${seconds}`;
 }
 
-const MIN_COMPOSER_CLEARANCE = 116;
-const TIMELINE_BOTTOM_GUTTER = 18;
-const TIMELINE_BOTTOM_SAFEAREA_FALLBACK = 24;
-const SCROLL_TO_BOTTOM_THRESHOLD = 96;
+const SCROLL_TO_BOTTOM_SHOW_THRESHOLD = 128;
+const SCROLL_TO_BOTTOM_HIDE_THRESHOLD = 48;
 
 function timelineLabel(item: NativeTimelineItem): string {
   if (item.role === 'user') return '你';
@@ -534,7 +532,6 @@ export function SessionDetailScreen({
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
   const [olderLoading, setOlderLoading] = useState(false);
   const [olderError, setOlderError] = useState<string | null>(null);
-  const [composerHeight, setComposerHeight] = useState(MIN_COMPOSER_CLEARANCE);
   const [replyMode, setReplyMode] = useState<'direct' | 'plan'>('direct');
   const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
   const [attachmentPickerVisible, setAttachmentPickerVisible] = useState(false);
@@ -562,6 +559,8 @@ export function SessionDetailScreen({
   const lastTimelineKey = useRef<string | null>(null);
   const isNearBottomRef = useRef(true);
   const shouldAutoScrollRef = useRef(true);
+  const isProgrammaticScrollRef = useRef(false);
+  const showScrollToBottomRef = useRef(false);
   const autoScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollMetricsRef = useRef({
     contentHeight: 0,
@@ -569,7 +568,6 @@ export function SessionDetailScreen({
     viewportHeight: 0,
   });
   const voiceRecorder = useNativeVoiceRecorder();
-  const safeAreaInsets = useSafeAreaInsets();
 
   const loadThread = useCallback(async (): Promise<SessionThreadData> => {
     const [sessionPayload, timelinePayload, permissionPayload, jobsPayload] = await Promise.all([
@@ -617,10 +615,6 @@ export function SessionDetailScreen({
     if (!normalizedMessageQuery) return timelineItems;
     return timelineItems.filter((item) => timelineSearchContent(item).includes(normalizedMessageQuery));
   }, [normalizedMessageQuery, timelineItems]);
-  const timelineBottomClearance = Math.max(
-    MIN_COMPOSER_CLEARANCE,
-    composerHeight,
-  ) + Math.max(safeAreaInsets.bottom, TIMELINE_BOTTOM_SAFEAREA_FALLBACK) + TIMELINE_BOTTOM_GUTTER;
   const hasOlderTimeline = olderHasMore ?? data?.timelineHasMore ?? false;
   const visiblePermissions = useMemo(() => {
     const pending = (data?.permissions ?? []).filter(
@@ -652,8 +646,10 @@ export function SessionDetailScreen({
     setMessageSearchOpen(false);
     setMessageQuery('');
     setShowScrollToBottom(false);
+    showScrollToBottomRef.current = false;
     isNearBottomRef.current = true;
     shouldAutoScrollRef.current = true;
+    isProgrammaticScrollRef.current = false;
     scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
     if (autoScrollSettleTimerRef.current) {
       clearTimeout(autoScrollSettleTimerRef.current);
@@ -719,10 +715,25 @@ export function SessionDetailScreen({
   function applyScrollVisibility() {
     const { contentHeight, offsetY, viewportHeight } = scrollMetricsRef.current;
     if (contentHeight <= 0 || viewportHeight <= 0) return;
-    const distanceFromBottom = contentHeight - (offsetY + viewportHeight);
-    const isNearBottom = distanceFromBottom <= SCROLL_TO_BOTTOM_THRESHOLD;
+    if (isProgrammaticScrollRef.current) {
+      if (showScrollToBottomRef.current) {
+        showScrollToBottomRef.current = false;
+        setShowScrollToBottom(false);
+      }
+      return;
+    }
+    const distanceFromBottom = Math.max(0, contentHeight - (offsetY + viewportHeight));
+    const isNearBottom = distanceFromBottom <= SCROLL_TO_BOTTOM_HIDE_THRESHOLD;
     isNearBottomRef.current = isNearBottom;
-    setShowScrollToBottom(!isNearBottom && !messageSearchOpen && !normalizedMessageQuery);
+    const nextVisible = !messageSearchOpen && !normalizedMessageQuery && (
+      showScrollToBottomRef.current
+        ? distanceFromBottom > SCROLL_TO_BOTTOM_HIDE_THRESHOLD
+        : distanceFromBottom > SCROLL_TO_BOTTOM_SHOW_THRESHOLD
+    );
+    if (showScrollToBottomRef.current !== nextVisible) {
+      showScrollToBottomRef.current = nextVisible;
+      setShowScrollToBottom(nextVisible);
+    }
   }
 
   function scheduleAutoScrollSettle() {
@@ -734,20 +745,21 @@ export function SessionDetailScreen({
   }
 
   function scrollToBottom(animated = true, finalize = true) {
+    isProgrammaticScrollRef.current = true;
+    if (showScrollToBottomRef.current) {
+      showScrollToBottomRef.current = false;
+      setShowScrollToBottom(false);
+    }
     requestAnimationFrame(() => {
-      const targetOffset = Math.max(
-        0,
-        scrollMetricsRef.current.contentHeight - scrollMetricsRef.current.viewportHeight,
-      );
-      listRef.current?.scrollToOffset({ animated, offset: targetOffset });
+      listRef.current?.scrollToEnd({ animated });
       if (!finalize) return;
       shouldAutoScrollRef.current = false;
-      scrollMetricsRef.current.offsetY = targetOffset;
       if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = setTimeout(() => {
         autoScrollSettleTimerRef.current = null;
+        isProgrammaticScrollRef.current = false;
         applyScrollVisibility();
-      }, 80);
+      }, animated ? 420 : 100);
     });
   }
 
@@ -1108,14 +1120,6 @@ export function SessionDetailScreen({
       onRequestError?.(error);
       setSendError(errorMessage(error));
     }
-  }
-
-  function handleComposerLayout(event: LayoutChangeEvent) {
-    const nextHeight = Math.max(
-      MIN_COMPOSER_CLEARANCE,
-      Math.ceil(event.nativeEvent.layout.height),
-    );
-    setComposerHeight((current) => (current === nextHeight ? current : nextHeight));
   }
 
   function renderTimelineItem(item: NativeTimelineItem) {
@@ -1522,10 +1526,7 @@ export function SessionDetailScreen({
         ) : (
           <FlatList
             accessibilityLabel="会话消息列表"
-            contentContainerStyle={[
-              styles.timelineList,
-              { paddingBottom: timelineBottomClearance },
-            ]}
+            contentContainerStyle={styles.timelineList}
             data={visibleTimelineItems}
             keyExtractor={(item) => `${item.session_id}:${item.seq}`}
             ListEmptyComponent={(
@@ -1535,7 +1536,6 @@ export function SessionDetailScreen({
               </View>
             )}
             ListHeaderComponent={detailHeader}
-            ListFooterComponent={<View accessibilityLabel="会话消息底部留白" style={{ height: timelineBottomClearance }} />}
             onLayout={handleTimelineLayout}
             onContentSizeChange={handleTimelineContentSizeChange}
             onScroll={handleTimelineScroll}
@@ -1564,7 +1564,7 @@ export function SessionDetailScreen({
           </Pressable>
         ) : null}
 
-        <View onLayout={handleComposerLayout} style={styles.composer}>
+        <View style={styles.composer}>
           {replyDisabledReason ? (
             <View accessibilityLabel="回复不可用原因" style={styles.replyDisabledNotice}>
               <Ionicons color={colors.muted} name="information-circle-outline" size={16} />
@@ -2217,7 +2217,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
-  timelineList: { paddingHorizontal: 14 },
+  timelineList: { paddingBottom: 12, paddingHorizontal: 14 },
   detailHeaderContent: { paddingTop: 14 },
   sessionMeta: {
     backgroundColor: colors.surface,
