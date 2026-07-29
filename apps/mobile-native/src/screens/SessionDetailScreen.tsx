@@ -562,6 +562,7 @@ export function SessionDetailScreen({
   const isProgrammaticScrollRef = useRef(false);
   const showScrollToBottomRef = useRef(false);
   const autoScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoScrollReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollMetricsRef = useRef({
     contentHeight: 0,
     offsetY: 0,
@@ -655,12 +656,20 @@ export function SessionDetailScreen({
       clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = null;
     }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
   }, [session.session_id]);
 
   useEffect(() => () => {
     if (autoScrollSettleTimerRef.current) {
       clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = null;
+    }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
     }
   }, []);
 
@@ -722,6 +731,7 @@ export function SessionDetailScreen({
     const distanceFromBottom = Math.max(0, contentHeight - (offsetY + viewportHeight));
     const isNearBottom = distanceFromBottom <= SCROLL_TO_BOTTOM_HIDE_THRESHOLD;
     isNearBottomRef.current = isNearBottom;
+    shouldAutoScrollRef.current = isNearBottom;
     const nextVisible = !messageSearchOpen && !normalizedMessageQuery && (
       showScrollToBottomRef.current
         ? distanceFromBottom > SCROLL_TO_BOTTOM_HIDE_THRESHOLD
@@ -740,6 +750,10 @@ export function SessionDetailScreen({
       setShowScrollToBottom(false);
     }
     if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
     autoScrollSettleTimerRef.current = setTimeout(() => {
       autoScrollSettleTimerRef.current = null;
       scrollToBottom(false, true);
@@ -747,7 +761,12 @@ export function SessionDetailScreen({
   }
 
   function scrollToBottom(animated = true, finalize = true) {
+    shouldAutoScrollRef.current = true;
     isProgrammaticScrollRef.current = true;
+    if (autoScrollSettleTimerRef.current) {
+      clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = null;
+    }
     if (showScrollToBottomRef.current) {
       showScrollToBottomRef.current = false;
       setShowScrollToBottom(false);
@@ -755,10 +774,9 @@ export function SessionDetailScreen({
     requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated });
       if (!finalize) return;
-      shouldAutoScrollRef.current = false;
-      if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
-      autoScrollSettleTimerRef.current = setTimeout(() => {
-        autoScrollSettleTimerRef.current = null;
+      if (autoScrollReleaseTimerRef.current) clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = setTimeout(() => {
+        autoScrollReleaseTimerRef.current = null;
         isProgrammaticScrollRef.current = false;
         applyScrollVisibility();
       }, animated ? 420 : 100);
@@ -781,6 +799,10 @@ export function SessionDetailScreen({
     if (autoScrollSettleTimerRef.current) {
       clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = null;
+    }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
     }
   }
 

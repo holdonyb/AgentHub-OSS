@@ -1186,6 +1186,57 @@ describe('native session detail', () => {
     }
   });
 
+  it('keeps following when content grows during an explicit jump to the bottom', async () => {
+    jest.useFakeTimers();
+    const activeSession = { ...session, status: 'running' as const };
+    const api = createDetailApi({
+      getSession: jest.fn(async () => ({ session: activeSession })),
+    });
+    const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+
+    try {
+      const renderer = await render(
+        <SessionDetailScreen
+          api={api}
+          canTerminate
+          csrfToken="csrf-token"
+          onBack={jest.fn()}
+          session={activeSession}
+        />,
+      );
+      await settle();
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+        await Promise.resolve();
+      });
+      scrollToEnd.mockClear();
+
+      const list = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+      await act(async () => list.props.onScrollBeginDrag?.());
+      await act(async () => list.props.onScroll?.({
+        nativeEvent: {
+          contentOffset: { x: 0, y: 100 },
+          contentSize: { height: 1_000, width: 320 },
+          layoutMeasurement: { height: 400, width: 320 },
+        },
+      }));
+      await settle();
+
+      const jumpButton = renderer.root.findByProps({ accessibilityLabel: '回到底部' });
+      await act(async () => jumpButton.props.onPress?.());
+      await act(async () => list.props.onContentSizeChange?.(320, 1_300));
+      await act(async () => {
+        jest.advanceTimersByTime(700);
+        await Promise.resolve();
+      });
+
+      expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    } finally {
+      scrollToEnd.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   it('renders account quick replies instead of a hardcoded list', async () => {
     const renderer = await render(
       <SessionDetailScreen
