@@ -36,6 +36,17 @@ describe('async resource state', () => {
     });
   });
 
+  it('keeps an existing resource visually idle during a silent refresh', () => {
+    const ready = finishResourceLoad(createResourceState<string[]>(), ['first']);
+
+    expect(beginResourceLoad(ready, { silent: true })).toEqual({
+      data: ['first'],
+      error: null,
+      loading: false,
+      refreshing: false,
+    });
+  });
+
   it('uses a stable fallback for non-Error failures', () => {
     expect(failResourceLoad(createResourceState(), null).error).toBe('请求失败，请稍后重试');
   });

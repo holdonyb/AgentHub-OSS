@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import * as Clipboard from 'expo-clipboard';
+import { FlatList } from 'react-native';
 import type {
   NativeJob,
   NativePermission,
@@ -1009,6 +1010,180 @@ describe('native session detail', () => {
 
     await scroll(560);
     expect(renderer.root.findAllByProps({ accessibilityLabel: '回到底部' })).toHaveLength(0);
+  });
+
+  it('keeps background polling from activating the pull-to-refresh indicator', async () => {
+    jest.useFakeTimers();
+    const activeSession = { ...session, status: 'running' as const };
+    const pendingTimeline = deferred<{ items: NativeTimelineItem[]; has_more: boolean }>();
+    const getSessionTimeline = jest
+      .fn()
+      .mockResolvedValueOnce({ items: timeline, has_more: false })
+      .mockImplementationOnce(() => pendingTimeline.promise);
+    const api = createDetailApi({
+      getSession: jest.fn(async () => ({ session: activeSession })),
+      getSessionTimeline,
+    });
+
+    try {
+      const renderer = await render(
+        <SessionDetailScreen
+          api={api}
+          canTerminate
+          csrfToken="csrf-token"
+          onBack={jest.fn()}
+          session={activeSession}
+        />,
+      );
+      await settle();
+
+      await act(async () => {
+        jest.advanceTimersByTime(3_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const list = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+      expect(getSessionTimeline).toHaveBeenCalledTimes(2);
+      expect(list.props.refreshControl.props.refreshing).toBe(false);
+
+      pendingTimeline.resolve({ items: timeline, has_more: false });
+      await settle();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('coalesces a live timeline update into one jump to the latest message', async () => {
+    jest.useFakeTimers();
+    const activeSession = { ...session, status: 'running' as const };
+    const nextTimeline: NativeTimelineItem[] = [
+      ...timeline,
+      {
+        session_id: 'session-1',
+        seq: 3,
+        item_type: 'assistant_message',
+        role: 'assistant',
+        text: '新增的实时消息。',
+        tool_call_id: null,
+        tool_name: null,
+        status: 'completed',
+        payload: {},
+        created_at: '2026-07-11T12:03:00Z',
+      },
+    ];
+    const getSessionTimeline = jest
+      .fn()
+      .mockResolvedValueOnce({ items: timeline, has_more: false })
+      .mockResolvedValueOnce({ items: nextTimeline, has_more: false });
+    const api = createDetailApi({
+      getSession: jest.fn(async () => ({ session: activeSession })),
+      getSessionTimeline,
+    });
+    const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+
+    try {
+      await render(
+        <SessionDetailScreen
+          api={api}
+          canTerminate
+          csrfToken="csrf-token"
+          onBack={jest.fn()}
+          session={activeSession}
+        />,
+      );
+      await settle();
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      scrollToEnd.mockClear();
+
+      await act(async () => {
+        jest.advanceTimersByTime(3_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await settle();
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(getSessionTimeline).toHaveBeenCalledTimes(2);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+    } finally {
+      scrollToEnd.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels a pending live-update jump when the user starts dragging', async () => {
+    jest.useFakeTimers();
+    const activeSession = { ...session, status: 'running' as const };
+    const nextTimeline: NativeTimelineItem[] = [
+      ...timeline,
+      {
+        session_id: 'session-1',
+        seq: 3,
+        item_type: 'assistant_message',
+        role: 'assistant',
+        text: '新增的实时消息。',
+        tool_call_id: null,
+        tool_name: null,
+        status: 'completed',
+        payload: {},
+        created_at: '2026-07-11T12:03:00Z',
+      },
+    ];
+    const api = createDetailApi({
+      getSession: jest.fn(async () => ({ session: activeSession })),
+      getSessionTimeline: jest
+        .fn()
+        .mockResolvedValueOnce({ items: timeline, has_more: false })
+        .mockResolvedValueOnce({ items: nextTimeline, has_more: false }),
+    });
+    const scrollToEnd = jest.spyOn(FlatList.prototype, 'scrollToEnd').mockImplementation(() => undefined);
+
+    try {
+      const renderer = await render(
+        <SessionDetailScreen
+          api={api}
+          canTerminate
+          csrfToken="csrf-token"
+          onBack={jest.fn()}
+          session={activeSession}
+        />,
+      );
+      await settle();
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      scrollToEnd.mockClear();
+
+      await act(async () => {
+        jest.advanceTimersByTime(3_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await settle();
+
+      const list = renderer.root.findByProps({ accessibilityLabel: '会话消息列表' });
+      await act(async () => list.props.onScrollBeginDrag?.());
+      await act(async () => {
+        jest.advanceTimersByTime(500);
+        await Promise.resolve();
+      });
+
+      expect(scrollToEnd).not.toHaveBeenCalled();
+    } finally {
+      scrollToEnd.mockRestore();
+      jest.useRealTimers();
+    }
   });
 
   it('renders account quick replies instead of a hardcoded list', async () => {
