@@ -1,6 +1,6 @@
 {
   "name": "@agenthub/desktop",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "AgentHub desktop client",
   "author": "AgentHub contributors",
   "private": true,

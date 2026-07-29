@@ -125,3 +125,23 @@ Rules:
    - native parsed `Date.getTime()`
    - rendered relative label
    before touching sorting or sync logic.
+
+## Native Timeline Layout Guardrails
+
+The July 2026 native timeline regression came from treating an in-flow composer as though it were an overlay:
+
+- the composer already occupied normal flex layout below the message list
+- the same measured height was also added as list padding and as a list footer
+- long threads therefore ended with a large blank area
+- manual `contentHeight - viewportHeight` offsets raced changing measurements and produced bottom bounce
+
+Rules:
+
+1. If the composer is in normal layout flow, do not add composer-height padding or a duplicate footer to the timeline.
+2. Prefer the list implementation's native `scrollToEnd` behavior over offsets calculated from stale content measurements.
+3. Give jump-to-bottom visibility separate show and hide thresholds so small layout changes cannot toggle it repeatedly.
+4. Suppress jump-button state changes while a programmatic bottom scroll is settling.
+5. Native timeline release validation must cover all three states on a physical device:
+   - already at bottom: no jump button and no blank tail
+   - scrolled away: exactly one jump button
+   - after tapping jump: newest content visible and button remains hidden after the layout settles
