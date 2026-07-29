@@ -145,3 +145,28 @@ Rules:
    - already at bottom: no jump button and no blank tail
    - scrolled away: exactly one jump button
    - after tapping jump: newest content visible and button remains hidden after the layout settles
+
+## Native Live Timeline Guardrails
+
+The July 2026 live-update regression exposed two independent feedback loops:
+
+- the three-second background poll reused the foreground reload path, which set
+  `refreshing=true` and activated `RefreshControl` on every poll
+- each timeline update scheduled immediate and delayed bottom scrolling, so small
+  content increments repeatedly moved the list up and down
+
+Rules:
+
+1. Background polling must use a silent resource refresh. Only an explicit user
+   refresh may activate `RefreshControl` or other visible loading layout.
+2. Coalesce one live-update batch into at most one scheduled bottom follow.
+3. Beginning a manual drag must cancel any pending automatic follow.
+4. Keep follow-latest mode active while a programmatic jump is settling, including
+   when content height grows during the animation.
+5. Use separate settle and release timers. A stale timer from an earlier jump must
+   not clear the state of a newer jump.
+6. Regression tests must prove:
+   - background polling does not enable pull-to-refresh
+   - one content update produces one follow action
+   - manual drag cancels a pending follow
+   - content growth during an explicit jump receives one corrective follow
