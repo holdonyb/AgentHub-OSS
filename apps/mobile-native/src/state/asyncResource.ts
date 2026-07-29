@@ -12,16 +12,23 @@ export interface AsyncResourceOptions {
   resetKey?: unknown;
 }
 
+export interface ResourceLoadOptions {
+  silent?: boolean;
+}
+
 export function createResourceState<T>(): AsyncResourceState<T> {
   return { data: null, error: null, loading: true, refreshing: false };
 }
 
-export function beginResourceLoad<T>(state: AsyncResourceState<T>): AsyncResourceState<T> {
+export function beginResourceLoad<T>(
+  state: AsyncResourceState<T>,
+  options: ResourceLoadOptions = {},
+): AsyncResourceState<T> {
   return {
     ...state,
     error: null,
     loading: state.data === null,
-    refreshing: state.data !== null,
+    refreshing: state.data !== null && !options.silent,
   };
 }
 
@@ -54,10 +61,10 @@ export function useAsyncResource<T>(
   const previousResetKey = useRef(options.resetKey);
   onErrorRef.current = options.onError;
 
-  const runLoad = useCallback(async (reset: boolean) => {
+  const runLoad = useCallback(async (reset: boolean, loadOptions: ResourceLoadOptions = {}) => {
     const currentRequestId = requestId.current + 1;
     requestId.current = currentRequestId;
-    setState((current) => reset ? createResourceState<T>() : beginResourceLoad(current));
+    setState((current) => reset ? createResourceState<T>() : beginResourceLoad(current, loadOptions));
     try {
       const data = await loader();
       if (requestId.current === currentRequestId) {
@@ -72,6 +79,7 @@ export function useAsyncResource<T>(
   }, [loader]);
 
   const reload = useCallback(() => runLoad(false), [runLoad]);
+  const reloadSilently = useCallback(() => runLoad(false, { silent: true }), [runLoad]);
 
   useEffect(() => {
     const reset = !Object.is(previousResetKey.current, options.resetKey);
@@ -82,5 +90,5 @@ export function useAsyncResource<T>(
     };
   }, [options.resetKey, runLoad]);
 
-  return { ...state, reload };
+  return { ...state, reload, reloadSilently };
 }

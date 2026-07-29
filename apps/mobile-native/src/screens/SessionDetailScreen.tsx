@@ -562,6 +562,7 @@ export function SessionDetailScreen({
   const isProgrammaticScrollRef = useRef(false);
   const showScrollToBottomRef = useRef(false);
   const autoScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoScrollReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollMetricsRef = useRef({
     contentHeight: 0,
     offsetY: 0,
@@ -655,12 +656,20 @@ export function SessionDetailScreen({
       clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = null;
     }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
   }, [session.session_id]);
 
   useEffect(() => () => {
     if (autoScrollSettleTimerRef.current) {
       clearTimeout(autoScrollSettleTimerRef.current);
       autoScrollSettleTimerRef.current = null;
+    }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
     }
   }, []);
 
@@ -685,9 +694,9 @@ export function SessionDetailScreen({
   useEffect(() => {
     const active = ['queued', 'running'].includes(currentSession.status) ||
       (currentJob ? ['queued', 'running'].includes(currentJob.status) : false);
-    const timer = setInterval(() => void resource.reload(), active ? 3_000 : 15_000);
+    const timer = setInterval(() => void resource.reloadSilently(), active ? 3_000 : 15_000);
     return () => clearInterval(timer);
-  }, [currentJob?.status, currentSession.status, resource.reload]);
+  }, [currentJob?.status, currentSession.status, resource.reloadSilently]);
 
   useEffect(() => {
     if (timelineItems.length === 0) return;
@@ -698,10 +707,7 @@ export function SessionDetailScreen({
     const latestKey = `${latest.session_id}:${latest.seq}:${latest.created_at}`;
     if (lastTimelineKey.current === latestKey) return;
     lastTimelineKey.current = latestKey;
-    requestAnimationFrame(() => {
-      scrollToBottom(false, false);
-      scheduleAutoScrollSettle();
-    });
+    scheduleAutoScrollSettle();
   }, [focusedPermissionId, messageSearchOpen, normalizedMessageQuery, timelineItems]);
 
   useEffect(() => {
@@ -725,6 +731,7 @@ export function SessionDetailScreen({
     const distanceFromBottom = Math.max(0, contentHeight - (offsetY + viewportHeight));
     const isNearBottom = distanceFromBottom <= SCROLL_TO_BOTTOM_HIDE_THRESHOLD;
     isNearBottomRef.current = isNearBottom;
+    shouldAutoScrollRef.current = isNearBottom;
     const nextVisible = !messageSearchOpen && !normalizedMessageQuery && (
       showScrollToBottomRef.current
         ? distanceFromBottom > SCROLL_TO_BOTTOM_HIDE_THRESHOLD
@@ -737,7 +744,16 @@ export function SessionDetailScreen({
   }
 
   function scheduleAutoScrollSettle() {
+    isProgrammaticScrollRef.current = true;
+    if (showScrollToBottomRef.current) {
+      showScrollToBottomRef.current = false;
+      setShowScrollToBottom(false);
+    }
     if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
     autoScrollSettleTimerRef.current = setTimeout(() => {
       autoScrollSettleTimerRef.current = null;
       scrollToBottom(false, true);
@@ -745,7 +761,12 @@ export function SessionDetailScreen({
   }
 
   function scrollToBottom(animated = true, finalize = true) {
+    shouldAutoScrollRef.current = true;
     isProgrammaticScrollRef.current = true;
+    if (autoScrollSettleTimerRef.current) {
+      clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = null;
+    }
     if (showScrollToBottomRef.current) {
       showScrollToBottomRef.current = false;
       setShowScrollToBottom(false);
@@ -753,10 +774,9 @@ export function SessionDetailScreen({
     requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated });
       if (!finalize) return;
-      shouldAutoScrollRef.current = false;
-      if (autoScrollSettleTimerRef.current) clearTimeout(autoScrollSettleTimerRef.current);
-      autoScrollSettleTimerRef.current = setTimeout(() => {
-        autoScrollSettleTimerRef.current = null;
+      if (autoScrollReleaseTimerRef.current) clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = setTimeout(() => {
+        autoScrollReleaseTimerRef.current = null;
         isProgrammaticScrollRef.current = false;
         applyScrollVisibility();
       }, animated ? 420 : 100);
@@ -773,10 +793,22 @@ export function SessionDetailScreen({
     applyScrollVisibility();
   }
 
+  function handleTimelineScrollBeginDrag() {
+    shouldAutoScrollRef.current = false;
+    isProgrammaticScrollRef.current = false;
+    if (autoScrollSettleTimerRef.current) {
+      clearTimeout(autoScrollSettleTimerRef.current);
+      autoScrollSettleTimerRef.current = null;
+    }
+    if (autoScrollReleaseTimerRef.current) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
+  }
+
   function handleTimelineLayout(event: LayoutChangeEvent) {
     scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
     if (shouldAutoScrollRef.current) {
-      scrollToBottom(false, false);
       scheduleAutoScrollSettle();
       return;
     }
@@ -786,7 +818,6 @@ export function SessionDetailScreen({
   function handleTimelineContentSizeChange(_width: number, height: number) {
     scrollMetricsRef.current.contentHeight = height;
     if (shouldAutoScrollRef.current) {
-      scrollToBottom(false, false);
       scheduleAutoScrollSettle();
       return;
     }
@@ -1539,6 +1570,7 @@ export function SessionDetailScreen({
             onLayout={handleTimelineLayout}
             onContentSizeChange={handleTimelineContentSizeChange}
             onScroll={handleTimelineScroll}
+            onScrollBeginDrag={handleTimelineScrollBeginDrag}
             ref={listRef}
             refreshControl={(
               <RefreshControl
