@@ -24,6 +24,7 @@ from agenthub_worker.codex_app_server import (
     run_codex_turn,
     toggle_codex_fast_mode,
 )
+from agenthub_worker.codex_owner_bridge import is_codex_active_writer_error, run_codex_owner_turn
 from agenthub_worker.discovery import (
     discover_opencode_sessions,
     parse_claude_jsonl,
@@ -2272,6 +2273,14 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
                     timeout_seconds=timeout_seconds,
                 )
             except RuntimeError as exc:
+                if is_codex_active_writer_error(str(exc)):
+                    return run_codex_owner_turn(
+                        job,
+                        collaboration_mode="default",
+                        client=client,
+                        worker_id=worker_id,
+                        timeout_seconds=timeout_seconds,
+                    )
                 if _is_codex_native_default_fallback_error(str(exc)):
                     return _execute_session_input_cli(job, payload, secret_env)
                 raise
@@ -2284,6 +2293,14 @@ def execute_job(job: dict[str, Any], *, client: Any | None = None, worker_id: st
             try:
                 return run_codex_plan_turn(job, client=client, worker_id=worker_id, timeout_seconds=timeout_seconds)
             except RuntimeError as exc:
+                if is_codex_active_writer_error(str(exc)):
+                    return run_codex_owner_turn(
+                        job,
+                        collaboration_mode="plan",
+                        client=client,
+                        worker_id=worker_id,
+                        timeout_seconds=timeout_seconds,
+                    )
                 if _is_codex_native_plan_fallback_error(str(exc)):
                     return _execute_codex_native_plan_cli_fallback(job, payload)
                 raise

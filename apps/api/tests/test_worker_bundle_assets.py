@@ -60,6 +60,7 @@ def test_worker_bundle_builder_emits_windows_and_linux_archives() -> None:
             assert "agenthub-worker/scripts/update-windows-worker.ps1" in names
             assert "agenthub-worker/scripts/worker_self_update.py" in names
             assert "agenthub-worker/workers/local-windows/agenthub_windows_worker/main.py" in names
+            assert "agenthub-worker/workers/shared/agenthub_worker/codex_desktop_pipe.mjs" in names
 
         with tarfile.open(linux_bundle, "r:gz") as archive:
             names = archive.getnames()
