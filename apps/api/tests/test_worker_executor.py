@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from agenthub_worker import codex_app_server, executor
+from agenthub_worker import codex_app_server, codex_owner_bridge, executor
 from agenthub_worker.executor import build_backend_command, build_session_start_command, execute_job
 
 
@@ -1393,6 +1393,355 @@ def test_codex_default_turn_uses_native_app_server_to_exit_plan_mode(monkeypatch
     assert calls[0]["timeout_seconds"] == 321
     payload = calls[0]["job"]["payload"]  # type: ignore[index]
     assert payload["prompt"] == "Implement the plan."  # type: ignore[index]
+
+
+def test_codex_default_turn_routes_active_writer_to_owner_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run_codex_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'thread codex-session already has an active writer'}"
+        )
+
+    def fake_run_codex_owner_turn(
+        job: dict[str, object],
+        *,
+        collaboration_mode: str,
+        client: object | None,
+        worker_id: str,
+        timeout_seconds: int,
+    ) -> str:
+        observed.update(
+            job=job,
+            collaboration_mode=collaboration_mode,
+            client=client,
+            worker_id=worker_id,
+            timeout_seconds=timeout_seconds,
+        )
+        return "OWNER_BRIDGE_OK"
+
+    client = object()
+    monkeypatch.setattr(executor, "run_codex_turn", fake_run_codex_turn)
+    monkeypatch.setattr(executor, "run_codex_owner_turn", fake_run_codex_owner_turn, raising=False)
+    monkeypatch.setattr(
+        executor,
+        "_execute_session_input_cli",
+        lambda *args, **kwargs: pytest.fail("active writer must not fall back to CLI resume"),
+    )
+
+    result = execute_job(
+        {
+            "job_id": "job-owner-default",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "继续执行",
+                "native_turn_mode": "default",
+                "timeout_seconds": 91,
+            },
+        },
+        client=client,
+        worker_id="win-main",
+    )
+
+    assert result == "OWNER_BRIDGE_OK"
+    assert observed["collaboration_mode"] == "default"
+    assert observed["client"] is client
+    assert observed["worker_id"] == "win-main"
+    assert observed["timeout_seconds"] == 91
+
+
+def test_codex_plan_turn_routes_active_writer_to_owner_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run_codex_plan_turn(*args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "codex app-server thread/resume failed: {'code': -32600, "
+            "'message': 'thread codex-session already has an active writer'}"
+        )
+
+    def fake_run_codex_owner_turn(
+        job: dict[str, object],
+        *,
+        collaboration_mode: str,
+        client: object | None,
+        worker_id: str,
+        timeout_seconds: int,
+    ) -> str:
+        observed.update(
+            job=job,
+            collaboration_mode=collaboration_mode,
+            client=client,
+            worker_id=worker_id,
+            timeout_seconds=timeout_seconds,
+        )
+        return "OWNER_PLAN_OK"
+
+    client = object()
+    monkeypatch.setattr(executor, "run_codex_plan_turn", fake_run_codex_plan_turn)
+    monkeypatch.setattr(executor, "run_codex_owner_turn", fake_run_codex_owner_turn, raising=False)
+    monkeypatch.setattr(
+        executor,
+        "_execute_codex_native_plan_cli_fallback",
+        lambda *args, **kwargs: pytest.fail("active writer must not fall back to CLI resume"),
+    )
+
+    result = execute_job(
+        {
+            "job_id": "job-owner-plan",
+            "kind": "session_input",
+            "backend": "codex",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {
+                "prompt": "先列计划",
+                "reply_mode": "plan",
+                "native_plan_mode": True,
+                "timeout_seconds": 92,
+            },
+        },
+        client=client,
+        worker_id="win-main",
+    )
+
+    assert result == "OWNER_PLAN_OK"
+    assert observed["collaboration_mode"] == "plan"
+    assert observed["client"] is client
+    assert observed["worker_id"] == "win-main"
+    assert observed["timeout_seconds"] == 92
+
+
+def test_codex_desktop_pipe_path_is_extracted_from_encoded_command_line() -> None:
+    command_line = (
+        'codex.exe --env-json "{\\"CODEX_APP_TOOLS_PIPE_PATH\\":'
+        '\\"\\\\\\\\.\\\\pipe\\\\codex-app-tools-test\\",\\"OTHER\\":\\"value\\"}"'
+    )
+
+    assert codex_owner_bridge.extract_desktop_pipe_path(command_line) == r"\\.\pipe\codex-app-tools-test"
+
+
+def test_codex_desktop_send_capability_accepts_additive_schema() -> None:
+    tool = {
+        "namespace": "codex_app",
+        "name": "send_message_to_thread",
+        "inputSchema": {
+            "type": "object",
+            "required": ["threadId", "prompt"],
+            "properties": {
+                "threadId": {"type": "string"},
+                "prompt": {"type": "string"},
+                "model": {"type": "string"},
+                "thinking": {"type": "string", "enum": ["low", "medium", "high"]},
+                "futureField": {"type": "boolean"},
+            },
+        },
+        "futureMetadata": {"version": 2},
+    }
+
+    capability = codex_owner_bridge.parse_send_message_capability([tool])
+
+    assert capability.accepts_model is True
+    assert capability.thinking_values == frozenset({"low", "medium", "high"})
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [],
+        [
+            {
+                "namespace": "codex_app",
+                "name": "send_message_to_thread",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["threadId"],
+                    "properties": {"threadId": {"type": "string"}},
+                },
+            }
+        ],
+    ],
+)
+def test_codex_desktop_send_capability_rejects_missing_required_contract(tools: list[dict[str, object]]) -> None:
+    with pytest.raises(codex_owner_bridge.CodexOwnerBridgeUnavailable, match="send_message_to_thread"):
+        codex_owner_bridge.parse_send_message_capability(tools)
+
+
+def test_codex_owner_bridge_delivers_to_same_thread_and_returns_only_new_completed_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_turn = {
+        "id": "turn-old",
+        "status": "completed",
+        "items": [
+            {"type": "userMessage", "content": [{"type": "inputText", "text": "旧请求"}]},
+            {"type": "agentMessage", "text": "OLD_RESULT"},
+        ],
+    }
+    running_turn = {
+        "id": "turn-new",
+        "status": "inProgress",
+        "items": [{"type": "userMessage", "content": [{"type": "inputText", "text": "继续实现"}]}],
+    }
+    completed_turn = {
+        **running_turn,
+        "status": "completed",
+        "items": [
+            *running_turn["items"],
+            {"type": "agentMessage", "text": "NEW_RESULT"},
+        ],
+    }
+    turn_snapshots = [[old_turn], [old_turn, running_turn], [old_turn, completed_turn]]
+    pipe_calls: list[dict[str, object]] = []
+
+    class FakeObserverClient:
+        def __enter__(self) -> "FakeObserverClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def initialize(self) -> dict[str, object]:
+            return {}
+
+        def request(self, method: str, params: dict[str, object], *, timeout_seconds: int) -> dict[str, object]:
+            assert method == "thread/turns/list"
+            assert params["threadId"] == "codex-session"
+            return {"data": turn_snapshots.pop(0)}
+
+    def fake_invoke_desktop_pipe(
+        pipe_path: str,
+        request: dict[str, object],
+        *,
+        timeout_seconds: int,
+    ) -> dict[str, object]:
+        pipe_calls.append(request)
+        if request["method"] == "tools/list":
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "tools": [
+                        {
+                            "namespace": "codex_app",
+                            "name": "send_message_to_thread",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["threadId", "prompt"],
+                                "properties": {
+                                    "threadId": {"type": "string"},
+                                    "prompt": {"type": "string"},
+                                },
+                            },
+                        }
+                    ]
+                },
+            }
+        params = request["params"]
+        assert isinstance(params, dict)
+        arguments = params["arguments"]
+        assert isinstance(arguments, dict)
+        assert params["threadId"] == "codex-session"
+        assert arguments["threadId"] == "codex-session"
+        assert arguments["prompt"] == "继续实现"
+        return {"jsonrpc": "2.0", "id": request["id"], "result": {"success": True}}
+
+    monkeypatch.setattr(codex_owner_bridge, "CodexAppServerClient", FakeObserverClient, raising=False)
+    monkeypatch.setattr(codex_owner_bridge, "discover_desktop_pipe_paths", lambda: [r"\\.\pipe\codex-test"])
+    monkeypatch.setattr(codex_owner_bridge, "invoke_desktop_pipe", fake_invoke_desktop_pipe)
+    monkeypatch.setattr(codex_owner_bridge.time, "sleep", lambda seconds: None, raising=False)
+
+    result = codex_owner_bridge.run_codex_owner_turn(
+        {
+            "job_id": "job-owner-read",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": "继续实现"},
+        },
+        collaboration_mode="default",
+        timeout_seconds=30,
+    )
+
+    assert result == "NEW_RESULT"
+    assert [call["method"] for call in pipe_calls] == ["tools/list", "tools/call"]
+
+
+def test_codex_owner_bridge_falls_back_to_correlated_durable_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[tuple[str, dict[str, object]]] = []
+    baseline_turn = {"id": "turn-old", "status": "completed", "items": []}
+    queue_turn = {
+        "id": "turn-queued",
+        "status": "completed",
+        "items": [
+            {
+                "type": "userMessage",
+                "clientId": "agenthub:job-queue",
+                "content": [{"type": "inputText", "text": "队列继续"}],
+            },
+            {"type": "agentMessage", "text": "QUEUE_RESULT"},
+        ],
+    }
+    snapshots = [[baseline_turn], [baseline_turn, queue_turn]]
+
+    class FakeObserverClient:
+        def __enter__(self) -> "FakeObserverClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def initialize(self) -> dict[str, object]:
+            return {}
+
+        def request(self, method: str, params: dict[str, object], *, timeout_seconds: int) -> dict[str, object]:
+            requests.append((method, params))
+            if method == "thread/turns/list":
+                return {"data": snapshots.pop(0)}
+            assert method == "thread/queue/add"
+            return {"queued": True}
+
+    monkeypatch.setattr(codex_owner_bridge, "CodexAppServerClient", FakeObserverClient)
+    monkeypatch.setattr(codex_owner_bridge, "discover_desktop_pipe_paths", lambda: [])
+    monkeypatch.setattr(codex_owner_bridge.time, "sleep", lambda seconds: None)
+
+    result = codex_owner_bridge.run_codex_owner_turn(
+        {
+            "job_id": "job-queue",
+            "target_session_id": "codex-session",
+            "workspace_root": "E:/work/AgentHub",
+            "payload": {"prompt": "队列继续"},
+        },
+        collaboration_mode="default",
+        timeout_seconds=30,
+    )
+
+    assert result == "QUEUE_RESULT"
+    queue_params = next(params for method, params in requests if method == "thread/queue/add")
+    assert queue_params == {
+        "threadId": "codex-session",
+        "input": [{"type": "text", "text": "队列继续"}],
+        "clientUserMessageId": "agenthub:job-queue",
+    }
+
+
+def test_codex_owner_bridge_turn_history_uses_thread_read_compatibility_fallback() -> None:
+    methods: list[str] = []
+
+    class FakeObserverClient:
+        def request(self, method: str, params: dict[str, object], *, timeout_seconds: int) -> dict[str, object]:
+            methods.append(method)
+            if method == "thread/turns/list":
+                raise RuntimeError("codex app-server thread/turns/list failed: method not found")
+            assert method == "thread/read"
+            assert params == {"threadId": "codex-session", "includeTurns": True}
+            return {"thread": {"turns": [{"id": "turn-fallback", "status": "completed", "items": []}]}}
+
+    turns = codex_owner_bridge._read_turns(FakeObserverClient(), "codex-session", timeout_seconds=10)
+
+    assert [turn["id"] for turn in turns] == ["turn-fallback"]
+    assert methods == ["thread/turns/list", "thread/read"]
 
 
 def test_codex_default_turn_falls_back_to_cli_resume_for_legacy_provider_config(
