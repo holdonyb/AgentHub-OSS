@@ -431,6 +431,7 @@ class CodexAppServerClient:
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         assert self._process.stdout is not None
         assert self._process.stderr is not None
@@ -447,7 +448,7 @@ class CodexAppServerClient:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 else:
                     process.kill()
         self._process = None

@@ -288,13 +288,21 @@ def install_requirements(repo_root: Path, python_executable: Path | None = None)
     requirements = repo_root / "workers" / "requirements.txt"
     if not requirements.exists():
         return
-    subprocess.run([str(python_executable or sys.executable), "-m", "pip", "install", "-r", str(requirements)], check=True)
+    subprocess.run(
+        [str(python_executable or sys.executable), "-m", "pip", "install", "-r", str(requirements)],
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 def prepare_staged_venv(staging_root: Path, target_venv: Path) -> Path | None:
     if env_flag("AGENTHUB_WORKER_UPDATE_SKIP_PIP", default=False):
         return None
-    subprocess.run([sys.executable, "-m", "venv", str(target_venv)], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "venv", str(target_venv)],
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     python_name = "python.exe" if os.name == "nt" else "python"
     python_path = target_venv / ("Scripts" if os.name == "nt" else "bin") / python_name
     install_requirements(staging_root, python_path)
