@@ -97,6 +97,7 @@ def discover_desktop_pipe_paths() -> list[str]:
             errors="replace",
             timeout=15,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -133,6 +134,7 @@ def invoke_desktop_pipe(pipe_path: str, request: dict[str, Any], *, timeout_seco
             errors="replace",
             timeout=max(1, timeout_seconds) + 2,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise CodexOwnerBridgeUnavailable(f"Codex Desktop pipe request failed: {exc}") from exc

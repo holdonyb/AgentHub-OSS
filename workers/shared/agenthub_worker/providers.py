@@ -69,6 +69,7 @@ class AgentProvider:
                 timeout=5,
                 check=False,
                 executable=path,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             version = (completed.stdout or completed.stderr or "").strip()[:240]
         except Exception as exc:  # noqa: BLE001 - diagnostics must not break worker heartbeats
@@ -129,6 +130,7 @@ class AgentProvider:
                 timeout=5,
                 check=False,
                 executable=executable_path or None,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except Exception:
             return None

@@ -31,7 +31,7 @@ jobs:
           java-version: '21'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Python dependencies
         run: python -m pip install -r apps/api/requirements.txt

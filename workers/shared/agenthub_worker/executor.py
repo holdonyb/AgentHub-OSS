@@ -1362,6 +1362,7 @@ def _run_control_command(
         stderr=subprocess.PIPE,
         timeout=timeout_seconds,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return completed
 
@@ -1477,7 +1478,7 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
         return
     if os.name == "nt":
         try:
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False, timeout=10)
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.TimeoutExpired):
             process.kill()
         return
@@ -1505,6 +1506,7 @@ def _run_backend_command(
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)

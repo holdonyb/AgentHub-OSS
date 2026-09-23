@@ -620,9 +620,12 @@ def test_provider_probes_use_resolved_windows_executable_without_rewriting_args(
         lambda executable: f"C:/Users/test/AppData/Roaming/npm/{executable}.CMD",
     )
     captured: list[tuple[list[str], str | None]] = []
+    creation_flags: list[int] = []
+    monkeypatch.setattr(providers_module.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
 
     def fake_run(args: list[str], *_rest: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         captured.append((list(args), kwargs.get("executable")))
+        creation_flags.append(kwargs.get("creationflags", 0))
         if args[:2] == ["opencode", "models"]:
             return subprocess.CompletedProcess(args, 0, stdout="openai/gpt-5\n", stderr="")
         if args[:3] == ["opencode", "providers", "list"]:
@@ -652,6 +655,7 @@ def test_provider_probes_use_resolved_windows_executable_without_rewriting_args(
         ["opencode", "agent", "list"],
         "C:/Users/test/AppData/Roaming/npm/opencode.CMD",
     ) in captured
+    assert creation_flags and all(flags == 0x08000000 for flags in creation_flags)
 
 
 def test_worker_runtime_batches_and_trims_large_session_discovery_payloads() -> None:

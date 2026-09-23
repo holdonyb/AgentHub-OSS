@@ -2529,6 +2529,7 @@ def test_codex_backend_execution_uses_native_binary_when_available(monkeypatch: 
 def test_backend_execution_decodes_cli_output_as_utf8_with_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
+    monkeypatch.setattr(executor.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(executor.shutil, "which", lambda name: f"C:/Users/holdo/AppData/Roaming/npm/{name}.cmd")
 
     monkeypatch.setattr(executor.subprocess, "Popen", fake_popen_factory(stdout="ok", captured=captured))
@@ -2538,6 +2539,7 @@ def test_backend_execution_decodes_cli_output_as_utf8_with_replacement(monkeypat
     assert result == "ok"
     assert captured["encoding"] == "utf-8"
     assert captured["errors"] == "replace"
+    assert captured["creationflags"] == 0x08000000
 
 
 def test_codex_session_input_returns_output_last_message(monkeypatch: pytest.MonkeyPatch) -> None:

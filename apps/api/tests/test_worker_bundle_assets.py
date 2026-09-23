@@ -167,6 +167,23 @@ def test_worker_self_update_rejects_manifest_archive_aliases() -> None:
         module.validate_archive_name("macos", "/tmp/agenthub-worker-macos.tar.gz")
 
 
+def test_worker_self_update_hides_windows_dependency_processes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_worker_updater()
+    requirements = tmp_path / "workers" / "requirements.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("httpx>=0.27\n", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(module.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **kwargs: calls.append(kwargs))
+
+    module.prepare_staged_venv(tmp_path, tmp_path / "venv")
+
+    assert len(calls) == 2
+    assert all(call["creationflags"] == 0x08000000 for call in calls)
+
+
 def test_worker_self_update_prepares_dependencies_before_replacing_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

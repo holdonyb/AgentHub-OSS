@@ -2082,6 +2082,7 @@ def discover_opencode_sessions(search_roots: list[Path] | None = None) -> list[S
                 capture_output=True,
                 timeout=10,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError:
             continue
